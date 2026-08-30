@@ -1,0 +1,11 @@
+node_modules/
+client/dist/
+*.log
+.DS_Store
+.env
+server/kh.db
+server/kh.db-shm
+server/kh.db-wal
+*.db
+*.db-shm
+*.db-wal

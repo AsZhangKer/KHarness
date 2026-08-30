@@ -1,0 +1,13 @@
+{
+  "name": "kharness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KHarness：本地 AI Harness（模型导入 / 延迟测试 / Playground），由个人网站 AI 模块导出的独立项目",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm --prefix client run build",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev"
+  }
+}
