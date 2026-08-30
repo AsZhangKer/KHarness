@@ -135,7 +135,6 @@ notepad "$env:USERPROFILE\.kharness\AGENTS.md"
 
 - **单文件上限 200KB**：超限时注入跳过，并在预检接口返回 `skipped: "文件过大（xxxKB，上限 200KB，已跳过）"`。
 - **热加载**：每次调用模型前**重读**文件并校验 `SHA-256`，`git checkout` / `touch` 等不依赖 `mtime`，修改后下一次对话即生效。
-- **Token 估算**：粗估 `CJK 1字符≈1 token`，`非 CJK 4字符≈1 token`，可在预检接口查看 `tokens` 字段，`>5000 tokens` 会弹窗确认是否继续。
 
 ---
 
