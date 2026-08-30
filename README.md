@@ -1,6 +1,5 @@
 # KHarness
-
-# KerHarness
+## (KerHarness)
 本地 AI Harness：模型导入 / 延迟测试 / Playground 聊天（含 Agent 工具调用 / 项目与会话 / 任务面板 / 用量统计 / 轨迹检索）。
 从个人网站 AI 模块导出的独立项目，无鉴权（单管理员模式），保留原站点设计风格。跨平台：Windows / Linux / macOS。
 ## 页面结构
