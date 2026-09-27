@@ -1,0 +1,55 @@
+/* highlight.js 配色：全部取自主题令牌，换主题时代码高亮跟着变。
+   取代 highlight.js/styles/github-dark.css（那份写死了 #0d1117，亮色主题下会糊）。 */
+pre code.hljs { display: block; overflow-x: auto; padding: 1em; }
+code.hljs { padding: 3px 5px; }
+
+.hljs { color: var(--code-fg); background: var(--code-bg); }
+
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ { color: var(--hl-keyword); }
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ { color: var(--hl-entity); }
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id { color: var(--hl-const); }
+
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string { color: var(--hl-string); }
+
+.hljs-built_in,
+.hljs-symbol { color: var(--hl-var); }
+
+.hljs-comment,
+.hljs-code,
+.hljs-formula { color: var(--hl-comment); }
+
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo { color: var(--hl-tag); }
+
+.hljs-subst { color: var(--hl-meta); }
+.hljs-section { color: var(--hl-heading); font-weight: bold; }
+.hljs-bullet { color: var(--hl-bullet); }
+.hljs-emphasis { color: var(--hl-meta); font-style: italic; }
+.hljs-strong { color: var(--hl-meta); font-weight: bold; }
+
+.hljs-addition { color: var(--hl-add); background-color: var(--hl-add-bg); }
+.hljs-deletion { color: var(--hl-del); background-color: var(--hl-del-bg); }

@@ -1,0 +1,31 @@
+node_modules/
+client/dist/
+*.log
+.DS_Store
+
+# ---- 本机数据与隐私：本仓库一律不入库 ----
+# SQLite 主库（含提供商密钥、全部对话记录、用量、撤销日志）与运行时文件
+# 这里必须用通配而不是三条写死的名字：`kh.db.bak-<时间戳>`（以及它的 -shm/-wal、
+# 导入前的 .pre-import）同样含真密钥和全部对话，1.3.1 发布前清点时就是这样漏了四个备份文件
+server/kh.db*
+# 撤销快照：被覆盖/删除文件的原始副本
+.kh-undo/
+# 终端归档的落地目录（文件随即被送进系统回收站，这里一般留不下东西）
+.kh-term/
+# 本机端口等配置（默认值见 .env.example）
+.env
+# 桌面端记住的上次端口：打包版写在 %APPDATA%\KHarness，开发态 electron . 会落在仓库根目录
+desktop-port.json
+# 外部工具的本地缓存（天气城市表，从第三方下载，约 300KB）
+server/data/weather-cities.json
+# 调试临时文件
+_tmp_*
+_*.log
+*.local
+
+# ---- 打包产物（npm run dist 生成，体积一两百 MB，不入库） ----
+# build/ 下全是预演负载：runtime/node.exe(81MB) + server-payload/(含 node_modules) + 生成的图标
+build/
+# 安装包与解包目录（第三十五轮起产物迁到 release-new/，旧 release/ 一并留着防手滑）
+release/
+release-new/

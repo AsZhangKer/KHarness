@@ -1,0 +1,345 @@
+/* 主题覆盖层 —— 只重写 styles/tokens.css 里定义的令牌，不新增选择器。
+   切换方式：<html data-theme="...">，见 stores/theme.js。
+   一套主题一段，逐段补；对比度基线：正文 ≥7:1，次要文字 ≥4.5:1。 */
+
+/* ===== 亮色：旧站那套暖米色（#faf0eb / #3a322e / 蓝 #2c4c6b / 金 #b8943c） ===== */
+:root[data-theme='light'] {
+  --bg: #faf0eb;
+  --bg-elev: #fffaf7;
+  --bg-panel: #fffaf7;
+  --bg-hover: #f7ece5;
+  --bg-active: #f0e0d7;
+  --bg-bubble: #fffcfa;
+  --bg-input: #ffffff;
+  --bg-main: #fdf4ef;
+
+  --border: #e8d8d0;
+  --border-soft: #f1e5df;
+  --border-strong: #d3bdb3;
+  --border-hover: #bfa396;
+
+  --text: #3a322e;
+  --text-2: #63564f;
+  --text-3: #6f605a;
+  --text-inverse: #faf0eb;
+
+  --accent: #2c4c6b;
+  --accent-hover: #385d80;
+  --on-accent: #ffffff;
+  --ok: #1f6b41;
+  --warn: #8a5a00;
+  --danger: #a3271d;
+  --gold: #8a6a1f;
+  --terra: #a45a1c;
+  --on-scrim: #ffffff;
+  --diff-add: #1f6b41;
+  --diff-del: #a3271d;
+  --diff-add-fg: #14502f;
+  --diff-del-fg: #7c1a12;
+  --diff-add-bg: rgba(31, 107, 65, 0.14);
+  --diff-del-bg: rgba(163, 39, 29, 0.12);
+  --ok-soft: rgba(31, 107, 65, 0.12);
+  --ok-line: rgba(31, 107, 65, 0.4);
+  --danger-soft: rgba(163, 39, 29, 0.1);
+  --danger-line: rgba(163, 39, 29, 0.38);
+  --warn-soft: rgba(138, 90, 0, 0.14);
+  --gold-soft: rgba(138, 106, 31, 0.18);
+  --gold-line: rgba(138, 106, 31, 0.42);
+
+  --surface-pop: #fffdfb;
+  --surface-hover: #f7ece5;
+  --surface-active: #f0e0d7;
+  --ring: rgba(44, 76, 107, 0.7);
+  --scrim: rgba(58, 50, 46, 0.38);
+  --state-layer: rgba(58, 50, 46, 0.06);
+  --scroll-thumb: #dcc8bf;
+  --scroll-thumb-hover: #c9aea2;
+  --selection: rgba(44, 76, 107, 0.18);
+  --switch-off-knob: #ffffff;
+
+  --bar-a: #2c4c6b;
+  --bar-b: #b8943c;
+
+  --code-bg: #f6f8fa;
+  --code-fg: #24292e;
+  --hl-comment: #6a737d;
+  --hl-keyword: #b02038;
+  --hl-entity: #6f42c1;
+  --hl-const: #005cc5;
+  --hl-string: #032f62;
+  --hl-var: #b35c00;
+  --hl-tag: #22863a;
+  --hl-meta: #24292e;
+  --hl-heading: #005cc5;
+  --hl-bullet: #735c0f;
+  --hl-add: #176f2f;
+  --hl-add-bg: #f0fff4;
+  --hl-del: #b31d28;
+  --hl-del-bg: #fff0f0;
+
+  --shadow: 0 12px 32px rgba(58, 50, 46, 0.14);
+  --shadow-soft: 0 4px 16px rgba(58, 50, 46, 0.09);
+}
+
+/* ===== 灰白：中性灰白，不带暖调，明暗之间 ===== */
+:root[data-theme='gray'] {
+  --bg: #e9ebee;
+  --bg-elev: #f7f8f9;
+  --bg-panel: #f4f5f7;
+  --bg-hover: #e2e5e9;
+  --bg-active: #d6dae0;
+  --bg-bubble: #fbfcfd;
+  --bg-input: #ffffff;
+  --bg-main: #eff1f3;
+
+  --border: #d2d7dd;
+  --border-soft: #e2e5e9;
+  --border-strong: #b4bbc4;
+  --border-hover: #98a1ab;
+
+  --text: #22262b;
+  --text-2: #4f5762;
+  --text-3: #5f6873;
+  --text-inverse: #f7f8f9;
+
+  --accent: #2b3138;
+  --accent-hover: #414a54;
+  --on-accent: #ffffff;
+  --ok: #146b47;
+  --warn: #7a5600;
+  --danger: #ab3226;
+  --gold: #7a5c14;
+  --terra: #8f4d18;
+  --on-scrim: #ffffff;
+  --diff-add: #146b47;
+  --diff-del: #ab3226;
+  --diff-add-fg: #0d4a30;
+  --diff-del-fg: #7c211a;
+  --diff-add-bg: rgba(20, 107, 71, 0.14);
+  --diff-del-bg: rgba(171, 50, 38, 0.12);
+  --ok-soft: rgba(20, 107, 71, 0.12);
+  --ok-line: rgba(20, 107, 71, 0.4);
+  --danger-soft: rgba(171, 50, 38, 0.1);
+  --danger-line: rgba(171, 50, 38, 0.38);
+  --warn-soft: rgba(122, 86, 0, 0.14);
+  --gold-soft: rgba(122, 92, 20, 0.18);
+  --gold-line: rgba(122, 92, 20, 0.42);
+
+  --surface-pop: #fdfdfe;
+  --surface-hover: #e9ecef;
+  --surface-active: #dde1e6;
+  --ring: rgba(43, 49, 56, 0.75);
+  --scrim: rgba(20, 24, 28, 0.36);
+  --state-layer: rgba(34, 38, 43, 0.06);
+  --scroll-thumb: #c0c7cf;
+  --scroll-thumb-hover: #a9b2bc;
+  --selection: rgba(43, 49, 56, 0.18);
+  --switch-off-knob: #ffffff;
+
+  --bar-a: #4a5460;
+  --bar-b: #aab3bd;
+
+  --code-bg: #f6f7f8;
+  --code-fg: #2b3138;
+  --hl-comment: #5f6873;
+  --hl-keyword: #a4233a;
+  --hl-entity: #5b2f9e;
+  --hl-const: #0a5398;
+  --hl-string: #083a63;
+  --hl-var: #93470b;
+  --hl-tag: #146b47;
+  --hl-meta: #2b3138;
+  --hl-heading: #0a5398;
+  --hl-bullet: #6d5210;
+  --hl-add: #146b47;
+  --hl-add-bg: #e7f5ee;
+  --hl-del: #ab3226;
+  --hl-del-bg: #fbeceb;
+
+  --shadow: 0 12px 32px rgba(30, 36, 44, 0.14);
+  --shadow-soft: 0 4px 16px rgba(30, 36, 44, 0.09);
+}
+
+/* ===== 极光蓝 / 极光紫：深色底 + 背景极光 =====
+   面板一律半透明深色，让底下的极光透出来；
+   弹层几乎不透明（0.96+）保证读得清；文字仍是高对比白。 */
+:root[data-theme='aurora-blue'],
+:root[data-theme='aurora-purple'] {
+  --text: #f4f8ff;
+  --text-2: #c3cfdf;
+  --text-3: #93a2b6;
+  --text-inverse: #06090f;
+  --on-scrim: #ffffff;
+
+  --page-bg: #05080f;
+  --bg: rgba(8, 12, 20, 0.34);
+  --bg-main: transparent;
+  --bg-elev: rgba(14, 20, 32, 0.9);
+  --bg-panel: rgba(14, 20, 32, 0.82);
+  --bg-hover: rgba(44, 58, 80, 0.8);
+  --bg-active: rgba(58, 74, 100, 0.85);
+  --bg-bubble: rgba(17, 24, 38, 0.78);
+  --bg-input: rgba(11, 16, 27, 0.85);
+
+  --border: rgba(150, 180, 220, 0.22);
+  --border-soft: rgba(150, 180, 220, 0.13);
+  --border-strong: rgba(170, 200, 240, 0.36);
+  --border-hover: rgba(190, 215, 250, 0.5);
+
+  --surface-pop: rgba(11, 16, 27, 0.97);
+  --surface-hover: rgba(40, 54, 76, 0.9);
+  --surface-active: rgba(56, 72, 98, 0.92);
+  --ring: rgba(200, 225, 255, 0.85);
+  --scrim: rgba(3, 6, 12, 0.66);
+  --state-layer: rgba(200, 225, 255, 0.08);
+  --scroll-thumb: rgba(150, 180, 220, 0.3);
+  --scroll-thumb-hover: rgba(175, 205, 245, 0.45);
+  --selection: rgba(150, 200, 255, 0.28);
+  --switch-off-knob: #ccd9ea;
+
+  --accent: #ffffff;
+  --accent-hover: #dce9f8;
+  --on-accent: #06090f;
+  --ok: #5ee39f;
+  --warn: #f5c95a;
+  --danger: #ff8080;
+  --gold: #e8c46a;
+  --terra: #eda05c;
+  --diff-add: #5ee39f;
+  --diff-del: #ff8080;
+  --diff-add-fg: #ccf7dd;
+  --diff-del-fg: #ffd6d2;
+  --diff-add-bg: rgba(38, 140, 92, 0.34);
+  --diff-del-bg: rgba(178, 58, 58, 0.32);
+  --ok-soft: rgba(70, 200, 140, 0.2);
+  --ok-line: rgba(94, 227, 159, 0.48);
+  --danger-soft: rgba(255, 110, 110, 0.18);
+  --danger-line: rgba(255, 128, 128, 0.48);
+  --warn-soft: rgba(245, 201, 90, 0.18);
+  --gold-soft: rgba(232, 196, 106, 0.22);
+  --gold-line: rgba(232, 196, 106, 0.48);
+
+  --bar-a: #e2ecf8;
+  --bar-b: #7b8ba3;
+
+  --code-bg: rgba(5, 9, 16, 0.8);
+  --code-fg: #dbe6f4;
+  --hl-comment: #93a2b6;
+  --hl-keyword: #ffa39a;
+  --hl-entity: #ddb8ff;
+  --hl-const: #96d2ff;
+  --hl-string: #bde6ff;
+  --hl-var: #ffc98f;
+  --hl-tag: #96f0ae;
+  --hl-meta: #dbe6f4;
+  --hl-heading: #82bcff;
+  --hl-bullet: #f7dc7e;
+  --hl-add: #ccf7dd;
+  --hl-add-bg: rgba(38, 140, 92, 0.34);
+  --hl-del: #ffd6d2;
+  --hl-del-bg: rgba(178, 58, 58, 0.34);
+
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='aurora-blue'] {
+  --aurora-1: radial-gradient(circle at 50% 50%, #2b86d8 0%, rgba(43, 134, 216, 0) 66%);
+  --aurora-2: radial-gradient(circle at 50% 50%, #35dcc9 0%, rgba(53, 220, 201, 0) 64%);
+  --aurora-3: radial-gradient(circle at 50% 50%, #3fbf72 0%, rgba(63, 191, 114, 0) 68%);
+  --aurora-veil: linear-gradient(180deg, rgba(5, 8, 15, 0.5) 0%, rgba(5, 8, 15, 0.02) 42%, rgba(5, 8, 15, 0.34) 100%);
+}
+
+:root[data-theme='aurora-purple'] {
+  --page-bg: #07050f;
+  --aurora-1: radial-gradient(circle at 50% 50%, #7b46d8 0%, rgba(123, 70, 216, 0) 66%);
+  --aurora-2: radial-gradient(circle at 50% 50%, #cf4ea6 0%, rgba(207, 78, 166, 0) 64%);
+  --aurora-3: radial-gradient(circle at 50% 50%, #4568e0 0%, rgba(69, 104, 224, 0) 68%);
+  --aurora-veil: linear-gradient(180deg, rgba(7, 5, 15, 0.5) 0%, rgba(7, 5, 15, 0.02) 42%, rgba(7, 5, 15, 0.34) 100%);
+}
+
+/* ===== 星夜：纯黑底 + 旧版动态星空，金色作强调 ===== */
+:root[data-theme='starry'] {
+  --page-bg: #000000;
+  --bg: rgba(6, 7, 10, 0.3);
+  --bg-main: transparent;
+  --bg-elev: rgba(14, 15, 20, 0.92);
+  --bg-panel: rgba(13, 14, 19, 0.82);
+  --bg-hover: rgba(36, 39, 48, 0.8);
+  --bg-active: rgba(52, 56, 67, 0.85);
+  --bg-bubble: rgba(17, 18, 24, 0.78);
+  --bg-input: rgba(11, 12, 16, 0.85);
+
+  --border: rgba(180, 188, 206, 0.2);
+  --border-soft: rgba(180, 188, 206, 0.12);
+  --border-strong: rgba(196, 204, 222, 0.36);
+  --border-hover: rgba(214, 220, 236, 0.5);
+
+  --text: #f5f6fa;
+  --text-2: #c2c7d4;
+  --text-3: #9298a8;
+  --text-inverse: #06070a;
+  --on-scrim: #ffffff;
+
+  --surface-pop: rgba(10, 11, 15, 0.97);
+  --surface-hover: rgba(34, 37, 46, 0.92);
+  --surface-active: rgba(50, 54, 65, 0.94);
+  --ring: rgba(244, 228, 190, 0.85);
+  --scrim: rgba(0, 0, 0, 0.7);
+  --state-layer: rgba(232, 236, 246, 0.08);
+  --scroll-thumb: rgba(180, 188, 206, 0.28);
+  --scroll-thumb-hover: rgba(200, 207, 224, 0.42);
+  --selection: rgba(228, 184, 92, 0.3);
+  --switch-off-knob: #d2d6e0;
+
+  --accent: #e4b85c;
+  --accent-hover: #f2ce83;
+  --on-accent: #1c1506;
+  --ok: #74dfa4;
+  --warn: #e4b85c;
+  --danger: #ff8a8a;
+  --gold: #e4b85c;
+  --terra: #eda05c;
+  --diff-add: #74dfa4;
+  --diff-del: #ff8a8a;
+  --diff-add-fg: #d0f6de;
+  --diff-del-fg: #ffd9d6;
+  --diff-add-bg: rgba(44, 142, 92, 0.36);
+  --diff-del-bg: rgba(178, 58, 58, 0.34);
+  --ok-soft: rgba(90, 210, 145, 0.2);
+  --ok-line: rgba(116, 223, 164, 0.48);
+  --danger-soft: rgba(255, 120, 120, 0.18);
+  --danger-line: rgba(255, 138, 138, 0.48);
+  --warn-soft: rgba(228, 184, 92, 0.18);
+  --gold-soft: rgba(228, 184, 92, 0.22);
+  --gold-line: rgba(228, 184, 92, 0.5);
+
+  --bar-a: #eceef4;
+  --bar-b: #757c8e;
+
+  --code-bg: rgba(3, 4, 7, 0.82);
+  --code-fg: #e3e7ef;
+  --hl-comment: #9298a8;
+  --hl-keyword: #9dc0e8;
+  --hl-entity: #cdb0f2;
+  --hl-const: #96cdea;
+  --hl-string: #e0c68f;
+  --hl-var: #f0b183;
+  --hl-tag: #8adfbe;
+  --hl-meta: #e3e7ef;
+  --hl-heading: #9dc0e8;
+  --hl-bullet: #e4b85c;
+  --hl-add: #d0f6de;
+  --hl-add-bg: rgba(44, 142, 92, 0.36);
+  --hl-del: #ffd9d6;
+  --hl-del-bg: rgba(178, 58, 58, 0.36);
+
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.62);
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.45);
+
+  /* StarField.vue 读这四个：RGB 分量列表 + 星点不透明度 */
+  --star-color: 232, 235, 242;
+  --star-line: 150, 158, 174;
+  --star-accent: 228, 184, 92;
+  --star-alpha: 0.85;
+}
