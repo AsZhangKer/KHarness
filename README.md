@@ -6,8 +6,8 @@
   <img src="https://github.com/AsZhangKer/KHarness/blob/main/client/public/icon.png" alt="KHarness" width="120" height="120" />
 </div>
 <p align="center">
-  <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=47ag983c-8fcb-4d6d-814b-5395193a712c&amp;qr_code=true">QQ群</a> |
-  <a href="https://discord.gg/z9aBcQXZQ3">官方站点</a>
+  <a href="https://qm.qq.com/q/Uk4hG6TAqW">QQ群</a> |
+  <a href="https://zker.top/articles/41">官方站点</a>
 </p>
 <p align="center">
   KERAIAGENTHARENSS
