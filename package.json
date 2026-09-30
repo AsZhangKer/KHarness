@@ -1,0 +1,80 @@
+{
+  "name": "kharness",
+  "version": "1.3.2",
+  "private": true,
+  "description": "KHarness：本地 AI Harness（模型导入 / 延迟测试 / Playground），由个人网站 AI 模块导出的独立项目",
+  "author": "KHarness",
+  "homepage": "https://localhost/",
+  "main": "desktop/main.js",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm --prefix client run build",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "desktop": "npm --prefix client run build && electron .",
+    "desktop:raw": "electron .",
+    "pack:prep": "node desktop/pack-prep.js",
+    "dist": "npm run build && node desktop/pack-prep.js && electron-builder --win nsis --x64",
+    "dist:dir": "npm run build && node desktop/pack-prep.js && electron-builder --win dir",
+    "dist:small": "npm run build && node desktop/pack-prep.js && set ELECTRON_BUILDER_COMPRESSION_LEVEL=9&& electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dev.kharness.desktop",
+    "productName": "KHarness",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/server-payload",
+        "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "client/dist",
+        "to": "client/dist"
+      },
+      {
+        "from": "build/runtime/node.exe",
+        "to": "runtime/node.exe"
+      }
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "KHarness-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "KHarness",
+      "deleteAppDataOnUninstall": false
+    },
+    "electronDist": "node_modules/electron/dist",
+    "compression": "store"
+  }
+}

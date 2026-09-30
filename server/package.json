@@ -1,0 +1,23 @@
+{
+  "name": "kharness-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KHarness 后端：AI 模型管理 / 延迟测试 / Playground（无鉴权桌面端）",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "kharness": "file:..",
+    "multer": "^2.2.0",
+    "node-pty": "^1.1.0",
+    "ssh2": "^1.17.0",
+    "undici": "^6.28.0"
+  }
+}

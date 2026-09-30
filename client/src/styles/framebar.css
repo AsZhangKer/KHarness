@@ -1,0 +1,31 @@
+/**
+ * 自绘顶栏（第三十三轮）：主进程 frame:false 去掉系统标题栏，窗口那条栏由 ui/WindowBar.vue 画 ——
+ * 它是**独立的一行**（标识在左、三颗键在右、中间拖窗口），页面自己的顶栏（聊天页 Agent/Plan 那排）
+ * 在它下面，两者不抢地方。
+ *
+ * 这里只剩两件收尾事：给那条栏定尺寸，以及把原来摆在两侧栏顶部的 KHarness 标识收上去（原地隐藏）。
+ *
+ * 全部规则挂 `html.kh-frame`：浏览器里访问 8317 时这个类不存在，整套不生效，布局和以前完全一致。
+ */
+html.kh-frame {
+  --kh-bar-h: 34px; /* 窗口顶栏高度，和 WindowBar.vue 里的三颗键一起用 */
+}
+
+/* 顶栏是 fixed 的，不占排版位置 —— 内容由这条 padding 让出那一行 */
+html.kh-frame .app-root {
+  padding-top: var(--kh-bar-h);
+}
+
+/* 标识提到窗口顶栏后，原来那两处就不再重复出现 */
+html.kh-frame .rail .brand,
+html.kh-frame .shell-nav .brand {
+  display: none;
+}
+
+/* 根元素不许滚：整页布局本来就是定高的（#app/.app-shell 都 100%）。
+   终端那颗小胶囊是「故意只露一半在屏幕外」（第三十轮要的），它偶尔让 html 多出 10px 可滚溢出 ——
+   一有纵向滚动条，fixed 的东西就按「视口减滚动条」定位，会凭空缩进 10px。 */
+html.kh-frame,
+html.kh-frame body {
+  overflow: hidden;
+}
