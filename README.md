@@ -86,3 +86,8 @@ MCP 接入见 [MCP.md](MCP.md)。
 # 开源信息
 
 本项目采用 GNU GENERAL PUBLIC LICENSE V3 许可协议，详见 [LICENSE](LICENSE)
+
+# 鸣谢
+
+本项目参考和使用了 https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget 的部分源码，并遵守其协议规范。
+ 感谢 Rainboow 对本项目的大力支持👍
