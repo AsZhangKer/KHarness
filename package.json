@@ -77,6 +77,7 @@
       "icon": "build/icon.png",
       "executableName": "kharness",
       "category": "Utility",
+      "maintainer": "KHarness",
       "synopsis": "本地单用户 AI Agent Harness",
       "description": "KHarness：模型管理、Agent 工具调用、内置浏览器、SSH 与终端都在本机运行。无鉴权，服务只监听 127.0.0.1，数据留在用户配置目录。",
       "artifactName": "KHarness-${version}_${arch}.deb"

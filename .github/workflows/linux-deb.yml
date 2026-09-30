@@ -35,11 +35,23 @@ jobs:
       # 三处依赖都要装：根是打包工具链（electron / electron-builder），
       # server 是后端运行时依赖（含原生模块，这里就会按 Linux + Node 22 现编），
       # client 是前端构建用的 vite。用 ci 而不是 install：有 lockfile 就照它装，别在 CI 里漂版本。
-      - name: 装依赖
+      # 拆成三个独立步骤而不是塞一个 run：上次整串挂在一行里，页面上只看得到「exit code 1」，
+      # 分不清是哪一层装的坏。
+      - name: 装依赖（根：electron / electron-builder）
+        run: npm ci
+
+      - name: 装依赖（server：better-sqlite3 / node-pty 现场编译）
+        run: npm ci --prefix server
+
+      - name: 装依赖（client：vite）
+        run: npm ci --prefix client
+
+      # 失败排查用的读数：node 版本、electron 的 dist 在不在、图标尺寸
+      - name: 构建机自检
         run: |
-          npm ci
-          npm ci --prefix server
-          npm ci --prefix client
+          node -v && npm -v && uname -m
+          ls -d node_modules/electron/dist || { echo "!! electron 的 dist 没落地，electronDist 指的目录不存在"; exit 1; }
+          node -e "const b=require('fs').readFileSync('icon.png').subarray(0,26);console.log('icon.png',b.readUInt32BE(16)+'x'+b.readUInt32BE(20))"
 
       - name: 构建前端
         run: npm run build --prefix client
@@ -48,9 +60,12 @@ jobs:
       - name: 打包准备（pack-prep）
         run: node desktop/pack-prep.js
 
-      # 只出 deb（-c 覆盖目录，避免和本机 Windows 的 release-new/ 撞名）
+      # 只出 deb（-c 覆盖目录，避免和本机 Windows 的 release-new/ 撞名）。
+      # deb 的 control 有硬门槛：maintainer 缺省时会去读 package.json 的 author.email，
+      # 我们只有 author: "KHarness"（不带邮箱，也不该带），electron-builder 就直接抛
+      # 「Please specify author 'email'」退出 1 —— 所以 build.linux.maintainer 显式写了 "KHarness"。
       - name: 打 deb
-        run: npx electron-builder --linux deb -c.directories.output=release-linux
+        run: npx electron-builder --linux deb -c.directories.output=release-linux --publish never
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
