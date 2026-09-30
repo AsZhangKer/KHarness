@@ -53,11 +53,24 @@ Vue 3  + Express 5 ，使用 SQLite 作为数据库，运行框架：Electron；
 
 **AI监工**：通过额外新建一个会话，用户可以实现AI监工功能，可于右侧栏勾选``监工``选项后使用，用户只需向监工简要描述任务，监工则会代理用户调用主Agent分条分步执行，并自行完成项目测试，当走到任务出口时，监工会Call Tool并向用户简要说明项目完成情况；* 该功能已半废弃：代码与历史报告保留，但默认关闭，需要在 设置→实验室功能→AI 监工 打开后，右栏页签、`/supervise` 命令与相关接口才可用。 *
 
+**Computer Use（实验功能，默认关闭）**：让 Agent 查看屏幕、定位窗口并操作鼠标键盘，仅 Windows 可用。装了 netwright 优先用它，否则走随包的坐标引擎（PowerShell 常驻进程，SendInput + UIA，坐标按物理像素）。授权按「进程 / 窗口」粒度：放行一次后同目标内免审；整屏截图每步都要批准，只有「全部开放」免；可绑一个全局急停快捷键（支持鼠标侧键）立即收回全部授权。在 设置→实验室功能 中开启。
+
 **侧栏**：Agent处于忙碌状态时，用户可以启动``侧栏``，侧栏与主Agent共享模型、会话 和 工作目录。侧栏模型仅有只读权限，且无法手动修改。用户可以点击按钮将侧栏聊天记录插入主Agent；
 
 **UI**：内置多套主题。
 
 **数据**：设置页可导出/导入 数据库、修改数据存储目录、恢复出厂设置等，用户的数据保证仅留存本机，绝不上传。
+
+## Linux（.deb）
+
+Linux 版由 GitHub Actions 构建：Actions 页面 → 「构建 Linux deb」→ 分支选 `linux` → Run workflow。
+产物在 workflow Summary 页的 `kharness-deb` 里；打 `v*` tag 时也会自动附到对应 Release。
+Windows 安装包仍在本机出（`electron-builder --win dir` → Inno Setup），不走 CI。
+
+装完启动若报 `The SUID sandbox helper binary was found, but is not configured correctly`：
+是 Chromium 的 chrome-sandbox 没拿到 setuid，用 root 修一下：
+`sudo chown root:root /opt/KHarness/chrome-sandbox && sudo chmod 4755 /opt/KHarness/chrome-sandbox`，
+或临时 `kharness --no-sandbox` 启动。数据落在 `~/.config/KHarness`，与 Windows 版同一套库格式，可在 设置→关于 里导出/导入。
 
 ## 开发
 

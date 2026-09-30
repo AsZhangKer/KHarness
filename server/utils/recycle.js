@@ -46,7 +46,14 @@ async function linuxRecycle(p) {
   let i = 1;
   while (fs.existsSync(dest)) dest = path.join(files, `${base}.${i++}`);
   fs.renameSync(p, dest);
-  fs.writeFileSync(dest + '.info', `[Trash Original Path]\n${p}\n[Trash Deletion Date]\n${new Date().toISOString()}\n`);
+  // .info 必须落在 info/ 下、段名必须是 [Trash Info]、字段是 Path/Name/DeletionDate ——
+  // 桌面环境（gio、nautilus、dolphin）就是靠它把文件还原回原处。以前写成 dest + '.info'
+  // 塞进 files/，段名也是自造的，结果文件是进了回收站但谁都还原不了。
+  const finalBase = path.basename(dest);
+  // 规范里 Path 是相对回收站顶层目录的路径，且要按 URL 转义（带空格和中文的名字全靠它）
+  const rel = path.relative(trash, p).split(path.sep).join('/');
+  const infoBody = `[Trash Info]\nPath=${encodeURI(rel)}\nName=${finalBase}\nDeletionDate=${new Date().toISOString()}\n`;
+  fs.writeFileSync(path.join(info, `${finalBase}.info`), infoBody);
   return true;
 }
 

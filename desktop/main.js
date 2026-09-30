@@ -20,13 +20,13 @@ const path = require('path');
 const fs = require('fs');
 
 /**
- * 打包后（app.isPackaged）三样东西都在asar外的 resources 目录里，node.exe 也随包带着：
+ * 打包后（app.isPackaged）三样东西都在asar外的 resources 目录里，随包的 Node 运行时也在：
  *   resources/server/app         后端源码 + server/node_modules（含 better-sqlite3 原生模块）
  *   resources/client/dist       前端产物
- *   resources/runtime/node.exe  随包的 Node 运行时
+ *   resources/runtime/node(.exe) 随包的 Node 运行时（名字按平台，见下面 BUNDLED_NODE）
  * 为什么随包带 node 而不是用 Electron 当 node（ELECTRON_RUN_AS_NODE）：
  * better-sqlite3 现在编的是 Node 22 的 ABI，用 Electron 起就得按 Electron ABI 重编一遍；
- * 带一个 node.exe 省事，而且后端崩溃时不会连带把 GUI 进程一起带走。
+ * 带一个本机 node 省事，而且后端崩溃时不会连带把 GUI 进程一起带走。
  * 开发态（electron .）仍然用 PATH 上的 node，行为跟以前完全一样。
  */
 const RES = process.resourcesPath || path.join(__dirname, '..');
@@ -55,7 +55,14 @@ function resolveDataDir() {
 
 const DATA_DIR = resolveDataDir();
 const STATIC_DIR = process.env.KH_STATIC_DIR || (PACKAGED ? path.join(RES, 'client', 'dist') : path.join(ROOT, 'client', 'dist'));
-const BUNDLED_NODE = PACKAGED ? path.join(RES, 'runtime', 'node.exe') : '';
+// 随包的 Node 运行时：Windows 叫 node.exe、Linux/macOS 叫 node。
+// pack-prep 按当台机器产出哪一个就带哪一个（extraResources 现在拷整个 runtime 目录，
+// 不再写死文件名），这里两个名字都试一遍 —— 名字没对上的症状是「后端起不来但界面照开」，
+// 所以宁可探测文件，也不要只认一个平台的写法。
+const RUNTIME_DIR = PACKAGED ? path.join(RES, 'runtime') : '';
+const BUNDLED_NODE = RUNTIME_DIR
+  ? ['node.exe', 'node'].map((n) => path.join(RUNTIME_DIR, n)).find((p) => fs.existsSync(p)) || ''
+  : '';
 const NODE_BIN = process.env.KH_NODE || (BUNDLED_NODE && fs.existsSync(BUNDLED_NODE) ? BUNDLED_NODE : 'node');
 const LOG_FILE = path.join(DATA_DIR, 'desktop.log');
 
@@ -1017,6 +1024,15 @@ if (!gotLock) {
      * 数字全部由本机算出来的整数拼进脚本、路径由我们自己生成，没有用户输入参与，不构成注入面。
      */
     const grabRegion = (b, scale) => new Promise((resolve) => {
+      // PowerShell + System.Drawing 这条兜底只有 Windows 有。Linux 上不该假装能兜底：
+      // 上面那条 desktopCapturer 是 X11/PipeWire 的正路，走到这里说明它没给出可信的那块屏，
+      // 就把「为什么没了下一步」说清楚（Wayland 没开 PipeWire 采集是最常见的原因），别抛一句
+      // 「powershell.exe 不是内部或外部命令」这种谁也看不懂的错。
+      if (process.platform !== 'win32') {
+        resolve({ error: `按坐标抓取屏幕只支持 Windows（要 PowerShell + System.Drawing）。`
+          + `当前平台只能走屏幕采集接口，它没能给出这块屏 —— X11 一般可用；Wayland 下需要桌面支持 PipeWire 屏幕采集。` });
+        return;
+      }
       const dir = path.join(DATA_DIR, 'screen-shots');
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `screen-${Date.now()}.png`);

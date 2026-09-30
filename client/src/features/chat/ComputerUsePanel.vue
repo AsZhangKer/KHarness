@@ -8,8 +8,13 @@
     <!-- 状态没读到时别装作「未启用」：那一行的真实原因只在报错里，摆出来才不用猜 -->
     <div v-if="err" class="err-text">{{ err }}</div>
 
+    <!-- 本平台压根没有这条路（Linux/macOS）：先说这个，别让人去实验室找一个拨不动的开关 -->
+    <div v-if="loaded && st.supported === false" class="card">
+      <p class="muted">{{ st.support_note || 'Computer Use 只在 Windows 上可用（要 PowerShell + Win32 与 netwright）。' }}</p>
+    </div>
+
     <!-- 总开关没开就只给这一句：摆一堆空表格会让人以为引擎坏了 -->
-    <div v-if="!st.enabled" class="card">
+    <div v-else-if="!st.enabled" class="card">
       <p class="muted">
         {{ loaded
           ? 'Computer Use 未启用，请到 设置 → 实验室功能 → Computer Use 打开。'
@@ -100,6 +105,8 @@ const props = defineProps({
 });
 
 const st = ref({
+  supported: true,
+  support_note: '',
   enabled: false,
   open_all: false,
   engine_pref: 'auto',

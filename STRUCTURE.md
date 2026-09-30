@@ -2,7 +2,7 @@
 
 给「自己动手改源码」用的一张地图：每个文件干什么、改动会牵动哪里、改完要做什么才生效。
 规模数字是 2026-09-26 的 `wc -l`，用来看体量分布，不必对得上。
-本文只讲「东西在哪」；每条改动为什么这么做，写在对应文件的注释里。
+更细的历史决策与踩坑在 `HANDOVER.md`（按轮次记），本文只讲「东西在哪」。
 
 ## 0. 总览
 
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- |
 | 后端 | `server/` | `server/index.js`（Express 5，只绑 127.0.0.1） | 17450 行 / 37 个 utils | **必须重启进程**；改数据库内容不用重启（无缓存直查 SQLite） |
 | 前端 | `client/src/` | `client/src/main.js` → `App.vue` → `layouts/AppShell.vue` | 20616 行 | `cd client && npm run build`（或 `npm run build`）；装机版还要把 `client/dist` 同步过去 |
-| 桌面外壳 | `desktop/` | `desktop/main.js`（Electron 主进程）+ `preload.js` | 1224 行 | 重启外壳；装机版在 `resources/app.asar` 里，**要重打 asar**。四条抓取路径（浏览器视口/整页/窗口/全屏）都过 `encodeForModel()` —— 实验室「图片大小控制」的缩放 + JPEG 压在这层，因为只有这里有 `nativeImage`，上限从 `GET /api/settings` 读并缓存 5 秒 |
+| 桌面外壳 | `desktop/` | `desktop/main.js`（Electron 主进程）+ `preload.js` | 1240 行 | 重启外壳；装机版在 `resources/app.asar` 里，**要重打 asar**。四条抓取路径（浏览器视口/整页/窗口/全屏）都过 `encodeForModel()` —— 实验室「图片大小控制」的缩放 + JPEG 压在这层，因为只有这里有 `nativeImage`，上限从 `GET /api/settings` 读并缓存 5 秒。**随包的 node 按平台探**（`runtime/node.exe` → `runtime/node`），名字没对上的症状是「界面开了、后端没起」 |
 | 打包 | `desktop/pack-prep.js` + `installer/KHarness.iss` | 两步：`electron-builder --win dir` → `ISCC` | — | 见第 5 节 |
 | 数据 | `%APPDATA%\KHarness\`（装机版）/ `server/kh.db`（手跑的 8317） | `server/database.js` | — | 不在仓库里，**绝不进包** |
 
@@ -20,15 +20,15 @@
 
 | 文件 | 行 | 干什么 | 改它的时候注意 |
 | --- | --- | --- | --- |
-| `routes/ai.js` | 5981 | 主战场：会话/项目/模型/提供商、`POST /api/ai/chat` 的 SSE、Agent 工具循环、AGENTS.md 读写、托管与监工入口、回收站/导出导入 | 单文件巨无霸。新工具优先去 `toolgate` 注册，别在这堆里另起一套；SSE 帧字段见 `routes/ai.js` 里 send() 的调用点。**两个总闸也在这**：`supervisorOn()`（`supervisor_enabled`，关着时 `/supervise/run`、`/hosted/run` 在写 SSE 头之前就 403；`stop`/`status` 不挡，正在跑的得能停）与重复调用打断（`repeat_break_threshold`，一轮开始时应一次，别每次调用查库） |
-| `routes/computer.js` | 110 | Computer Use 的管理面：总开关 / 全部开放 / 引擎偏好 / 急停快捷键 / 授权增删 / netwright 检测 / 只读 probe / 急停事件长轮询 | 工具本身走 toolgate，这里只服务界面；`/probe` 有命令白名单，别放开成任意 cmd |
+| `routes/ai.js` | 5981 | 主战场：会话/项目/模型/提供商、`POST /api/ai/chat` 的 SSE、Agent 工具循环、AGENTS.md 读写、托管与监工入口、回收站/导出导入 | 单文件巨无霸。新工具优先去 `toolgate` 注册，别在这堆里另起一套；SSE 帧字段见 HANDOVER「调试约定」。**两个总闸也在这**：`supervisorOn()`（`supervisor_enabled`，关着时 `/supervise/run`、`/hosted/run` 在写 SSE 头之前就 403；`stop`/`status` 不挡，正在跑的得能停）与重复调用打断（`repeat_break_threshold`，一轮开始时应一次，别每次调用查库） |
+| `routes/computer.js` | 118 | Computer Use 的管理面：总开关 / 全部开放 / 引擎偏好 / 急停快捷键 / 授权增删 / netwright 检测 / 只读 probe / 急停事件长轮询 | **一条 router 级中间件挡掉所有非 GET**（非 Windows 平台上不逐条判，逐条判必漏）；`/state` 照常回并带 `supported / support_note / platform`。工具本身走 toolgate，这里只服务界面；`/probe` 有命令白名单，别放开成任意 cmd |
 | `routes/remote.js` | 288 | SSH 主机 CRUD + 远程会话切换 | 表名是 `ai_remote_hosts`（不是 ssh_hosts） |
 | `routes/terminal.js` | 99 | 终端抽屉：SSE 输出流 + POST 输入 | 与 `utils/term.js` 配对 |
 | `routes/settings.js` | — | 设置读写；**白名单校验**：一个非法键整条 PUT 400 且什么都不写 | 加界面偏好就往这里加键，前端配 `stores/prefs.js` 的 `FIELD_TO_KEY` |
 | `database.js` | 397 | 建表/迁移/连接 | 动表结构先想清楚老库升级路径 |
 | `config.js` | — | 端口、数据目录、token | — |
 | `utils/toolgate.js` | 252 | 工具统一注册与开关层（内置 + MCP 两组都往这注册） | 加工具的正门。带 `hide:true` 的条目不进设置页工具列表、也不写进「按次计费」那段提示词（Computer Use 那一组就靠它只出现在实验室） |
-| `utils/cuse.js` | 1047 | Computer Use：14 个 `cu_*` 工具注册、netwright 探测（含 `.cmd` 转发脚本 → `.store` 里真 exe 的解析）/映射/按目标降级、坐标守护进程管理（含崩溃后限流重开，急停钩子跟着它在）、`cu_grants` 授权模型、急停、审批前置判定 `resolveGate()` | **不透传 netwright 的 MCP 工具名**（那会把它的 15 个工具直接摊给模型）；参数名按 `docs/TOOLS_REFERENCE.md` 来（attach 用 `process`、按键用 `keys`、双击 `double_click`）；`cuMainLoop` 标记是「只有主对话循环能用 cu_*」的闸门，因为侧栏/托管直接调 `execTool` 会绕过审批 |
+| `utils/cuse.js` | 1077 | Computer Use：14 个 `cu_*` 工具注册、netwright 探测（含 `.cmd` 转发脚本 → `.store` 里真 exe 的解析）/映射/按目标降级、坐标守护进程管理（含崩溃后限流重开，急停钩子跟着它在）、`cu_grants` 授权模型、急停、审批前置判定 `resolveGate()` | **整组只有 Windows 有底层**：判定收敛在 `SUPPORTED` 一个常量上（守护进程不 spawn、netwright 不探、`bootArm` 直接返回、每个 run 第一道就拒、`promptNotes()` 回空 —— 最后这条防的是「库里带着从 Windows 导入的 enabled=1，System Prompt 却对模型宣称能操作电脑」）。另外**不透传 netwright 的 MCP 工具名**（那会把它的 15 个工具直接摊给模型）；参数名按 `docs/TOOLS_REFERENCE.md` 来（attach 用 `process`、按键用 `keys`、双击 `double_click`）；`cuMainLoop` 标记是「只有主对话循环能用 cu_*」的闸门，因为侧栏/托管直接调 `execTool` 会绕过审批 |
 | `utils/cudaemon.ps1` | 791 | 坐标引擎常驻进程：行 JSON 收发，`Add-Type` 一次编完 user32/UIA/低层钩子 —— SendInput 点击打字滚轮拖拽、EnumWindows 窗口管理、UIA 快照与 find（ref 跨调用稳定）、急停快捷键钩子 | **文件必须纯 ASCII**（PS 5.1 按 ANSI 读无 BOM 的 .ps1，中文会直接把解析器打断）；`Add-Type` 只认 C# 5 且**每段编成独立程序集**（互相看不到的类型要写在同一段里）；坐标一律物理像素，启动即设 DPI aware |
 | `utils/apitools.js` | 1414 | 外部 API 工具集（天气/GitHub/OCR/Base64/QQ…），默认全关 | 每个工具的开关在「设置 → 外部 API 工具」 |
 | `utils/orchestrator.js` | 676 | 托管：监督者派活 → 工作者执行 → 回报 | 下发给主智能体的那条路在这 |
@@ -79,7 +79,7 @@
 | 端口那一段 | `PORT_FILE`=`<数据目录>/desktop-port.json`、`savedPort/savePort/pickPort/retryRandom` —— 端口一变 localStorage 就换一套，界面偏好全回默认，别动 |
 | `startServer()` | 用随包的 `runtime/node.exe` 拉 `resources/server/app/index.js`；退出码 2 = 请主进程再拉一次（导入数据库走这条） |
 | `createWindow()` | `frame:!FRAMELESS`、`additionalArguments:['--kh-frameless=…']`、`before-input-event` 里落 Ctrl+W/R/+/-/0、`bindWindowState`（maximize 事件里读 `getContentBounds()` 记一行） |
-| `bview*` / `handleBview` | 内置浏览器是**主进程里的 BrowserView**（`<webview>` 被禁：guest 视口卡死 300×150），渲染进程只报位置、收发事件。op 一套：`create/bounds/focus/show/hide/nav/reload/back/forward/stop/exec/state/destroy` + `ua`（切手机版/电脑版 UA）+ **`detach`/`attach`**（把同一个视图连同整栏 UI 搬到另一扇无边框窗：那扇开的是 `<服务地址>/?kh=browser`，前端在 bare 模式下不装 router、只渲染 `BrowserWindowPage`）。**`bounds/show/hide` 按 `e.sender` 的宿主窗口路由**，不是当前持有者的发的算。三条死法（都在 `desktop/main.js` 对应位置有注释）：销毁独立窗口必须排在搬回之后；`close` 事件里只能 `preventDefault + setImmediate`；侧栏在独立期间整个不渲染（否则两份面板抢同一个动作队列） |
+| `bview*` / `handleBview` | 内置浏览器是**主进程里的 BrowserView**（`<webview>` 被禁：guest 视口卡死 300×150），渲染进程只报位置、收发事件。op 一套：`create/bounds/focus/show/hide/nav/reload/back/forward/stop/exec/state/destroy` + `ua`（切手机版/电脑版 UA）+ **`detach`/`attach`**（把同一个视图连同整栏 UI 搬到另一扇无边框窗：那扇开的是 `<服务地址>/?kh=browser`，前端在 bare 模式下不装 router、只渲染 `BrowserWindowPage`）。**`bounds/show/hide` 按 `e.sender` 的宿主窗口路由**，不是当前持有者的发的算。三条死法见 `HANDOVER.md` 第四十一、四十二轮：销毁独立窗口必须排在搬回之后；`close` 事件里只能 `preventDefault + setImmediate`；侧栏在独立期间整个不渲染（否则两份面板抢同一个动作队列） |
 | `ipcMain.handle` 清单 | `kh:restart`、`kh:db-location`、`kh:factory-reset`、`kh:cdp`、`kh:screenshot`、`kh:screen-capture`（整块屏，高权限）、`kh:theme-scheme`（`nativeTheme.themeSource`，让内嵌网页的 `prefers-color-scheme` 跟着 KHarness 主题走）、`kh:clipboard-read/write`、`kh:bview`、**`kh:win`**（minimize/toggle-maximize/close/state/cursor/resize{id,edge,dx,dy}/edit+what/zoom+what/reload） |
 | `preload.js` | `contextBridge` 暴露 `window.khDesktop = { isDesktop, platform, frameless, restartApp, dbLocation, factoryReset, cdp, screenshot, screenCapture, setThemeScheme, clipboardRead, clipboardWrite, bview, onBview, winCtl(action,what), onWinState }` |
 | `pack-prep.js` / `make-icon.ps1` | 打包前准备（见第 5 节） |
@@ -97,7 +97,7 @@
 | --- | --- | --- | --- |
 | 1 | 改版本号（见下） | — | 两处 |
 | 2 | `npm run build` | `client/dist` | 或 `cd client && npx vite build` |
-| 3 | `node desktop/pack-prep.js` | `build/runtime/node.exe`、`build/icon.*`、`build/server-payload/app/` | 内含**隐私硬卡口**：命中 `kh.db*`/`.env`/`*.log`/`agent-skills/`/`node_modules/kharness/` 等直接 `exit(1)` |
+| 3 | `node desktop/pack-prep.js` | `build/runtime/node(.exe)`、`build/icon.*`、`build/server-payload/app/` | 内含**隐私硬卡口**：命中 `kh.db*`/`.env`/`*.log`/`agent-skills/`/`node_modules/kharness/` 等直接 `exit(1)`。随包 node 与 `.ico` 都按平台分岔（`.ico` 只有 Windows 生成，extraResources 现在拷整个 `build/runtime` 目录，不再写死文件名） |
 | 4 | `npx electron-builder --win dir -c.directories.output=release-new` | `release-new/win-unpacked/` | **只用 `dir`**；`--win nsis` 那条 7za 单线程压 400MB，两小时不落盘，已弃用 |
 | 5 | `"D:\Inno Setup 6\ISCC.exe" installer\KHarness.iss` | `release-new/KHarness-Setup-<版本>.exe` | 实测 13.4 秒 / 147MB |
 | 6 | 冒烟 | — | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=<临时目录> /TASKS="!desktopicon"` 装 → 起 → 验 → `unins000.exe /VERYSILENT` 卸 |

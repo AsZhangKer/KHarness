@@ -1,0 +1,70 @@
+# 构建 Linux 的 .deb 发行包。
+#
+# 为什么放在 CI 而不是本机：随包的 Node 运行时和 better-sqlite3 / node-pty 的原生产物
+# 都按「平台 + Node ABI」编，必须在 Linux 上现装现编（pack-prep 直接把这台构建机的
+# process.execPath 拷进包），拿 Windows 上装好的 node_modules 过去必然起不来。
+#
+# Windows 那条不在这跑 —— 它是本机两步出包（electron-builder --win dir → Inno Setup），
+# electron-builder 自带的 NSIS 压缩在慢机器上会跑到两小时不落盘，别放进 CI。
+name: 构建 Linux deb
+
+on:
+  workflow_dispatch:      # Actions 页面手动点，分支选 linux
+  push:
+    tags: ['v*']          # 打 v1.3.3 这类 tag 时顺手把 deb 附上去
+
+permissions:
+  contents: write         # 要建 Release、传产物
+
+jobs:
+  deb:
+    runs-on: ubuntu-22.04      # 钉 22.04：glibc 比更新的发行版旧，出来的 deb 装得上更多机器
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # 必须与 better-sqlite3 的 ABI 对齐（和 pack-prep 的说明一致）
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      # 三处依赖都要装：根是打包工具链（electron / electron-builder），
+      # server 是后端运行时依赖（含原生模块，这里就会按 Linux + Node 22 现编），
+      # client 是前端构建用的 vite。用 ci 而不是 install：有 lockfile 就照它装，别在 CI 里漂版本。
+      - name: 装依赖
+        run: |
+          npm ci
+          npm ci --prefix server
+          npm ci --prefix client
+
+      - name: 构建前端
+        run: npm run build --prefix client
+
+      # 产出 build/runtime/node、build/icon.png、build/server-payload/app（含隐私硬卡口）
+      - name: 打包准备（pack-prep）
+        run: node desktop/pack-prep.js
+
+      # 只出 deb（-c 覆盖目录，避免和本机 Windows 的 release-new/ 撞名）
+      - name: 打 deb
+        run: npx electron-builder --linux deb -c.directories.output=release-linux
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kharness-deb
+          path: release-linux/*.deb
+          if-no-files-found: error
+
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="由 GitHub Actions 构建（run ${GITHUB_RUN_ID}）。Windows 安装包在本机出，不在这里。"
+          gh release create "$TAG" release-linux/*.deb --title "KHarness $TAG" --notes "$NOTES" \
+            || gh release upload "$TAG" release-linux/*.deb --clobber

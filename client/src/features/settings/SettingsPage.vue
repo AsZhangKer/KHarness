@@ -473,28 +473,31 @@
             <div class="grow">
               <div class="k-row-title">Computer Use</div>
               <div class="k-row-desc">
-                {{ cu.enabled
-                  ? 'AI 可以看屏、点窗口、动鼠标；每一步都要你批准（除非开「全部开放」）。'
-                  : '让 AI 直接操作这台电脑：netwright 在线就用它，没装就全程走坐标引擎。' }}
+                {{ !cu.supported
+                  ? '本平台不可用：坐标引擎要 PowerShell + Win32 SendInput + UIA，netwright 也是 Windows 桌面自动化。'
+                  : (cu.enabled
+                      ? 'AI 可以看屏、点窗口、动鼠标；每一步都要你批准（除非开「全部开放」）。'
+                      : '让 AI 直接操作这台电脑：netwright 在线就用它，没装就全程走坐标引擎。') }}
               </div>
             </div>
             <button
               type="button"
               class="k-switch"
               :class="{ on: cu.enabled }"
-              :disabled="cuBusy"
-              :title="cu.enabled ? '关掉 Computer Use' : '打开 Computer Use'"
+              :disabled="cuBusy || !cu.supported"
+              :title="!cu.supported ? '只有 Windows 可用' : (cu.enabled ? '关掉 Computer Use' : '打开 Computer Use')"
               @click.prevent="setComputerEnabled(!cu.enabled)"
             ></button>
-            <button v-if="cu.enabled" class="link-btn" type="button" @click="cuOpen = !cuOpen">
+            <button v-if="cu.enabled && cu.supported" class="link-btn" type="button" @click="cuOpen = !cuOpen">
               {{ cuOpen ? '收起设置' : '展开设置' }}
             </button>
           </div>
 
           <p v-if="cuError" class="cu-err">{{ cuError }}</p>
 
-          <!-- 总开关没开就没有后面这些：引擎没跑、授权表是空的，摆出来只会误导 -->
-          <div v-if="cu.enabled && cuOpen" class="cu-body">
+          <!-- 总开关没开就没有后面这些：引擎没跑、授权表是空的，摆出来只会误导。
+               本平台不支持时同样整块收起（库里可能带着从 Windows 导入的 enabled=1）。 -->
+          <div v-if="cu.supported && cu.enabled && cuOpen" class="cu-body">
             <div class="cu-sec">引擎状态</div>
             <div class="cu-line">
               <span class="cu-k">netwright（上位引擎）</span>
@@ -870,6 +873,7 @@ function toggleLab(k) {
    状态一律以服务端 /state 为准，本地只留「面板开没开」这种视觉状态。
    netwright 是上位引擎（用户自装），没装后端自动全程走坐标引擎 —— 前端不做选择判断，只如实显示。 */
 const cu = ref({
+  supported: true,
   enabled: false,
   open_all: false,
   engine_pref: 'auto',

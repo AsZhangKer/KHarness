@@ -5,9 +5,8 @@
 # mangles non-ASCII comments in ways that break the script.
 Add-Type -AssemblyName System.Drawing
 
-$buildDir = Join-Path $PSScriptRoot '..\build'
-$src = Join-Path $buildDir 'icon.png'
-$out = Join-Path $buildDir 'icon.ico'
+$src = 'D:\projects\foo\build\icon.png'
+$out = 'D:\projects\foo\build\icon.ico'
 $sizes = @(16, 32, 48, 256)
 
 $orig = [System.Drawing.Image]::FromFile($src)

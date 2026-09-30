@@ -6,7 +6,7 @@
         <KInput v-model="form.username" label="用户名" placeholder="root" />
       </div>
       <div class="row2">
-        <KInput v-model="form.host" label="主机域名 / IP" placeholder="192.168.1.100" />
+        <KInput v-model="form.host" label="主机域名 / IP" placeholder="203.0.113.10" />
         <KInput v-model="form.port" label="端口" placeholder="22" type="number" />
       </div>
 

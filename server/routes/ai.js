@@ -5939,14 +5939,24 @@ router.post('/reveal', wrap((req, res) => {
   if (!raw) return fail(res, 400, '请提供路径');
   const abs = path.resolve(raw);
   if (!fs.existsSync(abs)) return fail(res, 404, '路径不存在');
-  if (process.platform !== 'win32') return fail(res, 400, '仅支持 Windows 资源管理器');
-  try {
-    const { spawn } = require('child_process');
-    spawn('explorer.exe', ['/select,' + abs], { detached: true, stdio: 'ignore' }).unref();
-  } catch (e) {
-    return failErr(res, 500, '在资源管理器中打开失败', e);
+  const { spawn } = require('child_process');
+  // 各平台的「在文件管理器里打开」不是同一句话：Windows 能选中那个文件，
+  // Linux 的 xdg-open 只能开到目录（没有选中某项的通用接口），macOS 是 open -R。
+  // 返回值里把「到底选中没有」说清楚，别让前端以为一律选中了。
+  let file = null; let args = null; let selected = true; let note = '';
+  if (process.platform === 'win32') { file = 'explorer.exe'; args = ['/select,' + abs]; }
+  else if (process.platform === 'darwin') { file = 'open'; args = ['-R', abs]; }
+  else {
+    const dir = fs.statSync(abs).isDirectory() ? abs : path.dirname(abs);
+    file = 'xdg-open'; args = [dir]; selected = false;
+    note = `已打开所在目录 ${dir}（这个平台没法帮你选中文件本身）`;
   }
-  ok(res, { path: abs }, '已在资源管理器中打开');
+  try {
+    spawn(file, args, { detached: true, stdio: 'ignore' }).unref();
+  } catch (e) {
+    return failErr(res, 500, '在文件管理器中打开失败', e);
+  }
+  ok(res, { path: abs, selected, note }, selected ? '已在资源管理器中选中' : '已打开所在目录');
 }));
 
 // ---------- 后台任务面板（右栏「后台」页；与 background_list 工具同一数据源） ----------

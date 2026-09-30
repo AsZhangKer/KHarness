@@ -18,11 +18,16 @@ const ROOT = path.join(__dirname, '..');
 const BUILD = path.join(ROOT, 'build');
 
 /* ---------- 1) Node 运行时 ---------- */
+// 名字随平台走：Windows 是本机出包（node.exe），Linux 那侧由 CI 跑同一段代码（node）。
+// 带的必须是**当前这台构建机自己的** node —— better-sqlite3 / node-pty 的原生产物按
+// 平台 + Node ABI 编，拿 Windows 的 node.exe 去 Linux 起后端只会一声不响地失败。
 const RUNTIME = path.join(BUILD, 'runtime');
 fs.mkdirSync(RUNTIME, { recursive: true });
-const nodeDst = path.join(RUNTIME, 'node.exe');
+const NODE_BIN_NAME = process.platform === 'win32' ? 'node.exe' : 'node';
+const nodeDst = path.join(RUNTIME, NODE_BIN_NAME);
 fs.copyFileSync(process.execPath, nodeDst);
-console.log(`node.exe ${(fs.statSync(nodeDst).size / 1048576).toFixed(1)}MB ← ${process.execPath}`);
+if (process.platform !== 'win32') { try { fs.chmodSync(nodeDst, 0o755); } catch (e) { /* 有些文件系统不认这权限，不影响 */ } }
+console.log(`${NODE_BIN_NAME} ${(fs.statSync(nodeDst).size / 1048576).toFixed(1)}MB ← ${process.execPath}`);
 
 /* ---------- 2) 图标 ---------- */
 const iconSrc = path.join(ROOT, 'icon.png');
@@ -33,15 +38,22 @@ if (fs.existsSync(iconSrc)) {
   const head = fs.readFileSync(iconDst).subarray(0, 26);
   console.log(`icon.png ${head.readUInt32BE(16)}×${head.readUInt32BE(20)}`);
 }
-if (!fs.existsSync(icoDst)) {
-  console.log('build/icon.ico 不存在，调用 desktop/make-icon.ps1 生成');
-  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'desktop', 'make-icon.ps1')], { stdio: 'inherit' });
-  if (r.status !== 0 || !fs.existsSync(icoDst)) {
-    console.log('!! 图标生成失败，手动跑一次：powershell -File desktop/make-icon.ps1');
-    process.exit(1);
+// .ico 只有 Windows 包需要，而且生成它的那段脚本走 PowerShell + GDI+。
+// Linux（CI）上没有这套：图标用上面那份 build/icon.png，electron-builder 的 linux 目标就认 png。
+if (process.platform === 'win32') {
+  if (!fs.existsSync(icoDst)) {
+    console.log('build/icon.ico 不存在，调用 desktop/make-icon.ps1 生成');
+    const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'desktop', 'make-icon.ps1')], { stdio: 'inherit' });
+    if (r.status !== 0 || !fs.existsSync(icoDst)) {
+      console.log('!! 图标生成失败，手动跑一次：powershell -File desktop/make-icon.ps1');
+      process.exit(1);
+    }
   }
+  console.log(`icon.ico ${(fs.statSync(icoDst).size / 1024).toFixed(0)}KB`);
+} else {
+  if (!fs.existsSync(iconDst)) { console.log('!! 非 Windows 打包需要 build/icon.png（由根目录 icon.png 拷来），现在没有'); process.exit(1); }
+  console.log('非 Windows：图标用 build/icon.png（不生成 .ico）');
 }
-console.log(`icon.ico ${(fs.statSync(icoDst).size / 1024).toFixed(0)}KB`);
 
 /* ---------- 3) 后端负载（自己拷，绕开 electron-builder 的 node_modules 剔除） ----------
  * electron-builder 拷 extraResources 时会把 **from 目录下一层的 node_modules 整个剔掉**

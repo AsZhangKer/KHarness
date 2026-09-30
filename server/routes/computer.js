@@ -6,6 +6,14 @@ const cuse = require('../utils/cuse');
 
 const router = express.Router();
 
+// Computer Use 的底层（PowerShell 坐标引擎 / netwright）只有 Windows 有。
+// 读接口照常回（前端据 state.supported 显示「本平台不支持」），**所有写接口整组挡掉**：
+// 免得在非 Windows 上留下一个「能拨但什么都不发生」的开关，也免得逐条路由各判一次漏掉某条。
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && !cuse.supported()) return fail(res, 400, cuse.NOT_SUPPORTED);
+  return next();
+});
+
 // 面板/设置页轮询用：一次性给出全部状态。
 // open_pending_ack：重启后若「全部开放」还开着，服务端置 1，前端据此弹警告询问是否关掉
 // （按主人的口径：不自动关，只提醒）。ack 一次后清掉，避免每次轮询都弹。

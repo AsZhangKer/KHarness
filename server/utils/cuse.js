@@ -27,6 +27,19 @@ const DAEMON_START_TIMEOUT = 15000;   // PowerShell 冷启动 + Add-Type 编译
 const DAEMON_CALL_TIMEOUT = 20000;
 const NETWRIGHT_ID = '__netwright__';
 
+/**
+ * 这一整组工具只有 Windows 有底层支撑：坐标引擎是常驻 PowerShell（user32 SendInput +
+ * System.Windows.Automation），netwright 也是 .NET 的 Windows 桌面自动化。
+ * Linux/macOS 上不是「降级能用」，是**根本没有那条路**，所以：
+ * 守护进程不起、netwright 不探、每个工具直接给拒绝理由、实验室开关不给打开。
+ * 判定只在这一个常量上，别散到各处各判一次。
+ */
+const SUPPORTED = process.platform === 'win32';
+const NOT_SUPPORTED = 'Computer Use 目前只在 Windows 上可用：坐标引擎依赖 PowerShell + Win32 SendInput + UIA，'
+  + '上位引擎 netwright 也是 Windows 桌面自动化。Linux / macOS 版本里这组工具不会工作，'
+  + '请改用文件、命令、浏览器、SSH 这些跨平台工具完成同样的事。';
+function supported() { return SUPPORTED; }
+
 function getSetting(key, def) {
   try {
     const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
@@ -141,6 +154,11 @@ function armDaemonRestart() {
 
 function spawnDaemon() {
   if (daemon && daemon.child && !daemon.child.killed) return daemon;
+  if (!SUPPORTED) {
+    // Linux/macOS：不要去 spawn powershell.exe（那会留下一条谁也看不懂的 ENOENT）
+    daemon = { child: null, ready: false, startErr: NOT_SUPPORTED };
+    return daemon;
+  }
   if (!fs.existsSync(DAEMON_SCRIPT)) {
     daemon = { child: null, ready: false, startErr: `找不到坐标引擎脚本 ${DAEMON_SCRIPT}` };
     return daemon;
@@ -263,6 +281,7 @@ function netwrightProbe(cb) {
   // 已经在跑就别再探测一遍：点「重新检测」会反复进来，每次都 spawn 一个新的 netwright，
   // 上一个 net.child 被直接盖掉就成了杀不掉的孤儿（它带着 UIA 连接，占着目标应用）。
   if (netLive()) { if (cb) cb(true); return; }
+  if (!SUPPORTED) { net.status = 'unsupported'; net.error = NOT_SUPPORTED; if (cb) cb(false); return; }
   if (net.child) { try { net.child.kill(); } catch (e) { /* 已退出 */ } net.child = null; net.rl = null; }
   net.status = 'unknown';
   // 挖到的 exe 逐个试，最后再退到 `dnx Netwright --yes`（dotnet-scope 跑，慢但不用找路径）
@@ -836,6 +855,8 @@ const NEED_MAIN_LOOP = 'Computer Use 的工具只能在主对话里调用（那�
 for (const k of Object.keys(TOOLS)) {
   const inner = TOOLS[k].run;
   TOOLS[k].run = async (args, ctx = {}) => {
+    // 平台闸门在「谁能调用」之前：不是 Windows 就连门都不必问，直接给结论
+    if (!SUPPORTED) return { error: NOT_SUPPORTED };
     if (!ctx || !ctx.cuMainLoop) return { error: NEED_MAIN_LOOP };
     return inner(args, ctx);
   };
@@ -846,6 +867,8 @@ const NAMES = Object.keys(TOOLS);
 
 // 实验室「Computer Use」开关：一键启用/停用整组工具（写 ai_tools.enabled）。
 function setGroupEnabled(on) {
+  // 不给在非 Windows 上打开一个注定不会工作的开关：界面那颗开关点了没反应是最难猜的坏法
+  if (on && !SUPPORTED) return { ok: false, enabled: false, error: NOT_SUPPORTED };
   setSetting('computer_use_enabled', on ? '1' : '0');
   for (const n of NAMES) {
     try { toolgate.upsert(n, !!on, toolgate.configOf(n)); } catch (e) { /* 忽略 */ }
@@ -884,6 +907,9 @@ function detectNetwright(cb) { netwrightProbe((ok) => cb && cb(ok)); }
 // 引擎摘要（设置页/面板显示用）
 function state(chatId) {
   return {
+    supported: SUPPORTED,
+    support_note: SUPPORTED ? '' : NOT_SUPPORTED,
+    platform: process.platform,
     enabled: isEnabled(),
     open_all: isOpenAll(),
     engine_pref: enginePref(),
@@ -1019,7 +1045,8 @@ function seedBlacklist() {
 
 // 给系统提示词的 Computer Use 使用纪律（只有启用时才加）。
 function promptNotes() {
-  if (!isEnabled()) return '';
+  // 库里可能带着从 Windows 那边导入的「已启用」标记，System Prompt 不能照念 —— 否则模型会当真去调这组工具
+  if (!SUPPORTED || !isEnabled()) return '';
   return [
     '',
     '[Computer Use（操作这台电脑）已启用]',
@@ -1034,7 +1061,7 @@ function promptNotes() {
 // 总开关开着就先把坐标引擎和急停快捷键拉起来。
 // 不等第一次动作才起：快捷键是「出事了立刻停手」的东西，它必须在 AI 动手之前就已经按得下去。
 function bootArm() {
-  if (!isEnabled()) return;
+  if (!SUPPORTED || !isEnabled()) return;
   spawnDaemon();
   if (getSetting('computer_hotkey', '')) applyHotkeyToDaemon();
 }
@@ -1043,6 +1070,7 @@ module.exports = {
   NAMES, TOOLS, isCuTool, describeTarget, resolveGate, recordApproval, subjects,
   CU_MUTATE, promptNotes, seedBlacklist, bootArm,
   isEnabled, isOpenAll, setGroupEnabled, setHotkey, state, detectNetwright, netLive,
+  supported, NOT_SUPPORTED,
   hasGrant, addGrant, removeGrant, grantsFor, emergencyStop, drainStops,
   daemonCall, daemonAlive, shutdownAll, applyHotkeyToDaemon,
   ensureGrantTable, getSetting, setSetting, targetKey,
