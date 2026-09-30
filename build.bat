@@ -3,34 +3,34 @@ title KHarness
 cd /d "%~dp0"
 
 echo ============================================
-echo   KHarness - ±¾µØ AI Harness (Windows)
+echo   KHarness - æœ¬åœ° AI Harness (Windows)
 echo ============================================
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [´íÎó] Î´¼ì²âµ½ Node.js£¬ÇëÏÈ°²×° Node.js 20 LTS£ºhttps://nodejs.org/
+  echo [é”™è¯¯] æœªæ£€æµ‹åˆ° Node.jsï¼Œè¯·å…ˆå®‰è£… Node.js 20 LTSï¼šhttps://nodejs.org/
   pause
   exit /b 1
 )
 
 for /f "delims=" %%v in ('node -v') do set NODEV=%%v
-echo ¼ì²âµ½ Node.js %NODEV%
+echo æ£€æµ‹åˆ° Node.js %NODEV%
 
 if not exist "server\node_modules\better-sqlite3" (
   echo.
-  echo Ê×´ÎÔËĞĞ£º°²×°ÒÀÀµ²¢¹¹½¨Ç°¶Ë£¨¿ÉÄÜĞèÒª¼¸·ÖÖÓ£©...
+  echo é¦–æ¬¡è¿è¡Œï¼šå®‰è£…ä¾èµ–å¹¶æ„å»ºå‰ç«¯ï¼ˆå¯èƒ½éœ€è¦å‡ åˆ†é’Ÿï¼‰...
   call npm run setup
   if errorlevel 1 (
-    echo [´íÎó] ÒÀÀµ°²×°Ê§°Ü¡£Èô better-sqlite3 ±àÒë±¨´í£¬Çë°²×° Visual Studio Build Tools ºóÖØÊÔ¡£
+    echo [é”™è¯¯] ä¾èµ–å®‰è£…å¤±è´¥ã€‚è‹¥ better-sqlite3 ç¼–è¯‘æŠ¥é”™ï¼Œè¯·å®‰è£… Visual Studio Build Tools åé‡è¯•ã€‚
     pause
     exit /b 1
   )
 ) else if not exist "client\dist\index.html" (
   echo.
-  echo ¹¹½¨Ç°¶Ë...
+  echo æ„å»ºå‰ç«¯...
   call npm run build
   if errorlevel 1 (
-    echo [´íÎó] Ç°¶Ë¹¹½¨Ê§°Ü
+    echo [é”™è¯¯] å‰ç«¯æ„å»ºå¤±è´¥
     pause
     exit /b 1
   )
@@ -38,8 +38,8 @@ if not exist "server\node_modules\better-sqlite3" (
 
 set NODE_ENV=production
 echo.
-echo Æô¶¯·şÎñ£ºhttp://localhost:8317  £¨¾ÖÓòÍø·ÃÎÊ http://±¾»úIP:8317£©
-echo Í£Ö¹·şÎñ£º¹Ø±Õ±¾´°¿Ú»ò°´ Ctrl+C
+echo å¯åŠ¨æœåŠ¡ï¼šhttp://localhost:8317  ï¼ˆå±€åŸŸç½‘è®¿é—® http://æœ¬æœºIP:8317ï¼‰
+echo åœæ­¢æœåŠ¡ï¼šå…³é—­æœ¬çª—å£æˆ–æŒ‰ Ctrl+C
 echo.
 start "" "http://localhost:8317"
 node server\index.js
