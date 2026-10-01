@@ -14,8 +14,15 @@ const PORT_FINAL = PORT;
 
 app.set('trust proxy', 1);
 
-// 本地 harness：跨域全放开（桌面端单用户场景）
-app.use(cors());
+// 跨源：桌面端是 win.loadURL(http://127.0.0.1:<端口>)、前端 axios 用相对路径 '/api'，本来就同源，
+// 挂 CORS 只会把「任意网页能读这套无鉴权 API 的返回值」这扇门开着 —— 生产不挂。
+// dev 下留一个白名单（vite 的 /api 代理其实是同源的，这里只为哪天直连 8317 调试时不炸）。
+// 改之前查过的三类潜在跨源消费者：① 内置浏览器注入脚本 —— desktop/main.js 只有 case 'exec' 执行
+//   模型给的 JS，我们自己的注入代码不回打 /api；② 终端输出流 EventSource 用相对路径
+//   （terminalStore.js:166）；③ 主进程那几处 fetch 是 Node 发的，不带 Origin，与 CORS 无关。
+if (!isProduction) {
+  app.use(cors({ origin: [/^https?:\/\/(127\.0\.0\.1|localhost):5173$/, /^file:\/\//] }));
+}
 app.use(compression({
   // SSE（AI 聊天流式响应）禁用压缩：压缩缓冲会让逐字输出变成一次性到达
   filter: (req, res) => {

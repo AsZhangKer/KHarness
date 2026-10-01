@@ -117,16 +117,16 @@
           class="k-btn sm ghost"
           type="button"
           style="margin: 0 auto 12px; display: flex"
-          @click="historyOpen = true"
+          @click="openHistory"
         >
-          <i class="fas fa-clock-rotate-left"></i> 展开更早 {{ hiddenCount }} 条
+          <i class="fas fa-clock-rotate-left"></i> 展开更早 {{ Math.min(HISTORY_STEP, hiddenCount) }} 条
         </button>
         <button
-          v-if="historyOpen && hiddenCount > 0"
+          v-if="revealed > 0"
           class="k-btn sm ghost"
           type="button"
           style="margin: 0 auto 12px; display: flex"
-          @click="historyOpen = false"
+          @click="collapseHistory"
         >
           收起历史
         </button>
@@ -152,6 +152,7 @@
             :class="{ 'trace-flash': m.id && m.id === flashMsgId }"
             @undo="onUndo"
             @retract="onRetract"
+            @revert-from="onRevertFrom"
           />
         </TransitionGroup>
         </div>
@@ -220,6 +221,8 @@
         :git-branches="gitBranches"
         :git-enabled="gitOk"
         :approval-mode="store.state.approvalMode"
+        :approval-explicit="store.state.approvalExplicit"
+        :skills="skillList"
         :approvals="store.currentApprovals.value"
         :question="store.state.question"
         :queue-length="store.state.queue.length"
@@ -242,7 +245,7 @@
         @remove-attach="removeAttach"
         @model-settings="modelSettingsOpen = true"
         @git-action="onGitAction"
-        @clear-queue="store.state.queue = []"
+        @clear-queue="onClearQueue"
       />
       <!-- 终端：自己 Teleport 到 body，收起时只剩页面底部一颗小胶囊，不占这里的布局 -->
       <TerminalDock />
@@ -686,9 +689,9 @@ function closeDrawers() {
   railOpen.value = false;
   dockOpen.value = false;
 }
-const historyOpen = ref(false);
+const revealed = ref(0);
 // 默认只展开「当前这一轮 + 上一轮」：从倒数第二条用户消息起渲染，更早的折起来
-const visibleFrom = computed(() => {
+const foldAnchor = computed(() => {
   const list = store.state.messages;
   let seenUser = 0;
   for (let i = list.length - 1; i >= 0; i--) {
@@ -699,13 +702,12 @@ const visibleFrom = computed(() => {
   }
   return 0;   // 不足两轮就全展开
 });
+// 「展开更早」按批给，不一次全摊开：一次点完全量渲染就是他要的那种「点一下卡一下」
+const HISTORY_STEP = 20;
+const shownFrom = computed(() => Math.max(0, foldAnchor.value - revealed.value));
 
-const visibleMessages = computed(() => {
-  const list = store.state.messages;
-  if (historyOpen.value) return list;
-  return list.slice(visibleFrom.value);
-});
-const hiddenCount = computed(() => (historyOpen.value ? 0 : visibleFrom.value));
+const visibleMessages = computed(() => store.state.messages.slice(shownFrom.value));
+const hiddenCount = computed(() => shownFrom.value);
 const lastUnfinished = computed(() => {
   const list = store.state.messages;
   const last = list[list.length - 1];
@@ -855,8 +857,11 @@ onUnmounted(() => {
 });
 
 onMounted(async () => {
-  await Promise.all([store.refreshTree(), store.refreshModels(), remote.refresh()]);
   const id = Number(route.params.id);
+  // 「返回」按钮走的是 /chat（不带 id），但 store 里还是刚才那段会话，这一屏渲染出来的就是它。
+  // 先按现状贴一次底，别等下面四个请求：它们跑完之前那一屏停在会话顶部（他就是从这儿进来的）。
+  if (id || store.state.messages.length) scrollBottomAfterSettle();
+  await Promise.all([store.refreshTree(), store.refreshModels(), remote.refresh(), store.loadGlobalApproval()]);
   // 直接以 /chat/:id 打开（或刷新）时没人滚过：切会话那条路只在路由参数变化时跑，
   // 首屏就停在最上面。和切会话同一套「跟到内容长齐」。
   if (id) { await store.openChat(id); scrollBottomAfterSettle(); }
@@ -900,7 +905,7 @@ const flashMsgId = ref(null);
 
 /** 轨迹跳进来时消息可能还在异步加载，轮询几次再定位 */
 function scrollToMsg(id, tries = 20) {
-  historyOpen.value = true;
+  revealed.value = store.state.messages.length;   // 要找的那条可能在折叠区里：先全放出来
   nextTick(() => {
     const el = document.getElementById(`msg-${id}`);
     if (el) {
@@ -1003,9 +1008,36 @@ onUnmounted(stopScrollAnim);
  * 消息区一变高就重新贴底（ResizeObserver），窗口一过就撒手，免得把「展开更早 N 条」也拽回底部。
  */
 let followBottomUntil = 0;
+let followHardStop = 0;
 function scrollBottomAfterSettle() {
-  followBottomUntil = Date.now() + 1200;
+  const now = Date.now();
+  followBottomUntil = now + 1200;
+  // 窗口能续期，但有绝对上限：从设置页回来时 mermaid / hljs 会在长齐之后再改一次高度，
+  // 固定 1200ms 常常在那之前就撒手，于是「回来停在最上面」又出现了。
+  followHardStop = now + 6000;
   scrollBottom(true);
+}
+/** 用户自己点开折叠（历史 / 本轮更早）时这段跟随必须立刻作废，否则会被拽回底部 */
+function stopFollowBottom() {
+  followBottomUntil = 0;
+  followHardStop = 0;
+}
+/** 一次给一批（不是全摊开）：全量展开时上面几百条一起渲染，点一下就是一次长任务 */
+function openHistory() {
+  stopFollowBottom();
+  const el = streamEl.value;
+  // 展开是在**上方**加内容，视口不动的话人会被顶走：记下当前第一条，滚完把位移补回去
+  const anchor = el && el.querySelector('.stream-inner > *');
+  const before = anchor ? anchor.getBoundingClientRect().top : 0;
+  revealed.value += HISTORY_STEP;
+  nextTick(() => {
+    if (!el || !anchor || !el.contains(anchor)) return;
+    el.scrollTop += anchor.getBoundingClientRect().top - before;
+  });
+}
+function collapseHistory() {
+  stopFollowBottom();
+  revealed.value = 0;
 }
 
 let streamRo = null;
@@ -1015,8 +1047,12 @@ onMounted(() => {
   if (el && inner && typeof ResizeObserver !== 'undefined') {
     streamRo = new ResizeObserver(() => {
       if (!pinnedToBottom.value || Date.now() > followBottomUntil) return;
+      // 只跟「底下长出来的」：往上加内容（展开更早的轮次）会让 gap 一下子变大，这时候贴底是帮倒忙
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (gap > 400) return;
       el.scrollTop = el.scrollHeight;
       showDown.value = false;
+      if (Date.now() < followHardStop) followBottomUntil = Date.now() + 600;
     });
     streamRo.observe(inner);
   }
@@ -1025,7 +1061,7 @@ onUnmounted(() => { if (streamRo) { streamRo.disconnect(); streamRo = null; } })
 
 /** 切会话时清掉只属于上一会话的界面态（历史展开、待发送附件、滚动跟随、窄屏抽屉） */
 function resetChatView() {
-  historyOpen.value = false;
+  revealed.value = 0;
   attachments.value = [];
   dragging.value = false;
   pinnedToBottom.value = true;
@@ -1234,6 +1270,8 @@ async function restoreRow(row) {
 }
 
 async function removeRow(row) {
+  // 「永久」是真的永久：回收站里这条就是最后一份，删了没有任何地方能找回
+  if (!(await confirmDialog(`永久删除「${row.kind || ''} ${row.name || '该条目'}」？这是最后一份，删掉后无法再恢复。`, { title: '永久删除', danger: true }))) return;
   if (row.source === 'trash') await recycle.removeTrash(row.raw);
   else recycle.remove(row.raw.id);
 }
@@ -1408,15 +1446,21 @@ watch(
   }
 );
 
-function saveModelParams() {
-  store.saveModelParams({
-    temperature: Number(modelForm.temperature) || 0,
-    frequency_penalty: Number(modelForm.frequency_penalty) || 0,
-    presence_penalty: Number(modelForm.presence_penalty) || 0,
-    thinkingLevel: modelForm.thinkingLevel || 'medium',
-    contextLimit: Number(modelForm.contextLimit) || 0,
-    censoredWords: modelForm.censoredWords || '',
-  });
+async function saveModelParams() {
+  try {
+    await store.saveModelParams({
+      temperature: Number(modelForm.temperature) || 0,
+      frequency_penalty: Number(modelForm.frequency_penalty) || 0,
+      presence_penalty: Number(modelForm.presence_penalty) || 0,
+      thinkingLevel: modelForm.thinkingLevel || 'medium',
+      contextLimit: Number(modelForm.contextLimit) || 0,
+      censoredWords: modelForm.censoredWords || '',
+    });
+  } catch {
+    // 服务端拒了（比如上下文窗口填了非法值）：拦截器已经把原文弹出来了，
+    // 弹窗保持开着让他改完再点一次，别一边报错一边报「已保存」。
+    return;
+  }
   modelSettingsOpen.value = false;
   toast('模型设置已保存', 'success');
 }
@@ -1591,6 +1635,10 @@ async function onToolTimeout() {
 
 async function onUndo(step) {
   if (step.undone) return toast('这一步已经撤销过了', 'info');
+  // 撤销是拿快照去覆盖现在的文件 —— 你在撤销之后手改的内容会被冲掉，且这一步没有二次反悔，
+  // 所以必须确认（同名文件被后续再改过时尤其危险）
+  const target = step.path || step.args?.path || '该文件';
+  if (!(await confirmDialog(`撤销这一步？${target} 会回到操作前的样子，这期间你手动改进去的内容会被覆盖。`, { title: '撤销确认', danger: true }))) return;
   try {
     const res = await store.undo(step);
     if (!res) return toast('这条操作没有可恢复的快照', 'warn');
@@ -1618,6 +1666,37 @@ async function onRetract(payload) {
   } catch (e) {
     toastErr(e, '撤回失败');
   }
+}
+
+/**
+ * 「从此回退」：消息一条不删，把这条之后改过的文件退回原样（撤回只删消息不动文件）。
+ * 服务端按倒序应用快照，同一条被改几轮会退到最早那份；失败的不标已撤销，还能单条重试。
+ */
+async function onRevertFrom(payload) {
+  const messageId = typeof payload === 'object' ? payload.id : payload;
+  if (!messageId) return toast('无效的消息ID', 'warn');
+  if (store.state.busy) return toast('正在生成，先停下再回退文件', 'warn');
+  if (!(await confirmDialog('从此回退？这条之后的所有文件改动会退回原样，消息全部保留（Computer Use 的键鼠动作无法回退）。'))) return;
+  try {
+    const d = await aiApi.undoFromMessage({ chat_id: store.state.chatId, message_id: messageId }) || {};
+    const bits = [];
+    if (d.done) bits.push(`已回退 ${d.done} 处`);
+    if (d.skipped) bits.push(`${d.skipped} 处跳过（此前已单独撤销或不属于本会话）`);
+    if (d.failed && d.failed.length) bits.push(`${d.failed.length} 处失败，可单条重试`);
+    toast(bits.length ? bits.join('，') : '这一段没有可回退的文件改动', d.done ? 'success' : 'warn');
+    await store.openChat(store.state.chatId);   // 回退说明会写进最后一条回复，重新拉一次才对得上
+  } catch (e) {
+    toastErr(e, '从此回退失败');
+  }
+}
+
+/** 队列里的消息是用户已经打好的字，一清就没地方找了，所以必须确认（并报数量） */
+async function onClearQueue() {
+  const n = (store.state.queue || []).length;
+  if (!n) return;
+  if (!(await confirmDialog(`清空队列里剩下的 ${n} 条消息？这些内容会被丢弃，输入框里正在写的不动。`))) return;
+  store.state.queue = [];
+  toast('已清空队列', 'info');
 }
 
 async function onApprove(allow) {
@@ -1679,7 +1758,8 @@ function selectModel(id) {
 }
 
 function setApproval(mode) {
-  store.state.approvalMode = mode;
+  if (mode === 'follow') store.followGlobalApproval();
+  else store.setApprovalMode(mode);
 }
 
 function setThinking(level) {
@@ -1697,7 +1777,8 @@ const thinkingLevels = computed(() => {
 
 function cycleApproval() {
   const order = ['default', 'strict', 'exempt'];
-  store.state.approvalMode = order[(order.indexOf(store.state.approvalMode) + 1) % order.length];
+  const next = order[(order.indexOf(store.state.approvalMode) + 1) % order.length];
+  store.setApprovalMode(next);
 }
 
 /* ---------- 首次启动：选 Shell（本机没设过 agent_shell 时问一次） ---------- */

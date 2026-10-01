@@ -6,13 +6,13 @@
 ; 安装包交给 Inno Setup 压（lzma2/fast + 独立压缩进程，一两分钟）。
 ;
 ; 出包：  "D:\Inno Setup 6\ISCC.exe" installer\KHarness.iss
-; 产物：  release-new\KHarness-Setup-1.3.2.exe
+; 产物：  release-new\KHarness-Setup-1.3.3.exe
 ;
 ; 装的是「程序本体」；用户数据一律在 %APPDATA%\KHarness（kh.db、日志、端口文件），
 ; 卸载故意不去碰它（和以前 NSIS 的 deleteAppDataOnUninstall=false 一致）。
 
 #define MyAppName "KHarness"
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.3.3"
 #define AppPublisher "KHarness"
 ; 相对本 .iss 文件所在目录解析
 #define UnpackedDir "..\release-new\win-unpacked"
@@ -23,11 +23,15 @@ AppId={{7B3E9C1A-2F4D-4E58-9A6B-1C0D2E3F4A55}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#AppPublisher}
-AppSupportURL=https://localhost/
+; 以前这里写的是 https://localhost/ —— 它会原样出现在「应用和功能」的支持信息里，对外包得给真地址
+AppSupportURL=https://github.com/AsZhangKer/KHarness
+AppUpdatesURL=https://github.com/AsZhangKer/KHarness
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
+; 正式包要能自己选安装目录：这一行写死是防止以后有人照「绿色包」的写法把它改成 yes
+DisableDirPage=no
 ; 和旧的 NSIS perMachine=false 对齐：不需要管理员，装到当前用户的 Programs 下
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog

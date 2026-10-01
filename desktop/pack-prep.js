@@ -63,6 +63,7 @@ if (process.platform === 'win32') {
  */
 // 名字 = 相对 server/ 的路径；命中前缀即整个目录跳过
 const SERVER_SKIP_DIRS = [
+  '__tests__',       // 自测用例：跟运行时无关，也不该让安装包替我带（第五十四轮的 stallwatch/privatepaths 用例就这么混进了 1.3.3 的第一次出包）
   '.kh-undo',        // 撤销快照
   'browser-shots',   // 内置浏览器截图
   'supervise',       // 监工验收报告
@@ -138,6 +139,7 @@ const LEAK_PATTERNS = [
   /\.bak/,
   /\.pre-import$/,
   /(^|\/)agent-skills\//,         // 内置技能 = 我自己的项目笔记
+  /(^|\/)__tests__\//,            // 自测用例不属于运行时
   /(^|\/)(\.kh-undo|browser-shots|supervise|hosted)\//,
   /data\/weather-cities\.json$/,
   /node_modules\/kharness\//,        // 指回仓库根的 junction：一旦跟进去就是无限套娃 + 整仓外泄

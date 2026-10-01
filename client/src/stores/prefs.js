@@ -32,6 +32,11 @@ const state = reactive({
   imgMaxSide: 0,
   // 同一操作连续重复几次就打断（防模型自循环）
   repeatBreak: 3,
+  // 文字级卡带检测：模型在同一段输出里原地复读时掐断这一轮
+  stallGuard: true,
+  stallMin: 240,
+  // 工具能力地图：把本轮真正可用的工具压成一览塞进系统提示，防「有工具但想不到用」
+  toolMap: true,
   // AI 监工 / 托管：已半废弃，默认关，只有实验室里打开才有入口
   supervisorOn: false,
 });
@@ -65,6 +70,9 @@ function apply(s) {
   state.composerHeight = clamp(Math.round(num(s.composer_height, state.composerHeight)), 0, 2000);
   state.imgMaxSide = clamp(Math.round(num(s.img_max_side, state.imgMaxSide)), 0, 8192);
   state.repeatBreak = clamp(Math.round(num(s.repeat_break_threshold, state.repeatBreak)), 2, 20);
+  state.stallGuard = bool(s.stall_guard_enabled, state.stallGuard);
+  state.stallMin = clamp(Math.round(num(s.stall_min_chars, state.stallMin)), 60, 2000);
+  state.toolMap = bool(s.tool_capability_map, state.toolMap);
   state.supervisorOn = bool(s.supervisor_enabled, state.supervisorOn);
   configureSound({ enabled: state.sound, volume: state.volume });
   state.loaded = true;
@@ -91,6 +99,7 @@ const FIELD_TO_KEY = {
   termFont: 'term_font', termSize: 'term_size', termHeight: 'term_height',
   composerHeight: 'composer_height', imgMaxSide: 'img_max_side',
   repeatBreak: 'repeat_break_threshold', supervisorOn: 'supervisor_enabled',
+  stallGuard: 'stall_guard_enabled', stallMin: 'stall_min_chars', toolMap: 'tool_capability_map',
 };
 
 async function save(patch) {

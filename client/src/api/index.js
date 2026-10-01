@@ -135,6 +135,8 @@ export const aiApi = {
   undo: (op_id, chat_id, message_id) =>
     http.post('/ai/undo', { op_id, chat_id, message_id }, { timeout: 30000 }).then(pick),
   undoStatus: (opId) => http.get(`/ai/undo/${encodeURIComponent(opId)}`).then(pick),
+  // 从此回退：这条消息之后所有文件改动一次性退回原样（消息不删）。几十上百个快照要还原，超时给足
+  undoFromMessage: (b) => http.post('/ai/undo/from-message', b, { timeout: 180000 }).then(pick),
 
   // 上下文导入 / 导出（导入的正文可能几 MB，超时放宽）
   // importContext 不走 pick：要把服务端「原模型不在本机，已改用 X」这类 message 带回去

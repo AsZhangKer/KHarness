@@ -60,7 +60,14 @@ const SETTING_KEYS = {
      下限 2：设成 1 等于第一次就掐，正常重试都会被打断。判定点见 routes/ai.js 的 repeatStreak。 */
   repeat_break_threshold: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 2 && n <= 20 ? String(n) : null; },
   // 监工 / 托管：已半废弃，默认关，只有实验室里打开才能用（判定点见 routes/ai.js 的 supervisorOn()）
-  supervisor_enabled: boolSetting
+  supervisor_enabled: boolSetting,
+  // 工具能力地图（第五十三轮，补充五）：把本轮真要发出去的工具表压成一览塞进 system，
+  // 默认开；关掉它就退回只有那段手写规则。判定点 routes/ai.js 的 capabilityMapOn()
+  tool_capability_map: boolSetting,
+  // 文本级卡带检测：模型在一段输出里原地复读时掐断。判据照第三方同类项目的成熟参数，
+  // 阈值可下调到 60 字（更灵敏更易误报）或关掉。判定点 routes/ai.js 的 stallBreak
+  stall_guard_enabled: boolSetting,
+  stall_min_chars: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 60 && n <= 2000 ? String(n) : null; }
 };
 router.put('/', wrap((req, res) => {
   const updates = [];

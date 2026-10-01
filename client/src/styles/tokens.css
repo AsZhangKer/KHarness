@@ -190,6 +190,26 @@ select:focus-visible {
   padding: 12px;
   display: block;
 }
+/* 流程图（mermaid）：渲染前容器里就是源码，画好后整块换成 SVG。
+   画失败会留 .md-mermaid-failed + 一句原因，绝不出现空白方块。 */
+.md-mermaid {
+  margin: 0 0 0.75em;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  overflow-x: auto;
+}
+.md-mermaid svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.md-mermaid .md-mermaid-src { margin: 0; padding: 0; background: transparent; border: 0; }
+.md-mermaid-note { font-size: 11px; color: var(--warn); margin-bottom: 6px; }
+/* 公式：块级公式横向可滚，别把整条消息撑宽；行内公式随字号走，不要突兀地变大 */
+.katex { font-size: 1em; }
+.katex-display { margin: 0.5em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.md-math { white-space: normal; }
+.md-math-block { display: block; margin: 0.4em 0; text-align: center; }
+/* 没画出来的公式（库没到 / 式子渲染失败）就留 $原文$，视觉上跟正文一致，不出现空白方块 */
+.md-math-failed { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
 .md code {
   background: var(--bg-panel);
   padding: 1px 5px;

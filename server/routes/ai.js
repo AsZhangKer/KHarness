@@ -78,8 +78,9 @@ const APP_ROOT = path.join(__dirname, '..', '..');           // 程序根目录�
 // 以前这里用程序根，等于让 AI 默认在装机目录 / 仓库目录里写文件，是意外行为不是设计。
 const AGENT_DEFAULT_CWD = userdir.desktop();
 const RATE_LIMIT_RETRY = 2;      // 上游 429 自动重试次数
-// Agent 主循环步数上限（防模型无进展地反复调工具烧 token）；单轮内多个并行调用不计为额外步
-const AGENT_MAX_STEPS = parseInt(process.env.AGENT_MAX_STEPS || '60');
+// 工具循环不设步数上限（第五十四轮他点名去掉的 60 步闸）：烧钱的死循环另有两道更准的兜底 ——
+// 同工具同参数连续重复打断（repeat_break_threshold）与文字级卡带检测（stallwatch），
+// 那两条判的是「没有进展」，比「步数多」诚实。
 // 工具执行超时：run_command 单次命令默认 360 秒（设置项 cmd_timeout_seconds，0 = 不限制），
 // 超时后杀整棵进程树并回喂「部分输出 + 改用 run_background」的建议；用户也可点「超时」按钮提前判定。
 const DEFAULT_CMD_TIMEOUT_SECONDS = 360;
@@ -120,6 +121,17 @@ function supervisorOn() {
   try { return db.prepare("SELECT value FROM settings WHERE key = 'supervisor_enabled'").get()?.value === '1'; } catch (e) { return false; }
 }
 const SUPERVISOR_OFF = 'AI 监工 / 托管已半废弃，默认关闭。要用的话去 设置 → 实验室功能 → AI 监工 打开。';
+
+// ---------- 文字级卡带检测（判据与实现见 utils/stallwatch.js） ----------
+// 默认开；关掉或调阈值走 设置 → 常规 的 stall_guard_enabled / stall_min_chars。
+const stallwatch = require('../utils/stallwatch');
+function stallGuardOn() {
+  try {
+    const v = db.prepare("SELECT value FROM settings WHERE key = 'stall_guard_enabled'").get()?.value;
+    return v === undefined || v === null || v === '' ? true : v === '1';
+  } catch (e) { return true; }
+}
+function stallMinChars() { return numSetting('stall_min_chars', 240, 60, 2000); }
 
 // ---------- 编码自适配（中文环境核心修复） ----------
 // Windows 中文系统下：cmd/PowerShell 控制台输出为 GBK(cp936)，而文件多为 UTF-8 或 ANSI(GBK)。
@@ -172,7 +184,10 @@ router.get('/shell', wrap(async (req, res) => {
     candidates = [
       { value: '/bin/bash', label: 'bash（推荐）' },
       { value: '/bin/zsh', label: 'zsh' },
-      { value: '/bin/sh', label: 'sh（POSIX）' }
+      { value: '/bin/sh', label: 'sh（POSIX）' },
+      // pwsh 不在系统目录里，是微软自己装的包，装在哪取决于发行版
+      { value: '/usr/bin/pwsh', label: 'PowerShell 7' },
+      { value: '/opt/microsoft/powershell/7/pwsh', label: 'PowerShell 7（官方包路径）' }
     ].map(c => ({ ...c, missing: !fs.existsSync(c.value) }));
   }
   ok(res, { platform: process.platform, current, candidates, is_set: !!current });
@@ -417,6 +432,14 @@ function decideApproval2(chatId, name, args, cwd, projectRoot, bypass, cuPre) {
   const remoteTurn = !!remoteHostFor(chatId);
   const subj = collectToolSubjects(name, args, cwd, remoteTurn);
 
+  // KHarness 自己的运行数据（主库/日志/截图/撤销快照）在这一步之前就拒掉，连审批都不弹：
+  // 用户不该看到「要读 kh.db 吗」这种问句，免除模式也不给过 —— 这条是隐身，不是权限。
+  // execTool 里的 guardTargetPath 还会再挡一次（侧栏与托管是直调 execTool 的，不经过这里）。
+  for (const p of subj.paths) {
+    const priv = privatepaths.guardPrivatePath(p, { chatId });
+    if (priv) return { need: false, level: null, reason: null, isHigh: false, denied: priv };
+  }
+
   // 权限规则：黑名单直接拒绝（任何模式、含高权限底线之上），白名单免审批
   const pv = perms.evaluate(subj);
   if (pv.verdict === 'deny') {
@@ -464,9 +487,9 @@ function decideApproval2(chatId, name, args, cwd, projectRoot, bypass, cuPre) {
     }
   }
 
-  // 普通读操作（read/list/grep/glob/web_fetch/load_skill）、只读的后台任务与记忆查询、
+  // 普通读操作（read/view_image/list/grep/glob/web_fetch/load_skill）、只读的后台任务与记忆查询、
   // 以及开关型扩展工具里的只读联网接口 —— 绝不需要审批
-  const READ_ONLY = new Set(['read_file', 'list_dir', 'grep', 'glob', 'web_fetch', 'load_skill', 'use_skill',
+  const READ_ONLY = new Set(['read_file', 'view_image', 'list_dir', 'grep', 'glob', 'web_fetch', 'load_skill', 'use_skill',
     'background_status', 'background_list']);
   if (READ_ONLY.has(name) || toolgate.isGateTool(name)) {
     // 但读操作命中「越界/敏感目录」仍需审批（默认模式下原逻辑即如此）
@@ -520,7 +543,7 @@ function collectToolSubjects(name, args, cwd, remote = false) {
   return { tool: name, command, paths, keywords };
 }
 
-const FILE_TARGET_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_dir', 'grep', 'glob', 'delete_file', 'delete_dir', 'create_dir', 'rename_file']);
+const FILE_TARGET_TOOLS = new Set(['read_file', 'view_image', 'write_file', 'edit_file', 'list_dir', 'grep', 'glob', 'delete_file', 'delete_dir', 'create_dir', 'rename_file']);
 
 function checkApproval(name, args, cwd, projectRoot = null, remote = false) {
   const rp = remote ? remoteUtil.posixPath(cwd || '/') : cwd;   // 远程会话一律用 posix 的 cwd 做边界
@@ -1345,6 +1368,84 @@ router.post('/undo', wrap(async (req, res) => {
   ok(res, { path: r.path, label: r.label, message_id: target ? target.id : null }, r.message);
 }));
 
+/**
+ * 「从此回退」（#215）：把这条消息起到会话末尾的**文件改动**一次性退回，消息一条都不删。
+ * 和「撤回」的分工：撤回只删消息不动文件；从此回退只动文件不删消息。
+ * 三个必须对的点：
+ *   1) 倒序应用（从最近一次改动往回退）—— 同一个文件被改过几轮时，正序会停在中间版本；
+ *   2) 只有成功才标 undone —— 失败的快照要留着，用户能单条重试（同类项目在这点标错过，之后补不回来）；
+ *   3) 不跨会话 —— undo_ops 按 chat_id 归属，别的会话/别的分支的改动绝不被这次带回。
+ */
+router.post('/undo/from-message', wrap(async (req, res) => {
+  const chatId = parseInt(req.body?.chat_id);
+  const messageId = parseInt(req.body?.message_id);
+  if (!Number.isInteger(chatId) || !Number.isInteger(messageId)) return fail(res, 400, '缺 chat_id 或 message_id');
+
+  const rows = db.prepare('SELECT id, role, content, steps_json FROM ai_chat_messages WHERE chat_id = ? AND id >= ? ORDER BY id DESC')
+    .all(chatId, messageId);
+  if (!rows.length) return fail(res, 404, '没找到那条消息（可能已被删除）');
+
+  const ids = [];
+  const seen = new Set();
+  let skipped = 0;
+  for (const r of rows) {
+    let steps = [];
+    try { steps = JSON.parse(r.steps_json || '[]'); } catch (e) { steps = []; }
+    for (const st of (Array.isArray(steps) ? steps : [])) {
+      if (!st || !st.undo_id) continue;
+      if (st.undone) { skipped += 1; continue; }            // 之前单条撤销过的，这里跳过并计入回报
+      if (seen.has(st.undo_id)) continue;
+      seen.add(st.undo_id);
+      ids.push(st.undo_id);                                  // rows 已按 id 倒序 → 这里天然是从新到旧
+    }
+  }
+  if (!ids.length) return ok(res, { done: 0, skipped, failed: [] }, skipped ? `这一段没有还能回退的改动（${skipped} 处此前已单独撤销）` : '这一段没有可回退的文件改动');
+
+  const applied = [];
+  const failed = [];
+  for (const opId of ids) {
+    const row = undoStore.peek(opId);
+    if (!row) { skipped += 1; continue; }                    // 快照已被释放（库里的墓碑或已被清），当已处理
+    if (row.chat_id && Number(row.chat_id) !== chatId) { skipped += 1; continue; }
+    const r = row.remote_id ? await undoStore.applyRemote(opId) : undoStore.apply(opId);
+    if (r && r.ok) applied.push({ path: r.path, label: r.label || '' });   // apply 内部已把这条标成已撤销
+    else failed.push({ op_id: opId, error: (r && r.error) || '未知原因' });
+  }
+
+  // 标步骤 + 给模型留话：只在最后一条 assistant 消息后追加**一条**合并说明
+  // （逐个文件塞 marker 会把上下文撑起来，而模型需要知道的只是「这批改动都不算了」）
+  if (applied.length) {
+    for (const r of rows) {
+      let steps = [];
+      try { steps = JSON.parse(r.steps_json || '[]'); } catch (e) { continue; }
+      let changed = false;
+      for (const st of (Array.isArray(steps) ? steps : [])) {
+        if (!st || !st.undo_id || seen.has(st.undo_id) === false) continue;
+        if (failed.some(f => f.op_id === st.undo_id)) continue;   // 失败的不标，留着让用户单条重试
+        st.undone = true;
+        st.undone_at = new Date().toISOString();
+        st.undo_note = `用户从此回退：${st.name || ''} → ${st.path || ''}`;
+        changed = true;
+      }
+      db.prepare('UPDATE ai_chat_messages SET steps_json = ? WHERE id = ?').run(changed ? JSON.stringify(steps) : r.steps_json, r.id);
+    }
+    const lastAssistant = rows.find(r => r.role === 'assistant') || rows[0];
+    const marker = `[整段回退 ${new Date().toISOString()}]`;
+    let content = String(lastAssistant.content || '');
+    if (!content.includes(marker)) {
+      const list = applied.slice(0, 40).map(a => `${a.label || a.path}`).join('、');
+      content += `\n\n${marker} 用户从这条消息起手动回退了 ${applied.length} 处文件改动（${list}${applied.length > 40 ? '…' : ''}），相关路径已恢复到那次操作之前的状态。请勿再假定这些改动仍然生效；如需继续，先重新读取相关文件确认现状。`;
+    }
+    db.prepare('UPDATE ai_chat_messages SET content = ? WHERE id = ?').run(content, lastAssistant.id);
+    touchChatStmt.run(chatId);
+  }
+
+  const msg = applied.length
+    ? `已回退 ${applied.length} 处文件改动${failed.length ? `，${failed.length} 处失败` : ''}${skipped ? `，${skipped} 处跳过` : ''}`
+    : '这些改动没能回退（可能都失败或已被单独撤销）';
+  ok(res, { done: applied.length, skipped, failed, items: applied }, msg);
+}));
+
 // 查询撤销记录状态（前端渲染历史步骤时判断按钮是否仍可用）
 router.get('/undo/:opId', wrap((req, res) => {
   const row = undoStore.peek(String(req.params.opId || ''));
@@ -1424,8 +1525,8 @@ function imageStorePut(dataUrl) {
 // 这里读回来丢进 imageStore，回喂文本前插一条 [[img:token]] —— buildUpstreamContent 会把它
 // 换成 OpenAI 的 image_url 内容块，Anthropic 那边由 protocols 转成 tool_result 里的 image block。
 const shotfeed = require('../utils/shotfeed');
-function feedTextWithShot(result, echoText) {
-  return shotfeed.feedTextWithShot(result, echoText, imageStorePut);
+function feedTextWithShot(result, echoText, chatId) {
+  return shotfeed.feedTextWithShot(result, echoText, imageStorePut, { chatId });
 }
 
 // Playground 上传视觉图片（仅内存，10MB 上限，自动销毁）
@@ -1501,6 +1602,24 @@ function listSkills() {
   return [...byName.values()];
 }
 
+/**
+ * 用户消息里的 @技能名 —— 只在这一次回合把技能正文交给模型（不进 /skills-load 的常驻列表，
+ * 下一轮它自己就没有了）。判据是「@ 后面那一整段正好等于某个技能名」：
+ * token 里不许出现 / \ 这类分隔符，所以 @src/a.ts 这种文件引用不会被误当技能，两边不打架。
+ * 同名冲突时按名字表命中就是技能（默认口径：技能优先），要引用同名文件请写带路径的那一种写法。
+ */
+function skillMentionsIn(text, skills) {
+  const s = String(text || '');
+  if (!s.includes('@') || !Array.isArray(skills) || !skills.length) return [];
+  const byName = new Map(skills.map((x) => [String(x.name || '').toLowerCase(), x]));
+  const out = [];
+  for (const m of s.matchAll(/(?:^|[\s(（【「])@([^\s)）】」，。、；：!?！？'"`/\\]{1,80})/g)) {
+    const hit = byName.get(String(m[1] || '').toLowerCase());
+    if (hit && !out.includes(hit)) out.push(hit);
+  }
+  return out;
+}
+
 const AGENT_TOOLS = [
   {
     type: 'function',
@@ -1511,6 +1630,18 @@ const AGENT_TOOLS = [
         type: 'object',
         properties: { command: { type: 'string', description: '要执行的 shell 命令' } },
         required: ['command']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'view_image',
+      description: '看一张磁盘上的图片，像素会直接进到你的上下文里（read_file 只能读文本，图片内容它拿不到）。适合看设计稿、截图、照片、图表、报错画面。工作目录内的图片免审批，目录外的会弹审批。gif 取首帧，bmp 可能不被模型支持。',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: '图片路径（相对当前工作目录或绝对路径）' } },
+        required: ['path']
       }
     }
   },
@@ -2040,6 +2171,74 @@ function buildFileDiff(oldText, newText) {
 }
 
 // 新建文件:整体作为 add 展示;超长文件截断为头尾各 300 行,中间以 gap 标记省略
+/**
+ * 审批框的「审阅」数据（#214）：批准之前先看清它到底要干什么。
+ * 参数在这一步已经完整（我们是等参数生成完才弹审批，不做流式提前审批），
+ * 所以能算出真 diff —— 不猜、不只显示原文。
+ * 返回 null 表示这个工具没什么可预览的，前端退回展示参数本身。
+ */
+async function buildApprovalPreview(name, args, cwd) {
+  const abs = (raw) => { try { return path.resolve(cwd, String(raw ?? '')); } catch (e) { return ''; } };
+  const readOld = async (p) => {
+    try {
+      const buf = await fsp.readFile(p);
+      if (buf.length > 1024 * 1024) return { tooBig: buf.length };
+      return { text: decodeTextSmart(buf) };
+    } catch (e) { return { missing: e.code === 'ENOENT' }; }
+  };
+  const cap = (rows) => (rows.length > 600 ? { rows: rows.slice(0, 600), truncated: true } : { rows, truncated: false });
+
+  if (name === 'write_file') {
+    const p = abs(args?.path);
+    const content = String(args?.content ?? '');
+    const old = await readOld(p);
+    if (old.missing) { const d = cap(buildNewFileDiff(content)); return { kind: 'diff', path: p, isNew: true, added: d.rows.length, diff: d.rows, truncated: d.truncated }; }
+    if (old.tooBig) return { kind: 'note', path: p, note: `目标文件 ${Math.round(old.tooBig / 1024)}KB 太大，没法先算 diff；批准后仍会执行` };
+    const d = cap(buildFileDiff(old.text, content));
+    return { kind: 'diff', path: p, isNew: false, sizeBefore: old.text.length, added: d.rows.filter(r => r.kind === 'add').length, removed: d.rows.filter(r => r.kind === 'del').length, diff: d.rows, truncated: d.truncated };
+  }
+  if (name === 'edit_file') {
+    const p = abs(args?.path);
+    const oldText = String(args?.old_text ?? '');
+    const newText = String(args?.new_text ?? '');
+    const old = await readOld(p);
+    if (old.missing) return { kind: 'note', path: p, note: '目标文件不存在，edit_file 这次会失败（要新建请让模型改用 write_file）' };
+    if (old.tooBig) return { kind: 'note', path: p, note: `目标文件 ${Math.round(old.tooBig / 1024)}KB 太大，不预览` };
+    let n = 0;
+    for (let i = old.text.indexOf(oldText); i >= 0; i = old.text.indexOf(oldText, i + oldText.length)) { n += 1; if (n > 2) break; }
+    const will = n === 1 ? 'ok' : (n === 0 ? 'nomatch' : 'many');
+    const next = will === 'ok' ? old.text.replace(oldText, newText) : old.text;
+    const d = cap(buildFileDiff(old.text, next));
+    return {
+      kind: 'diff', path: p, isNew: false, applies: will,
+      note: will === 'nomatch' ? '注意：现在文件里找不到这段原文，批准了也会失败（模型大概是在凭印象改）'
+        : will === 'many' ? '注意：这段原文在文件里出现多次，edit_file 要求唯一匹配，会失败' : '',
+      added: d.rows.filter(r => r.kind === 'add').length, removed: d.rows.filter(r => r.kind === 'del').length,
+      diff: d.rows, truncated: d.truncated,
+    };
+  }
+  if (name === 'delete_file' || name === 'delete_dir') {
+    const p = abs(args?.path);
+    let info = null;
+    try { const st = await fsp.stat(p); info = st.isDirectory() ? { dir: true } : { dir: false, size: st.size }; } catch (e) { /* 不存在就说不存在 */ }
+    return {
+      kind: 'danger', path: p, isDir: !!(info && info.dir), size: info && info.size,
+      note: !info ? '这个路径现在不存在（批准了也会失败）'
+        : (info.dir ? '目标是一个目录，连同里面的文件一起没' : `目标是一个 ${Math.round((info.size || 0) / 1024)}KB 的文件`),
+    };
+  }
+  if (name === 'rename_file') {
+    return { kind: 'rename', from: abs(args?.path), to: abs(args?.new_path || args?.to) };
+  }
+  if (name === 'run_command' || name === 'run_background') {
+    const cmd = String(args?.command || '');
+    let paths = [];
+    try { paths = perms.extractPaths(cmd); } catch (e) { paths = []; }
+    return { kind: 'command', command: cmd, cwd, shell: getShellSetting(), paths };
+  }
+  return null;
+}
+
 function buildNewFileDiff(content) {
   const lines = (content || '').split('\n');
   const out = lines.map((text, i) => ({ kind: 'add', line: i + 1, text }));
@@ -2071,6 +2270,42 @@ function allToolSchemas() {
 // 本次请求实际可用的工具清单（扩展工具按设置里的开关动态挂载，改完不用重启）
 function activeAgentTools() {
   return AGENT_TOOLS.concat(toolgate.definitions());
+}
+
+// ---------- 工具能力地图（每轮随开关状态现算） ----------
+// 目标：别让模型「知道有这个工具，但关键时刻想不到调用」。上面那段手写的「使用工具的规则」
+// 只讲得到文件/命令/记忆这几个常用的，外部接口、文本工具、MCP 那一大片只出现在 tools 表里，
+// 弱一点的模型根本不会去翻。这里把本轮**真要发出去的那份工具表**压成一张分组一览塞进 system。
+// 数据源就是 activeAgentTools()，所以这张图永远和实际能力一致 —— 不手写第二份清单（那份必腐烂）。
+// 开关：settings.tool_capability_map（默认开；关掉就退回只有 rules 那段）。
+function capabilityHint(text, max) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  const first = s.split(/[。；;（(，,、]/)[0] || s;
+  return first.length > max ? first.slice(0, max) + '…' : first;
+}
+
+function capabilityMapOn() {
+  try {
+    const v = db.prepare("SELECT value FROM settings WHERE key = 'tool_capability_map'").get()?.value;
+    return v === undefined || v === null || v === '' ? true : v === '1';   // 默认开
+  } catch (e) { return true; }
+}
+
+function buildCapabilityMap() {
+  const live = activeAgentTools().map(t => (t && t.function && t.function.name) || '').filter(Boolean);
+  if (!live.length) return '';
+  const gate = new Map(toolgate.listForUi().map(x => [x.name, x]));
+  const builtinDesc = new Map(AGENT_TOOLS.map(t => [t.function.name, t.function.description]));
+  const buckets = new Map();
+  for (const n of live) {
+    const g = gate.get(n);
+    const cat = g ? (g.category || (g.kind === 'mcp' ? 'MCP' : '扩展接口')) : '内置';
+    const hint = g ? capabilityHint(g.label || g.description, 12) : capabilityHint(builtinDesc.get(n), 14);
+    if (!buckets.has(cat)) buckets.set(cat, []);
+    buckets.get(cat).push(hint ? `${n}(${hint})` : n);
+  }
+  const lines = [...buckets.entries()].map(([cat, arr]) => `· ${cat}：${arr.join(' ')}`);
+  return `可用工具一览（本轮共 ${live.length} 个，随设置里的开关实时变化）。动手前先扫一眼，不要默认只有 read_file/run_command 这几个：\n${lines.join('\n')}`;
 }
 
 // 上游要求 assistant.tool_calls[].arguments 必须是合法 JSON 字符串。
@@ -2115,6 +2350,54 @@ function isToolArgsError(status, body) {
   return status === 400 && /arguments must be valid JSON|tool call.*arguments|invalid json.*arguments/i.test(String(body || ''));
 }
 
+/**
+ * 上游以「输入太长」拒绝整包。各家措辞不一但都带长度语义；判得太宽会把普通 400 当溢出治，
+ * 所以只认明确的 context/length/token 组合词。
+ */
+function isContextLengthError(status, body) {
+  const s = Number(status);
+  if (s !== 400 && s !== 413 && s !== 500 && s !== 502) return false;
+  return /context[_ ]length|maximum context|context window|prompt is too long|input (length|tokens)|too many tokens|exceed\w{0,3}\s.{0,24}(context|token|length)|range of (input|context) length/i.test(String(body || ''));
+}
+
+/**
+ * 整包被判超长时，就地裁**这次要发出去**的消息序列 —— 库里一条都不删。
+ * 从尾部往前圈出约两倍需求的区间，把其中最占体积的几条换成一句省略占位（先 tool 结果、再长正文），
+ * 因为溢出几乎总是工具返回值撑的，丢最肥的几条最省、也最少破坏语义。
+ * 三条红线：system（index 0）与最后一条永远留；带 tool_calls 的 assistant 和它的 tool 回执**只许缩不许删** ——
+ * 少一条配对，上游会用另一个 400 把整包再拒一次，症状和原错误一模一样。
+ */
+function shedTailForOverflow(msgs, tools) {
+  const sizeOf = (m) => (
+    estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''))
+    + (m.tool_calls ? estimateTokens(JSON.stringify(m.tool_calls)) : 0)
+  );
+  const total = packageTokens(msgs, tools);
+  const need = Math.ceil(total * 0.2);
+  const PLACE = '（这一段因超出上游长度限制被省略，内容仍在本地记录里）';
+  const cands = [];
+  let span = 0;
+  for (let i = msgs.length - 2; i >= 1; i--) {
+    cands.push(i);
+    span += sizeOf(msgs[i]);
+    if (span >= need * 2) break;
+  }
+  cands.sort((a, b) => sizeOf(msgs[b]) - sizeOf(msgs[a]));
+  let shed = 0;
+  let touched = 0;
+  for (const i of cands) {
+    if (shed >= need) break;
+    const m = msgs[i];
+    const before = sizeOf(m);
+    if (before < 64) continue;          // 短句省不出什么，替换它只是白丢信息
+    if (Array.isArray(m.content)) m.content = [{ type: 'text', text: PLACE }];
+    else m.content = PLACE;
+    shed += Math.max(0, before - sizeOf(m));
+    touched += 1;
+  }
+  return { shed, touched, total, need };
+}
+
 // 返回 null = 通过；返回 string = 给 AI 的校验错误（作为 tool_result 触发反思重试）
 function validateToolArgs(name, args) {
   const schema = allToolSchemas()[resolveToolName(name)];
@@ -2141,11 +2424,14 @@ function isFatalToolError(name, args, errText) {
   return /ENOENT|EACCES|EPERM|不存在|没有写权限|权限|not found|no such file|is not a directory|Access is denied|拒绝访问/i.test(e);
 }
 
+const privatepaths = require('../utils/privatepaths');
+
 // 路径安全防护（跨平台，文件类工具在执行前统一调用）：
-// 1) 项目会话硬边界：目标真实路径必须位于项目根内（符号链接/junction 解析后也不得逃逸，bypass 不越过）
-// 2) 自由会话：表面路径在工作目录内、但真实路径经链接逃出 → 拒绝并提示（防止链接攻击绕过审批）
+// 1) KHarness 自己的运行数据（主库/日志/截图/撤销快照）对模型隐身，批准也不会放开（utils/privatepaths.js）
+// 2) 项目会话硬边界：目标真实路径必须位于项目根内（符号链接/junction 解析后也不得逃逸，bypass 不越过）
+// 3) 自由会话：表面路径在工作目录内、但真实路径经链接逃出 → 拒绝并提示（防止链接攻击绕过审批）
 // 返回 null = 放行；{ error } = 拒绝（作为 tool_result 返回给 AI 反思修正）
-async function guardTargetPath(raw, cwd, projectRoot) {
+async function guardTargetPath(raw, cwd, projectRoot, chatId) {
   const p = path.resolve(cwd, String(raw ?? '.'));
   let real = null;
   try {
@@ -2165,6 +2451,10 @@ async function guardTargetPath(raw, cwd, projectRoot) {
     }
     real = path.join(ancReal, path.relative(anc, p));
   }
+
+  // 自己的数据先挡：这里用解析过链接的真实路径，所以「把 kh.db 做成符号链接到项目里」也照样挡得住
+  const priv = privatepaths.guardPrivatePath(real, { chatId });
+  if (priv) return { error: priv };
 
   if (projectRoot) {
     let rootReal = null;
@@ -2298,7 +2588,7 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
   }
   // 文件类工具：先过路径安全防护
   if (FILE_TARGET_TOOLS.has(name)) {
-    const guard = await guardTargetPath(name === 'grep' || name === 'glob' ? (args?.path || '.') : args?.path, cwd, projectRoot);
+    const guard = await guardTargetPath(name === 'grep' || name === 'glob' ? (args?.path || '.') : args?.path, cwd, projectRoot, chatId);
     if (guard) return guard;
   }
   try {
@@ -2309,6 +2599,20 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
         // 单次超时（设置项 cmd_timeout_seconds，0=不限）；到点杀进程树并回喂部分输出。
         // 用户也可点操作条上的「超时」按钮提前触发同一逻辑（holder.manualTimeout），会话不中断。
         return await runShellCommand(String(args.command || ''), cwd, holder, getCmdTimeoutMs());
+      }
+      case 'view_image': {
+        const p = path.resolve(cwd, String(args.path || ''));
+        if (!/\.(png|jpe?g|webp|gif|bmp)$/i.test(p)) {
+          return { error: `view_image 只吃图片文件（png/jpg/jpeg/webp/gif/bmp），你要看的是 ${path.basename(p)}。文本请用 read_file。` };
+        }
+        const st = await fsp.stat(p).catch(() => null);
+        if (!st || !st.isFile()) return { error: `图片不存在或不是文件：${p}` };
+        if (st.size > shotfeed.MAX_BYTES) {
+          return { error: `图片 ${Math.round(st.size / 1024)}KB 超过单张 ${Math.round(shotfeed.MAX_BYTES / 1024 / 1024)}MB 上限，画面进不来。请让用户压缩一张小的，或说明看不了。` };
+        }
+        // image_trusted：这张图不在截图目录里，回喂那一层（shotfeed）需要允许读任意路径。
+        // 越界审批与 KHarness 自身数据的墙都在上面挡过，这里只是不再按截图目录筛。
+        return { output: `已把图片 ${p}（${Math.round(st.size / 1024)}KB）的画面交给你看`, path: p, image_file: p, image_trusted: true };
       }
       case 'read_file': {
         const p = path.resolve(cwd, String(args.path || ''));
@@ -2423,7 +2727,10 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
       case 'list_dir': {
         const p = path.resolve(cwd, String(args.path || '.'));
         const list = await fsp.readdir(p, { withFileTypes: true });
-        const out = list.map(e => (e.isDirectory() ? e.name + '/' : e.name)).join('\n');
+        // 自己的数据不列出来：让模型连「这里有主库/截图」都不知道，才会去用正路（memory_* / 重新截图）
+        const out = list
+          .filter(e => !privatepaths.isPrivateEntry(path.join(p, e.name), { chatId }))
+          .map(e => (e.isDirectory() ? e.name + '/' : e.name)).join('\n');
         return { output: out || '(空目录)' };
       }
       case 'grep': {
@@ -2443,6 +2750,7 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
           const full = path.join(ent.parentPath || ent.path, ent.name);
           const rel = path.relative(base, full).split(path.sep).join('/');
           if (rel.split('/').some(seg => SKIP_DIRS.has(seg))) continue;
+          if (privatepaths.isPrivateEntry(full, { chatId })) continue;   // 自己的数据：搜不到也列不出
           if (incRx && !incRx.test(ent.name)) continue;
           let buf;
           try { buf = await fsp.readFile(full); } catch (e) { continue; }
@@ -2478,6 +2786,7 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
           const full = path.join(ent.parentPath || ent.path, ent.name);
           const rel = path.relative(base, full).split(path.sep).join('/');
           if (rel.split('/').some(seg => SKIP_DIRS.has(seg))) continue;
+          if (privatepaths.isPrivateEntry(full, { chatId })) continue;   // 自己的数据：搜不到也列不出
           if (nameOnly ? rx.test(ent.name) : rx.test(rel)) out.push(rel);
           if (out.length >= MAX_PATHS) break;
         }
@@ -2491,6 +2800,7 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
             const full = path.join(ent.parentPath || ent.path, ent.name);
             const rel = path.relative(base, full).split(path.sep).join('/');
             if (rel.split('/').some(seg => SKIP_DIRS.has(seg))) continue;
+            if (privatepaths.isPrivateEntry(full, { chatId })) continue;   // 自己的数据：搜不到也列不出
             if (fuzzyMatchServer(ent.name, pat) || fuzzyMatchServer(rel, pat)) fuzzyOut.push(rel + ' (模糊)');
             if (fuzzyOut.length >= 30) break;
           }
@@ -2566,7 +2876,7 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
 
 // agent 系统提示词：cwd / 平台与 Shell / AGENTS.md 长期记忆 / 技能惰性加载 / Plan 模式协议
 function agentSystemPrompt(cwd, opts = {}) {
-  const { projectRoot, planMode, agentsFiles, readonlyMode, loadedSkills, remote } = opts;
+  const { projectRoot, planMode, agentsFiles, readonlyMode, loadedSkills, onceSkills, remote } = opts;
   const cmdTimeoutSec = Math.round(getCmdTimeoutMs() / 1000);
   const shell = getShellSetting() || (IS_WIN ? 'cmd.exe（系统默认）' : process.env.SHELL || 'bash');
   // 远程会话必须让模型知道「自己在哪台机器上」，否则它会端出 Windows 路径和 cmd 语法
@@ -2599,6 +2909,11 @@ function agentSystemPrompt(cwd, opts = {}) {
     '- 需要执行命令、读写文件、列出目录等实际操作时，必须调用对应的工具函数完成，禁止只用文字描述操作过程或假装已执行',
     '- 用户消息里以 [工具结果回喂时插入提示词_用户输入] 开头的段落，是主人在工具返回结果后临时补充的指示，优先级高于你此前的计划，必须据此调整后续动作'
   ];
+  // 工具能力地图：随本轮开关状态现算，压成按分组的紧凑一览（关掉走 settings.tool_capability_map=0）
+  if (capabilityMapOn()) {
+    const capMap = buildCapabilityMap();
+    if (capMap) lines.push(capMap);
+  }
   if (projectRoot) {
     lines.push(`- 本会话绑定项目，项目根目录：${projectRoot}。所有文件操作与命令的工作目录都被限制在该目录内，越界访问会被安全策略直接拒绝，请始终使用项目内路径。`);
   }
@@ -2616,6 +2931,14 @@ function agentSystemPrompt(cwd, opts = {}) {
       lines.push(`\n<<用户为本次会话加载的技能：${s.name}（必须遵循）>>\n${String(s.body).substring(0, 8000)}`);
     }
     lines.push(`（以上 ${Math.min(loadedSkills.length, 12)} 个技能由主人通过 /skills-load 常驻本会话，不需要再调用 load_skill 重复获取）`);
+  }
+  // @技能名：主人用 @ 点名的技能只活在**这一轮**（下一轮上文里就没有它了），
+  // 所以措辞要写清单轮性质，别让它以为这是长期约定。
+  if (Array.isArray(onceSkills) && onceSkills.length) {
+    for (const s of onceSkills.slice(0, 6)) {
+      if (!s || !s.body) continue;
+      lines.push(`\n<<本轮由主人 @${s.name} 临时加载的技能（只在这一轮生效，必须遵循）>>\n${String(s.body).substring(0, 8000)}`);
+    }
   }
   // AGENTS.md 长期记忆（哈希校验热加载；全局兜底 + 项目/目录覆盖叠加）
   // 拼装文本交给 utils/agentsmd.promptBlock —— 侧栏/托管/子智能体三条路用同一个函数，
@@ -2683,11 +3006,19 @@ async function compressChat(chatId, modelRow, dispatcher, signal, send = null) {
   const summary = stripThinking(protocols.normalizeReply(modelRow, data).choices?.[0]?.message?.content || '').substring(0, 8000);
   if (!summary.trim()) throw new Error('压缩结果为空');
 
+  // 压缩前先记下「不随历史变的固定开销」：整包锚点减去正文估算，剩下的就是 system 提示词 +
+  // AGENTS.md + 技能清单 + 几十个工具 schema 那一坨。压缩后它一分不少，必须继续算进上下文。
+  const beforeCompress = chatContextUsage(chatId);
+  const fixedOverhead = beforeCompress.anchor > 0
+    ? Math.max(0, beforeCompress.anchor - beforeCompress.body)
+    : 0;
   db.prepare('UPDATE ai_chats SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(summary, chatId);
   const archive = db.prepare('UPDATE ai_chat_messages SET archived = 1 WHERE id = ?');
   db.transaction(ids => { for (const id of ids) archive.run(id); })(toCompress.map(r => r.id));
-  // 整包内容换了（一批消息归档、摘要重写），旧锚点不再代表现在的大小 → 作废，等下一次上游回执重新校准
-  invalidateContextAnchor(chatId);
+  // 整包内容换了，旧锚点作废 —— 但不能作废成 0：那会让界面显示「刚压完几乎空了」，
+  // 而保留的消息、摘要、固定开销全都还在上下文里。按压缩后的整包重设一个估算锚点，
+  // 下一次上游回执 prompt_tokens 时 recordContextAnchor 再校准成真值。
+  reanchorAfterCompress(chatId, fixedOverhead);
   return { skipped: false, length: summary.length, summary, archived: toCompress.length };
 }
 
@@ -2769,9 +3100,21 @@ function chatContextUsage(chatId, opts = {}) {
   return { used, body, anchor, anchor_msg_id: anchorMsg, basis, limit, limit_source: source };
 }
 
-/** 压缩之后锚点作废（整包已经换了内容），等下一轮上游回执重新校准 */
-function invalidateContextAnchor(chatId) {
-  try { db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = 0, ctx_anchor_msg_id = 0 WHERE id = ?').run(chatId); } catch (e) { /* 旧库无列时忽略 */ }
+/**
+ * 压缩后重设锚点（不再是清零）。
+ * 锚点 = 压缩后的正文（摘要 + 未归档消息）+ 压缩前量出来的固定开销；anchor_msg_id 指到最后一条未归档消息，
+ * 免得那些正文又被「锚点之后新增」重复计一次。真实值等下一次上游回执 prompt_tokens 校准。
+ */
+function reanchorAfterCompress(chatId, overhead) {
+  const last = db.prepare(
+    'SELECT id FROM ai_chat_messages WHERE chat_id = ? AND archived = 0 ORDER BY id DESC LIMIT 1'
+  ).get(chatId);
+  const after = chatContextUsage(chatId);
+  const anchor = Math.round((Number(after.body) || 0) + (Number(overhead) || 0));
+  try {
+    db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
+      .run(anchor, last ? last.id : 0, chatId);
+  } catch (e) { /* 旧库无列时忽略 */ }
 }
 
 /** 回合结束：把这一轮上游实测的整包大小记成锚点（右侧用量与压缩判定都以它为基准） */
@@ -4088,6 +4431,15 @@ router.post('/chat', (req, res) => {
     let userMsgId = null;
     let turnThinkingLevel = ''; // 本轮生效的思考档位（会话行建好后算出，fetchUpstream 用它而非再读库）
     let continueSynthetic = null; // 继续生成模式：合成继续指令（assistant 半截 + user 继续要求）
+    // 真实对话也要回写模型可用性与首字延迟（他点名要的那条）：
+    //   turnTtftMs —— 请求发出到第一个 SSE 数据块的间隔，不是整回合时长、不含工具执行与 429 重试；
+    //   lastReqSentAt —— 每个 fetchUpstream 前赋的新值，consumeStream 收到第一块时和它作差；
+    //   turnErrText / turnAbortedByUser —— 用来区分「模型真的不行」和「用户自己按了停止」（后者不冤枉模型）。
+    let turnTtftMs = 0;
+    let lastReqSentAt = 0;
+    let turnErrText = '';
+    let turnAbortedByUser = false;
+    const noteTurnError = (msg) => { turnErrText = String(msg || '').substring(0, 400); send({ t: 'error', message: msg }); };
     try {
       if (!chatId) {
         chatTitle = stripImageTokens(content).trim().substring(0, 30) || '新对话';
@@ -4142,7 +4494,8 @@ router.post('/chat', (req, res) => {
           ? db.prepare('INSERT INTO ai_chat_messages (chat_id, role, content, speaker) VALUES (?, ?, ?, ?)').run(chatId, 'user', content, userSpeaker)
           : insertMsg.run(chatId, 'user', content);
         userMsgId = Number(userInsert.lastInsertRowid);
-        send({ t: 'chat', chat_id: chatId, title: chatTitle, user_message_id: Number(userInsert.lastInsertRowid), user_speaker: userSpeaker || undefined });
+        // approval_effective 带回去：新建会话时前端只在内存里选了模式，落库后要以库里算出的生效值为准
+        send({ t: 'chat', chat_id: chatId, title: chatTitle, user_message_id: Number(userInsert.lastInsertRowid), user_speaker: userSpeaker || undefined, approval_effective: effectiveApprovalMode(chatId) });
       }
 
       // 从库里重建「上文基底」：摘要前缀 + 未归档消息（最新 60 条再正序）。
@@ -4341,14 +4694,29 @@ router.post('/chat', (req, res) => {
         let roundReasoning = ''; // 本轮思考（区别于跨轮累积的 fullReasoning，续接时携带）
         // 内联思考拆分器：部分模型不走 reasoning_content 字段，而把思考混在正文里（think 类标签或原生特殊 token）
         const splitter = thinking.createReasoningSplitter();
+        // 卡带检测（文字层死循环）：watcher 每轮新建，游标只在本轮内单调 ——
+        // 同类项目写了 reset() 却没人调用，第二轮之后检测直接被节流跳过，这个结构性能避开的坑别留。
+        let stall = stallGuardOn() ? new stallwatch.StallWatch({ minRun: stallMinChars() }) : null;
+        let stallStop = false;
+        const stallCheck = (text) => {
+          if (!stall) return;
+          let hit = null;
+          try { hit = stall.feed(text); } catch (e) { stall = null; return; }   // 检测自己出问题就停用，绝不拖累正常回复
+          if (!hit) return;
+          stallStop = true;
+          content = content.slice(0, Math.max(0, content.length - hit.repeatLen));
+          send({ t: 'note', text: `模型在原地复读（尾部 ${hit.repeatLen} 字是重复内容），已自动打断本轮并裁掉重复部分；要我接着说请回复一句。（阈值可在 设置 → 常规 调或关掉）` });
+        };
         // 归一化一条增量：kind='reason' 走思考通道，kind='content' 走正文通道
         const emitPiece = (text, isReasoning) => {
           if (!text) return;
           if (isReasoning) {
             if (thinkOffRequested) {
               // 用户要求关闭思考但模型仍输出：思考内容按正文处理（前端直接显示 + 入库进上下文）
+              if (stallStop) return;   // 已经判定卡带：同一个 SSE 包里后面的增量也别再累积
               content += text;
-              send({ t: 'delta', text });
+              stallCheck(text);
+              if (!stallStop) send({ t: 'delta', text });
               return;
             }
             const hit = hitCensored(text);
@@ -4370,8 +4738,10 @@ router.post('/chat', (req, res) => {
             cErr.__khCensored = true;
             throw cErr;
           }
+          if (stallStop) return;   // 已经判定卡带：同一个 SSE 包里后面的增量别再累积进来
           content += text;
-          send({ t: 'delta', text });
+          stallCheck(text);
+          if (!stallStop) send({ t: 'delta', text });
         };
         const emitContentDelta = (chunk) => {
           const part = splitter.push(chunk);
@@ -4392,11 +4762,16 @@ router.post('/chat', (req, res) => {
             throw attachPartial(e);
           }
           if (done) break;
+          // 卡带已经判定：这一轮就此收（content 已裁掉重复部分），不再读后续增量。
+          // 和「用户手动停止」同一个返回形状，上层按正常结束处理，不弹错误条。
+          if (stallStop) return { content, tcAcc: [], usage, reasoning: roundReasoning, stalled: true };
           // 纯生成时长统计（首末 SSE 数据字节间隔，不含工具执行时间）
           {
             const now2 = Date.now();
             if (!firstDeltaTs) firstDeltaTs = now2;
             lastDeltaTs = now2;
+            // 首字延迟只记第一次（同一回合里后续轮次是工具回喂后的续答，不该把冷启动时间冲掉）
+            if (!turnTtftMs && lastReqSentAt) turnTtftMs = now2 - lastReqSentAt;
           }
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -4503,6 +4878,7 @@ router.post('/chat', (req, res) => {
             const row = rows[mi];
             curRow = row;
             if (mi > 0) send({ t: 'model', id: row.id, name: row.display_name });
+            lastReqSentAt = Date.now();
             const resp = await fetchUpstream(row, { model: row.model_id, messages: outMsgs });
             if (!resp.ok) {
               const detail = (resp._errBody || await resp.text().catch(() => '')).substring(0, ERROR_MAX_LEN);
@@ -4510,7 +4886,7 @@ router.post('/chat', (req, res) => {
                 send({ t: 'note', message: `[${row.display_name}] 请求失败(HTTP ${resp.status}${oneLine(detail, 200) ? '：' + oneLine(detail, 200) : ''})，切换下一个模型…` });
                 continue;
               }
-              send({ t: 'error', message: `HTTP ${resp.status}: ${detail || resp.statusText}` });
+              noteTurnError(`HTTP ${resp.status}: ${detail || resp.statusText}`);
               errSent = true;
               return { text: lastText, used: null, usage: lastUsage, genMs: genMsSum };
             }
@@ -4525,6 +4901,7 @@ router.post('/chat', (req, res) => {
                   { role: 'assistant', content: `[思考过程（已完成）]\n${r0.reasoning}` },
                   { role: 'user', content: '你刚才只完成了思考过程，还没有输出任何正文或发起任何工具调用。上面附有你完整的思考。请基于这些思考直接继续完成任务：该输出正文就输出正文，该调用工具就调用工具，不要再重复思考。' }
                 ];
+                lastReqSentAt = Date.now();
                 const respNudge = await fetchUpstream(row, { model: row.model_id, messages: nudgeMsgs });
                 if (respNudge.ok) {
                   const rN = await consumeStream(respNudge, row);
@@ -4546,6 +4923,7 @@ router.post('/chat', (req, res) => {
                 if (e.partial.reasoning) carry.push({ role: 'assistant', content: `[上轮思考过程（达到单次输出长度上限被截断，未完成）]\n${e.partial.reasoning}` });
                 if (e.partial.content) carry.push({ role: 'assistant', content: `[上轮已输出正文（被截断）]\n${e.partial.content}` });
                 const contMsgs = [...msgs, ...carry, { role: 'user', content: continuePrompt }];
+                lastReqSentAt = Date.now();
                 const resp2 = await fetchUpstream(row, { model: row.model_id, messages: contMsgs });
                 if (!resp2.ok) throw e;
                 r0 = await consumeStream(resp2, row);
@@ -4575,7 +4953,7 @@ router.post('/chat', (req, res) => {
           errSent = true;
           const why = errDetail(e);
           console.error(`[stream] 普通流中断 · ${curRow ? curRow.display_name : '未知模型'} · ${why}`);
-          send({ t: 'error', message: `流式输出中断 · ${curRow ? curRow.display_name + ' · ' : ''}${why}`.substring(0, ERROR_MAX_LEN + 120) });
+          noteTurnError(`流式输出中断 · ${curRow ? curRow.display_name + ' · ' : ''}${why}`.substring(0, ERROR_MAX_LEN + 120));
           // 中断瞬间的部分正文并入；正文为空时把已思考内容并入正文入库（思考因此保留进上下文）
           let rescued = lastText;
           if (e && e.partial) {
@@ -4599,7 +4977,9 @@ const runAgent = async (msgs, rows) => {
         // /skills-load 勾选的技能：正文常驻本次会话的系统提示词
         const loadedSkillObjs = (chatId ? getLoadedSkills(chatId) : [])
           .map(n => listSkills().find(s => s.name === n)).filter(Boolean);
-        const promptOpts = { projectRoot: project ? project.root_path : null, planMode, agentsFiles, readonlyMode, loadedSkills: loadedSkillObjs, remote: remoteHost };
+        // @技能名：只活在**这一轮**的那份（库里的消息原样不动，下一轮上文里就没它了）
+        const onceSkillObjs = skillMentionsIn(content, listSkills());
+        const promptOpts = { projectRoot: project ? project.root_path : null, planMode, agentsFiles, readonlyMode, loadedSkills: loadedSkillObjs, onceSkills: onceSkillObjs, remote: remoteHost };
         const upstreamMsgs = [{ role: 'system', content: agentSystemPrompt(cwd, promptOpts) }, ...msgs];
         // 上游消息里「上文基底」占 1..baseLen（0 是 system），其后才是本轮新增的问答与工具往返。
         // 回合中间压缩时要按这个区间整段替换，所以长度得跟着变。
@@ -4628,13 +5008,14 @@ const runAgent = async (msgs, rows) => {
         let nudgedOnce = false;
         // 上游因非法 tool_call 参数拒包时，自愈重试只做一次
         let toolArgsHealedOnce = false;
+        // 上游判输入超长时只自救一次（裁尾巴 + 压一次）：反复裁会把上下文裁空，不如直接把错误抛给用户
+        let overflowShedOnce = false;
         // 无进展保护：同一 (工具+参数) 连续重复次数，达到阈值即打断循环。
         // 阈值在 设置 → 常规 调（repeat_break_threshold，默认 3）；一轮开始时应一次，
         // 免得每个工具调用都查一次库、也防止中途改值让这一轮的计数口径前后不一。
         let lastCallKey = '';
         let repeatStreak = 0;
         const repeatBreak = numSetting('repeat_break_threshold', 3, 2, 20);
-        let totalSteps = 0;
         const sysIdx = 0; // upstreamMsgs[0] 恒为 system
         // 用户 /insert 预埋的提示词：取出即清空，一条只注入一次。
         // 主注入点是一批工具结果回喂完之后（feedResultsDone），这里的调用留作兜底：
@@ -4759,11 +5140,6 @@ const runAgent = async (msgs, rows) => {
           withTextProtocol(textMode);
           let failed = false;
           for (let iter = 0; !failed; iter++) {
-            if (++totalSteps > AGENT_MAX_STEPS) {
-              send({ t: 'note', message: `已达 Agent 步数上限（${AGENT_MAX_STEPS}），停止继续调用工具。可拆成多条消息继续。` });
-              step({ type: 'note', message: `已达 Agent 步数上限（${AGENT_MAX_STEPS}）` });
-              return { reply: allText + `\n\n[已达 Agent 步数上限 ${AGENT_MAX_STEPS}，任务未继续]`, steps, used: row, usage: usageAcc.rounds ? usageAcc : null, genMs: genMsSum };
-            }
             // 安全边界：本轮不是第一次请求模型（说明上一轮的工具有结果要回喂），先交付用户预埋提示词
             if (iter > 0) {
               injectAtBoundary();
@@ -4777,9 +5153,29 @@ const runAgent = async (msgs, rows) => {
             } else await remindUncommitted();   // 实验室：回合开头提醒一次未提交变更
             const body = { model: row.model_id, messages: upstreamMsgs };
             if (!textMode) body.tools = activeAgentTools();
+            lastReqSentAt = Date.now();
             const resp = await fetchUpstream(row, body);
             if (!resp.ok) {
               const errBody = resp._errBody || await resp.text().catch(() => '');
+              // 上游判「输入太长」：先按他定的口径自救一次 —— 裁掉本次请求尾巴里约 20% 的肥内容，
+              // 再触发一次压缩（压缩会把基底换成摘要 + 保留消息）。库里一条消息都没删。
+              // 放在其它 400 分支**之前**：这类错误正文里常带 "tools"/"tokens" 字样，
+              // 晚判一步就会被下面那条「不接受 tools 参数 → 降级文本协议」误当成协议问题去治。
+              if (isContextLengthError(resp.status, errBody) && !overflowShedOnce) {
+                overflowShedOnce = true;
+                let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools());
+                if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
+                  // 重建基底会把基底里裁掉的占位换回原文（基底来自库），所以重建后再裁一次尾巴
+                  const rebuilt = buildBaseMsgs();
+                  upstreamMsgs.splice(1, baseLen, ...rebuilt);
+                  baseLen = rebuilt.length;
+                  s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools());
+                  step({ type: 'note', message: `超长自救：已压缩并按新摘要重建基底（${rebuilt.length} 条）` });
+                }
+                send({ t: 'note', message: `[${row.display_name}] 上游判定输入过长（${oneLine(errBody, 140)}）：已临时省略 ${s.touched} 段旧内容约 ${s.shed} tok（本地记录未删），重试本请求…` });
+                step({ type: 'note', message: `上游输入超长：省略 ${s.touched} 段约 ${s.shed} tok 后重试` });
+                continue;
+              }
               // 上游因为「assistant 的 tool_call 参数不是合法 JSON」拒绝整包：
               // 这类错误光靠降级/换模型治不好（毒消息还在 upstreamMsgs 里），
               // 所以上次旧版能重试、新版直接中断。这里就地修参数再发一次，同一模型同一协议。
@@ -4812,7 +5208,7 @@ const runAgent = async (msgs, rows) => {
                 failed = true;
                 break;
               }
-              send({ t: 'error', message: `HTTP ${resp.status}: ${oneLine(errBody, ERROR_MAX_LEN) || resp.statusText}` });
+              noteTurnError(`HTTP ${resp.status}: ${oneLine(errBody, ERROR_MAX_LEN) || resp.statusText}`);
               errSent = true;
               return { reply: allText, steps, used: row, usage: usageAcc.rounds ? usageAcc : null, genMs: genMsSum, errorSent: true };
             }
@@ -4897,6 +5293,18 @@ const runAgent = async (msgs, rows) => {
               // 模型说「我来读一下 x」而本轮没开炮，就是它本轮的终态；再拿一句话去逼一轮只会多烧一次上下文，
               // 往往换来同样的描述（弱模型尤其如此）。真要救它请用「模型管理 → 工具风格 = text」。
               return { reply: allText, steps, used: row, usage: usageAcc.rounds ? usageAcc : null, genMs: genMsSum };
+            }
+            // 他定的时机：模型这一轮要开工具了，先过一次压缩线再执行（ai.js 里原来只在
+            // 回合开头和「结果回喂完之后」判，工具一批批执行途中涨上去的那段没人管）。
+            // 放在这里还有一个硬好处：此刻 upstreamMsgs 尾巴上还没有「带 tool_calls 的 assistant 消息」
+            // （下一条语句才 push），压缩换基底不会把待配对的工具调用切掉 —— 那会被上游 400 拒包。
+            if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
+              const rebuilt = buildBaseMsgs();
+              upstreamMsgs.splice(1, baseLen, ...rebuilt);
+              baseLen = rebuilt.length;
+              // 现场要当场看得见：只 step() 的话要等回合结束入库重载才知道压过（#157 定的「先压缩要可见」）
+              send({ t: 'note', message: '上下文已过线：先压缩一轮，再执行这批工具调用' });
+              step({ type: 'note', message: `执行工具调用前先压缩（基底 ${rebuilt.length} 条）` });
             }
             if (fromText) {
               send({ t: 'note', message: `[${row.display_name}] 从正文中识别到文本形式的工具调用，已代为执行` });
@@ -5025,7 +5433,10 @@ const runAgent = async (msgs, rows) => {
               let result;
               if (dec.need) {
                 const approvalId = crypto.randomBytes(8).toString('hex');
-                send({ t: 'approval', id: approvalId, level: dec.level, tool: name, args, reason: dec.reason, target: approvalTarget, chat_id: chatId, is_high: dec.isHigh, mode: effectiveApprovalMode(chatId) });
+                // 「审阅」要的数据：现在参数已经完整，能算真 diff。预览失败绝不拦住审批本身。
+                let preview = null;
+                try { preview = await buildApprovalPreview(name, args, cwd); } catch (e) { preview = null; }
+                send({ t: 'approval', id: approvalId, level: dec.level, tool: name, args, reason: dec.reason, target: approvalTarget, chat_id: chatId, is_high: dec.isHigh, mode: effectiveApprovalMode(chatId), preview });
                 const decision = await waitApproval(approvalId, onAbort.deniedList);
                 if (!decision.allow) {
                   const msgText = decision.timeout ? '审批超时,用户未响应,操作被拒绝' : '用户拒绝执行该操作。请尊重用户决定,不要重复尝试。';
@@ -5066,8 +5477,17 @@ const runAgent = async (msgs, rows) => {
               // 回传给 AI 的工具结果不截断：完整上下文（自动压缩兜底）。
               // 截图类工具带 image_file：这里把它转成 [[img:token]] 引用，同一条 token 也回给前端，
               // 于是用户消息流里看到的图和模型拿到的图是同一张。
+              // 先按会话归置（挪进 screen-shots/<chat_id>/），路径出现在正文里之前就得是真的那个，
+              // 否则模型拿着旧路径去 read_file，只会收到一句「不存在」。
+              if (result.image_file) {
+                const claimed = shotfeed.claimForChat(result.image_file, chatId);
+                if (claimed !== result.image_file) {
+                  if (result.output) result.output = String(result.output).split(result.image_file).join(claimed);
+                  result.image_file = claimed;
+                }
+              }
               const echoText = ((result.output || '') + (result.error ? '\n[错误] ' + result.error : '')) || '(无输出)';
-              const shot = feedTextWithShot(result, echoText);
+              const shot = feedTextWithShot(result, echoText, chatId);
               send({
                 t: 'tool_result',
                 name,
@@ -5101,7 +5521,7 @@ const runAgent = async (msgs, rows) => {
           return { reply: allText, steps, used: row };
         }
         // 全部模型失败
-        send({ t: 'error', message: `模型池中所有模型均请求失败${poolFail ? '（最后一个：' + poolFail + '）' : ''}`.substring(0, ERROR_MAX_LEN + 100) });
+        noteTurnError(`模型池中所有模型均请求失败${poolFail ? '（最后一个：' + poolFail + '）' : ''}`.substring(0, ERROR_MAX_LEN + 100));
         errSent = true;
         return { reply: allText, steps, used: null, usage: usageAcc.rounds ? usageAcc : null, genMs: genMsSum, errorSent: true };
         } catch (e) {
@@ -5134,6 +5554,7 @@ const runAgent = async (msgs, rows) => {
         if (r.used) usedModelRow = r.used.id;
         turnUsage = r.usage || null;
         turnGenMs = r.genMs || 0;
+        if (r.aborted) turnAbortedByUser = true;
         if (r.aborted || r.interrupted) turnUnfinished = true;
         if (r.fallback) {
           const pr = await streamPlain(baseMsgs, poolRows);
@@ -5143,6 +5564,7 @@ const runAgent = async (msgs, rows) => {
           if (pr.failed) errSent = true;
           if (pr.usage) turnUsage = pr.usage;
           turnGenMs += pr.genMs || 0;
+          if (pr.aborted) turnAbortedByUser = true;
           if (pr.aborted || pr.interrupted) turnUnfinished = true;
         } else if (r.errorSent) {
           errSent = true;
@@ -5158,6 +5580,7 @@ const runAgent = async (msgs, rows) => {
         if (pr.failed) errSent = true;
         if (pr.usage) turnUsage = pr.usage;
         turnGenMs = pr.genMs || 0;
+        if (pr.aborted) turnAbortedByUser = true;
         if (pr.aborted || pr.interrupted) turnUnfinished = true;
       }
 
@@ -5174,18 +5597,21 @@ const runAgent = async (msgs, rows) => {
       // 校准上下文锚点：本轮上游实测的 prompt+completion 就是「下一轮整包」的底数，
       // 之后新增的正文才按估算补 —— 没有这一步，用量与压缩判定永远停在正文口径（低估一个数量级）。
       recordContextAnchor(chatId, turnUsage);
-      // 对话响应正常 → 该模型自动标为「可用」并更新首字延迟（异常模型回复成功后自动转正常）
+      // 真实对话也要回写模型表（他点名要的那三条）：
+      //   出了字 → 标可用，latency_ms 用**首字延迟**（请求发出到第一个 SSE 数据块），不再拿整回合时长凑；
+      //   一个字没出就失败/断流 → 标异常（原先标过「可用」的照样改判，未测的也落一条异常）；
+      //   用户自己按停止 ≠ 模型的错，状态一动不动。
+      const upsertModelResult = db.prepare(`
+        INSERT INTO ai_model_results (model_row_id, status, reply, error, latency_ms, tested_at)
+        VALUES (?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(model_row_id) DO UPDATE SET
+          status = excluded.status, reply = NULL, error = excluded.error,
+          latency_ms = excluded.latency_ms, tested_at = CURRENT_TIMESTAMP
+      `);
       if (!errSent && !turnUnfinished && fullReply.trim() && usedModelRow) {
-        // 首字延迟：以本轮纯生成时长作为参考延迟（turnGenMs 为首末 SSE 数据间隔之和，
-        // 不含工具执行/429 重试时间），更接近实际首字响应速度
-        const genLatency = turnGenMs || (Date.now() - started);
-        db.prepare(`
-          INSERT INTO ai_model_results (model_row_id, status, reply, error, latency_ms, tested_at)
-          VALUES (?, ?, NULL, NULL, ?, CURRENT_TIMESTAMP)
-          ON CONFLICT(model_row_id) DO UPDATE SET
-            status = excluded.status, reply = excluded.reply, error = excluded.error,
-            latency_ms = excluded.latency_ms, tested_at = CURRENT_TIMESTAMP
-        `).run(usedModelRow, 'ok', genLatency);
+        upsertModelResult.run(usedModelRow, 'ok', null, turnTtftMs || turnGenMs || (Date.now() - started));
+      } else if (usedModelRow && !turnAbortedByUser && !fullReply.trim() && (errSent || turnUnfinished)) {
+        upsertModelResult.run(usedModelRow, 'error', turnErrText || '真实对话中未产出任何内容即失败', null);
       }
       if (!errSent) {
         const usage = chatContextUsage(chatId);
@@ -5280,11 +5706,14 @@ router.patch('/chats/:id/settings', wrap((req, res) => {
     }
   }
   if (req.body?.context_limit !== undefined) {
-    const lim = parseInt(req.body.context_limit);
-    if (Number.isInteger(lim) && lim >= 0 && lim <= 1000000) {
-      updates.push('context_limit = ?');
-      params.push(lim);
+    const lim = parseInt(req.body.context_limit, 10);
+    // 非法值以前是「静默跳过」：界面写着自己填的那个数、库里还是旧的，看着就是「改了没生效，
+    // 刷新一下才显示真值」。现在直接 400 说清楚，别让用户对着一个没写进去的输入框猜。
+    if (!Number.isInteger(lim) || lim < 0 || lim > 1000000) {
+      return fail(res, 400, '上下文窗口要 0（不限）到 1000000 之间的整数；0 表示不限制');
     }
+    updates.push('context_limit = ?');
+    params.push(lim);
   }
   if (req.body?.temperature !== undefined) {
     const t = Number(req.body.temperature);
@@ -5327,10 +5756,13 @@ router.patch('/chats/:id/settings', wrap((req, res) => {
     updates.push('title = ?');
     params.push(t);
   }
-  if (!updates.length) return ok(res, null);
+  if (!updates.length) return ok(res, { context_effective: resolveContextWindow(id).limit });
   params.push(id);
   db.prepare(`UPDATE ai_chats SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...params);
-  ok(res, null, '会话配置已保存');
+  // 把**真正生效**的窗口回读给前端（会话设定 → 模型上限 → 全局默认）。
+  // 不回读的话界面显示的是「我刚输入的那个数」，和服务端算出的生效值可能不是一回事 —— 他报的「改完要刷新才生效」就是这么来的。
+  const w = resolveContextWindow(id);
+  ok(res, { context_effective: w.limit, context_source: w.source }, '会话配置已保存');
 }));
 
 // 自动获取当前模型最大上下文并填入
@@ -5445,13 +5877,17 @@ router.get('/chats/:id', wrap((req, res) => {
   if (!Number.isInteger(id) || id < 1) return fail(res, 400, '无效的对话ID');
   const chat = db.prepare(`
     SELECT c.id, c.title, c.model_row_id, c.created_at, c.updated_at, c.context_limit,
-           c.project_id, c.cwd, c.plan_mode, c.remote_id,
+           c.project_id, c.cwd, c.plan_mode, c.remote_id, c.approval_mode,
            c.temperature, c.frequency_penalty, c.presence_penalty, c.search_enabled, c.search_strategy, c.thinking_level, c.censored_words,
            LENGTH(c.summary) AS summary_length, m.display_name AS model_name
     FROM ai_chats c JOIN ai_models m ON c.model_row_id = m.id
     WHERE c.id = ? AND c.user_id = ?
   `).get(id, 1);
   if (!chat) return fail(res, 404, '对话不存在');
+  // 界面那颗开关要显示**判定真正用的**那个值（会话覆盖 || 全局），不是前端自己存的一份。
+  // 之前这条 SELECT 压根没带 approval_mode，前端只能退回 localStorage → 「显示一个值、按另一个值判」就是这么来的。
+  chat.approval_mode = String(chat.approval_mode || '');
+  chat.approval_effective = effectiveApprovalMode(id);
   const messages = db.prepare(`
     SELECT msg.id, msg.role, msg.content, msg.reasoning, msg.steps_json, msg.unfinished, msg.created_at, msg.speaker, am.display_name AS model_name
     FROM ai_chat_messages msg LEFT JOIN ai_models am ON msg.model_row_id = am.id

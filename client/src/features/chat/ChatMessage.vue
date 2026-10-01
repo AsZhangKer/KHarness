@@ -1,5 +1,5 @@
 <template>
-  <div class="msg" :class="['role-' + role, spkClass, { busy }]">
+  <div ref="rootEl" class="msg" :class="['role-' + role, spkClass, { busy }]">
     <div class="meta">
       <span class="who">{{ whoLabel }}</span>
       <span v-if="model_name" class="dim">{{ model_name }}</span>
@@ -9,13 +9,32 @@
         v-if="role === 'user' && canRetract"
         class="link-btn"
         type="button"
+        title="删掉这条之后的消息，文件改动不动"
         @click="$emit('retract', { id: msgId, content, index })"
       >撤回</button>
+      <button
+        v-if="role === 'user' && canRetract"
+        class="link-btn"
+        type="button"
+        title="消息一条不删，把这条之后改过的文件退回原样"
+        @click="$emit('revert-from', { id: msgId })"
+      >从此回退</button>
     </div>
 
     <!-- 时间线：工具 / 思考 / 正文交错 -->
     <template v-if="role !== 'user'">
+      <!-- 长回合折叠的是**上面**那段：最近几段一直留在眼前，流式时这个数跟着长，不用手动往下翻 -->
+      <button
+        v-if="foldFrom > 0"
+        class="link-btn fold-top"
+        type="button"
+        @click="roundOpen = true"
+      ><i class="fas fa-angle-double-up"></i> 展开这一轮更早的 {{ foldFrom }} 段</button>
       <template v-for="(item, i) in timeline" :key="i">
+        <!-- 折起来的那些根本不进 DOM：v-show 只是 display:none，节点照建、markdown 照跑一遍
+             marked + DOMPurify + hljs（实测一轮 30 段渲染 30 次），「收起」不等于「没加载」。
+             外面这层 template 带着下标 i 走，里面的 v-else-if 链仍然按整条时间线判，位置不会串。 -->
+        <template v-if="!hiddenByFold(i)">
         <details v-if="item.kind === 'reason' && item.text" class="reason" :open="busy || item.open || prefs.reasonOpen">
           <summary>思考过程</summary>
           <pre>{{ item.text }}</pre>
@@ -112,7 +131,7 @@
             class="body md"
             :class="{ clamped: prefs.longCollapse && !textOpen[i] && isLongText(item.text) }"
             @click="onMdClick"
-            v-html="withCaret(renderMarkdown(item.text), busy && i === timeline.length - 1)"
+            v-html="withCaret(renderMarkdownCached(item.text), busy && i === timeline.length - 1)"
           ></div>
           <button
             v-if="prefs.longCollapse && isLongText(item.text)"
@@ -121,11 +140,12 @@
             @click="textOpen[i] = !textOpen[i]"
           >{{ textOpen[i] ? '收起' : `展开回复（${lineCount(item.text)} 行）` }}</button>
         </div>
+        </template>
         <div v-if="busy && i === timeline.length - 1" class="phase">
           <i class="fas fa-circle-notch fa-spin"></i> {{ phaseLabel }}
         </div>
       </template>
-      <div v-if="!timeline.length" class="body md" v-html="renderMarkdown(content)"></div>
+      <div v-if="!timeline.length" class="body md" v-html="renderMarkdownCached(content)"></div>
     </template>
     <div v-else class="body user-body">
       <template v-for="(sg, i) in userSegments" :key="i">
@@ -143,8 +163,11 @@
 </template>
 
 <script setup>
-import { computed, reactive } from 'vue';
-import { renderMarkdown, highlightCode, highlightToLines, langFromPath, escapeHtml } from '../../utils/format';
+import { computed, reactive, ref, watch, nextTick, onMounted } from 'vue';
+import { highlightCode, highlightToLines, langFromPath, escapeHtml } from '../../utils/format';
+import { renderMarkdownCached } from '../../utils/mdcache';
+import { renderMermaid } from '../../utils/mermaid';
+import { renderMath } from '../../utils/math';
 import { toast } from '../../stores/toast';
 import { uiPrefs } from '../../stores/prefs';
 import { imageViewer as iv } from '../../stores/viewer';
@@ -187,7 +210,9 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
 });
 
-defineEmits(['undo', 'retract']);
+defineEmits(['undo', 'retract', 'revert-from']);
+
+/* mermaid 出图的接线在 timeline 之后（见该 computed 下面）：签名要读它，写在它前面会在 setup 里踩 TDZ。 */
 
 /**
  * 用户消息里的 @路径 芯片化。
@@ -296,6 +321,37 @@ const timeline = computed(() => {
   }
   return items;
 });
+
+/* mermaid 出图：markdown 那边只留了带源码的容器，图要等 DOM 挂上再补。
+   签名用「正文 + 各段时间线文本的长度」，流式增长时自然触发；同一容器由 utils/mermaid 内部去过重，
+   重复调用不会重画。库本身按需 import，消息里没图就一个字节都不加载。
+   必须放在 timeline 后面：watch 的 getter 在 setup 里就会跑一次，早于 computed 声明会踩 TDZ ——
+   那不是我改出来的理论问题，是 client/__tests__/formula-render.test.js 抓到的真 bug
+   （症状是每条消息都渲染成空白）。 */
+const rootEl = ref(null);
+const mermaidSig = computed(() => {
+  const parts = [String(props.content || '').length];
+  for (const it of (timeline.value || [])) if (it && typeof it.text === 'string') parts.push(it.text.length);
+  return parts.join('-');
+});
+function drawMermaid() { nextTick(() => { if (rootEl.value) { renderMath(rootEl.value); renderMermaid(rootEl.value); } }); }
+onMounted(drawMermaid);
+watch(mermaidSig, drawMermaid);
+
+/* 长回合向上折叠（#231 三条里的第二条）：一轮里段落一多，就把**上面**那些折起来，只留最近 ROUND_KEEP 段。
+   流式时 foldFrom 跟着数组长度往前推，所以「最新那一段永远在眼前」，不必手动下翻；
+   方向特意选向上而不是向下 —— 向下折会把刚吐出来的结论藏掉（原来长回复的 clamped 就是折下面，只适合单段正文）。
+   隐藏用 v-show 而不是切数组：时间线的下标被审阅/折叠组/光标到处用着，切一刀就会串位。 */
+const ROUND_KEEP = 14;
+const roundOpen = ref(false);
+const foldFrom = computed(() => (roundOpen.value ? 0 : Math.max(0, timeline.value.length - ROUND_KEEP)));
+const hiddenByFold = (i) => {
+  if (roundOpen.value || i >= foldFrom.value) return false;
+  // 折叠组跨过界线时不能只藏头：藏了头、成员又因为「在组里」不渲染，整组就凭空消失了
+  const g = foldedGroup(i);
+  if (g && g.start + g.len > foldFrom.value) return false;
+  return true;
+};
 
 /* ── 连续的工具调用归成一组 ────────────────────────────────────────────
    开了「工具调用自动折叠」（设置 → 常规）且这一轮已经跑完时，整组收成一行
@@ -556,27 +612,10 @@ function preview(s) {
 .at-chip:hover { background: var(--bg-hover); border-color: var(--border-strong, var(--border)); }
 .at-chip:hover i { color: var(--text-2); }
 .body { word-break: break-word; }
-/* 生成中：圆形光标贴在正文最后 */
-.msg.busy .body.md::after,
-.msg.busy .user-body::after {
-  content: '';
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-left: 3px;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: middle;
-  animation: caret-glow 1s ease-in-out infinite;
-}
-@keyframes caret-glow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .msg.busy .body.md::after,
-  .msg.busy .user-body::after { animation: none; }
-}
+/* 生成中的那枚小圆点**只有一个来源**：withCaret() 往「本轮最后一个条目」的正文里插的 .caret-dot。
+   这里原来还有一条纯 CSS 的 `.msg.busy .body.md::after` —— 它给 busy 消息里**每一条**正文都补一个
+   闪烁点（第二条规则才带 :last-of-type，第一条不带），于是「说完一段话去调工具」时，
+   上面那段正文尾巴还挂着一个点、末尾又点一个，看着就是两根光标一起闪（他报的那条）。 */
 .phase {
   margin-top: 4px;
   font-size: 11px;
@@ -584,6 +623,12 @@ function preview(s) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* 光标的闪烁曲线：这条以前压根没定义过（.caret-dot 的 animation 指向一个不存在的 keyframes），
+   于是那枚点其实不闪 —— 看到「在闪」的是被我删掉的那两条 ::after。删完必须把它补上，不然光标变成死点。 */
+@keyframes caret-blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
 }
 .caret-dot {
   display: inline-block;
@@ -594,23 +639,6 @@ function preview(s) {
   background: currentColor;
   vertical-align: 0.12em;
   animation: caret-blink 0.9s step-end infinite;
-}
-/* 紧随最后文字：不占独立行 */
-.msg.busy .body.md:last-of-type::after,
-.msg.busy .user-body::after {
-  content: '';
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-left: 2px;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: 0.12em;
-  animation: caret-glow 1s ease-in-out infinite;
-}
-@keyframes caret-glow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
 }
 @media (prefers-reduced-motion: reduce) {
   .caret-dot { animation: none; }
@@ -727,6 +755,16 @@ function preview(s) {
   display: block;
   margin: 4px 0 0;
 }
+/* 长回合向上折叠的那颗按钮：居中、上面一道虚线，一眼看出「这以上是收起来的」 */
+.link-btn.fold-top {
+  display: block;
+  margin: 0 auto 10px;
+  padding: 3px 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 999px;
+  font-size: 11px;
+}
+.link-btn.fold-top i { margin-right: 5px; }
 .step-note {
   padding: 0 10px 8px;
   color: var(--text-3);

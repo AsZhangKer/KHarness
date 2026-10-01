@@ -9,7 +9,7 @@
           <span v-if="approvals.length > 1" class="ap-queue">还有 {{ approvals.length - 1 }} 条待处理</span>
         </div>
         <div class="ap-reason">{{ apHead.reason }}</div>
-        <pre class="ap-args">{{ pretty(apHead.args) }}</pre>
+        <pre v-if="!apHead.preview" class="ap-args">{{ pretty(apHead.args) }}</pre>
         <div class="ap-actions">
           <button class="k-btn sm danger" type="button" @click="$emit('approve', false)">拒绝</button>
           <button
@@ -19,7 +19,55 @@
             title="之后同一目标不再询问"
             @click="$emit('approve', 'always')"
           >始终允许</button>
+          <button
+            v-if="apHead.preview"
+            class="k-btn sm"
+            type="button"
+            title="批准之前先看清它到底要改什么"
+            @click="apOpen = !apOpen"
+          >{{ apOpen ? '收起审阅' : '审阅' }}</button>
           <button class="k-btn sm primary" type="button" @click="$emit('approve', true)">批准</button>
+        </div>
+
+        <!-- 审阅：参数这时已经生成完整，服务端顺手算好了真 diff / 命令原文，
+             让用户心中有数再决定，而不是靠一句 reason 猜。 -->
+        <div v-if="apOpen && apHead.preview" class="ap-preview">
+          <div class="ap-sum">
+            <code class="ap-path">{{ apHead.preview.path || apHead.preview.from || apHead.preview.cwd || apHead.preview.tool || '' }}</code>
+            <span v-if="apHead.preview.isNew" class="ap-tag">新建文件</span>
+            <span v-if="apHead.preview.added != null" class="ap-plus">+{{ apHead.preview.added }}</span>
+            <span v-if="apHead.preview.removed != null" class="ap-minus">-{{ apHead.preview.removed }}</span>
+          </div>
+          <p v-if="apHead.preview.note" class="ap-warn">{{ apHead.preview.note }}</p>
+
+          <div v-if="apHead.preview.kind === 'diff'" class="ap-diff">
+            <div
+              v-for="(row, i) in apHead.preview.diff"
+              :key="i"
+              class="ap-line"
+              :class="row.kind"
+            ><span class="ap-ln">{{ row.line || '' }}</span><span class="ap-tx">{{ row.kind === 'add' ? '+ ' : row.kind === 'del' ? '- ' : '  ' }}{{ row.text }}</span></div>
+            <p v-if="apHead.preview.truncated" class="ap-warn">改动很长，这里只截了前 600 行；批准确认后仍会全部执行。</p>
+            <details class="ap-raw">
+              <summary>看原始参数</summary>
+              <pre class="ap-args">{{ pretty(apHead.args) }}</pre>
+            </details>
+          </div>
+
+          <template v-else-if="apHead.preview.kind === 'command'">
+            <pre class="ap-cmd">{{ apHead.preview.command }}</pre>
+            <p class="ap-warn">
+              工作目录 {{ apHead.preview.cwd }} · Shell {{ apHead.preview.shell }}
+              <template v-if="apHead.preview.paths && apHead.preview.paths.length">
+                <br />命令里出现的路径：{{ apHead.preview.paths.join('、') }}
+              </template>
+            </p>
+          </template>
+
+          <p v-else-if="apHead.preview.kind === 'rename'" class="ap-warn">
+            {{ apHead.preview.from }}
+            <br />→ {{ apHead.preview.to }}
+          </p>
         </div>
       </div>
     </Transition>
@@ -120,8 +168,9 @@
             @mousedown.prevent="pickMention(it)"
             @mouseenter="menIdx = i"
           >
-            <i class="fas men-ico" :class="it.dir ? 'fa-folder' : 'fa-file-lines'"></i>
+            <i class="fas men-ico" :class="it.skill ? 'fa-wand-magic-sparkles' : (it.dir ? 'fa-folder' : 'fa-file-lines')"></i>
             <code class="cmd-name">{{ it.name }}{{ it.dir ? '/' : '' }}</code>
+            <span v-if="it.skill" class="men-tag">skill</span>
           </div>
           <div v-if="menLoading && !menItems.length" class="men-empty">读取目录中…</div>
           <div v-else-if="menErr" class="men-empty men-bad">{{ menErr }}</div>
@@ -167,7 +216,7 @@
           :label="approvalShort"
           width="160px"
           :disabled="busy"
-          :title="`审批： ${approvalShort}`"
+          :title="`审批：${approvalShort}（${approvalExplicit ? '本会话覆盖' : '跟随全局'}）`"
           @change="(v) => $emit('set-approval', v)"
         >
           <!-- 窄到放不下时（tight）只剩图标，文字靠 title 悬浮看 -->
@@ -271,6 +320,10 @@ const props = defineProps({
   gitBranches: { type: Array, default: () => [] },
   gitEnabled: { type: Boolean, default: false },
   approvalMode: { type: String, default: 'default' },
+  /** 这条会话是否显式覆盖过审批模式（决定要不要给「跟随全局」出口，也写进 title 说明来源） */
+  approvalExplicit: { type: Boolean, default: false },
+  /** 可用技能列表（{name,title,description}）：@ 补全框里和文件一起列，选中即「本轮临时加载」 */
+  skills: { type: Array, default: () => [] },
   /** 当前会话挂起的审批队列（队首即待处理） */
   approvals: { type: Array, default: () => [] },
   question: { type: Object, default: null },
@@ -341,11 +394,13 @@ const gitItems = computed(() => {
   ];
 });
 
-const approvalItems = [
+const approvalItems = computed(() => [
   { value: 'default', label: '默认审批' },
   { value: 'strict', label: '严格审批' },
   { value: 'exempt', label: '免除审批' },
-];
+  // 只有这条会话真被覆盖过才给出口，否则菜单里多一项没意义的「跟随全局」
+  ...(props.approvalExplicit ? [{ value: 'follow', label: '跟随全局' }] : []),
+]);
 
 const thinkingItems = computed(() => {
   const fromModel = (props.thinkingLevels || []).map((lv) => String(lv).trim()).filter(Boolean);
@@ -380,9 +435,11 @@ const apHead = computed(() => props.approvals[0] || null);
 
 // 审批 180s 由服务端超时自动拒绝；这里只做倒计时显示
 const apLeft = ref(180);
+// 「审阅」面板是手动展开的，换一条审批就收回去（免得上一条的 diff 还挂在那）
+const apOpen = ref(false);
 watch(
   () => apHead.value?.id,
-  (id) => { apLeft.value = id ? 180 : 0; }
+  (id) => { apLeft.value = id ? 180 : 0; apOpen.value = false; }
 );
 
 // ask_user 倒计时：时长由服务端随事件下发（默认 10 分钟）
@@ -596,6 +653,22 @@ function splitTok(tok) {
   return { dir: tok.slice(0, i + 1), q: tok.slice(i + 1) };
 }
 
+/**
+ * @ 后面还没打斜杠时把技能也列进来（技能名都是单段，和 @src/a.ts 这种路径天然不冲突）。
+ * 技能排在文件前面、条目带 skill 标记 —— 同名冲突时的口径是「技能优先」，
+ * 要引用同名文件就写带路径的那种写法（服务端 skillMentionsIn 认的也是「整段正好等于技能名」）。
+ */
+function mergeSkills(files, dir, q) {
+  if (dir) return files;
+  const qq = String(q || '').toLowerCase();
+  const sk = (props.skills || [])
+    .map((s) => String(s?.name || s?.title || '').trim())
+    .filter((n) => n && n.toLowerCase().includes(qq))
+    .slice(0, 12)
+    .map((n) => ({ name: n, dir: false, skill: true }));
+  return [...sk, ...files];
+}
+
 async function syncMention() {
   const el = ta.value;
   if (!el) return;
@@ -615,7 +688,7 @@ async function syncMention() {
   menShown.value = shown;
   const hit = dirCache.get(key);
   if (hit) {
-    menItems.value = q ? hit.filter((it) => it.name.toLowerCase().includes(q.toLowerCase())) : hit;
+    menItems.value = mergeSkills(q ? hit.filter((it) => it.name.toLowerCase().includes(q.toLowerCase())) : hit, dir, q);
     return;
   }
   menLoading.value = true;
@@ -629,7 +702,7 @@ async function syncMention() {
     // 请求回来时用户可能已经改了 token：只对还在打同一个目录的结果落地
     if (!now || `${props.chatId || 0}|${now.dir}` !== key) return;
     const qq = now.q.toLowerCase();
-    menItems.value = qq ? items.filter((it) => it.name.toLowerCase().includes(qq)) : items;
+    menItems.value = mergeSkills(qq ? items.filter((it) => it.name.toLowerCase().includes(qq)) : items, now.dir, now.q);
   } catch (e) {
     // 越界（403）不能只回一句「该层无匹配项」—— 用户会以为自己打错了名字
     const msg = String(e?.response?.data?.message || e?.message || '');
@@ -645,6 +718,18 @@ function pickMention(it) {
   const el = ta.value;
   const ctx = menCtx.value;
   if (!el || !ctx) return;
+  // 技能是一条完整名字，选完就收起（不做「下钻」）；服务端按 @名字 整段匹配加载它
+  if (it.skill) {
+    const text = el.value || '';
+    draft.value = text.slice(0, ctx.start) + '@' + it.name + ' ' + text.slice(ctx.end);
+    const caret = ctx.start + 1 + it.name.length + 1;
+    nextTick(() => {
+      el.focus();
+      try { el.setSelectionRange(caret, caret); } catch (e) { /* 不支持就算了 */ }
+      menOpen.value = false;
+    });
+    return;
+  }
   const name = it.name + (it.dir ? '/' : ' ');
   const text = el.value || '';
   const next = text.slice(0, ctx.start) + '@' + ctx.dir + name + text.slice(ctx.end);
@@ -871,6 +956,17 @@ defineExpose({ focus });
   white-space: nowrap;
 }
 .men-tip { margin-left: auto; flex: 0 0 auto; }
+/* @ 补全框里的技能角标：和文件条目一眼分得开（选中谁插谁，同名时技能优先） */
+.men-tag {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  color: var(--text-3);
+}
 .men-ico { width: 14px; text-align: center; color: var(--text-3); }
 .men-item .cmd-name { flex: 1; min-width: 0; }
 .men-empty { padding: 9px 12px; font-size: 11px; color: var(--text-3); }
@@ -1088,6 +1184,66 @@ textarea::placeholder { color: var(--text-3); }
   gap: 8px;
   flex-wrap: wrap;
 }
+/* 审阅面板：批准前看清改动内容。diff 行直接用消息流那套 diff token（--diff-add-bg / --diff-del-bg / 前后景），
+   自造一套绿红会在米白、云母这些主题下糊成看不清的行。 */
+.ap-preview {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  max-height: 46vh;
+  overflow: auto;
+}
+.ap-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.ap-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+.ap-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.ap-plus { color: var(--ok); }
+.ap-minus { color: var(--danger); }
+.ap-warn { margin: 6px 0 0; font-size: 11px; color: var(--text-3); line-height: 1.6; }
+.ap-diff {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 6px;
+}
+.ap-line { display: flex; gap: 6px; white-space: pre-wrap; word-break: break-all; color: var(--text-2); }
+.ap-line.add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+.ap-line.del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+.ap-line.gap { color: var(--text-3); font-style: italic; }
+.ap-ln { flex: 0 0 34px; text-align: right; color: var(--text-3); user-select: none; }
+.ap-tx { flex: 1 1 auto; }
+.ap-cmd {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+.ap-raw { margin-top: 6px; font-size: 11px; color: var(--text-3); }
+.ap-raw summary { cursor: pointer; }
 .ask-title {
   font-size: 12px;
   color: var(--text-3);

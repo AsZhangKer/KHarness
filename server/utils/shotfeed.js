@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR } = require('../config');
+const privatepaths = require('./privatepaths');
 
 const SHOT_DIRS = ['browser-shots', 'screen-shots'].map((d) => path.join(DATA_DIR, d));
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -31,11 +32,21 @@ function insideShotDir(raw) {
  * 读出图片并登记，回 { token, marker } 或 { note }（note = 没回喂成功时要告诉模型的那句话）。
  * put 是 routes/ai.js 的 imageStorePut —— 那张表在那边（还要给 /chat/image/:token 用），
  * 这里不重复建一份，只做「读文件 + 判断该不该读」。
+ *
+ * opts.allowAny：view_image 专用。那条路的审批与越界判定由 read_file 同一套把关（FILE_TARGET_TOOLS），
+ * 所以这里可以放宽到任意路径，但 KHarness 自己的数据仍然挡 —— 两道墙不能因为「这个是可信工具」就塌一道。
  */
-function shotFromFile(file, put) {
+function shotFromFile(file, put, opts = {}) {
   if (!file || typeof file !== 'string') return null;
-  const abs = insideShotDir(file);
-  if (!abs) return { note: `[图片未回喂] 截图路径不在截图目录内：${file}` };
+  let abs = '';
+  if (opts.allowAny) {
+    try { abs = path.resolve(String(file)); } catch (e) { return null; }
+    const priv = privatepaths.guardPrivatePath(abs, { chatId: opts.chatId });
+    if (priv) return { note: `[图片未回喂] ${priv}` };
+  } else {
+    abs = insideShotDir(file);
+    if (!abs) return { note: `[图片未回喂] 截图路径不在截图目录内：${file}` };
+  }
   let stat = null;
   try { stat = fs.statSync(abs); } catch (e) { return { note: `[图片未回喂] 截图文件读不到（可能已被清掉）：${file}` }; }
   if (!stat.isFile()) return { note: `[图片未回喂] 那不是文件：${file}` };
@@ -55,15 +66,40 @@ function shotFromFile(file, put) {
 }
 
 /**
+ * 把外壳刚落盘的截图收进 <截图目录>/<chat_id>/ 子目录，返回归置后的路径（失败就回原路径）。
+ *
+ * 为什么要动这一步：外壳只写 `screen-<时间戳>.png`，文件名里没有会话，所以「模型只能回看
+ * 本会话截的那几张」这条口径没地方判。挪进以 chat_id 命名的子层之后，光看路径就知道归属，
+ * privatepaths 的例外分支也无需查表。归置失败不影响本轮回喂（图已经读到手上了），
+ * 只是那条截图之后再也读不到 —— 宁可少给，不能多给。
+ */
+function claimForChat(file, chatId) {
+  const abs = insideShotDir(file);
+  if (!abs || !Number.isInteger(chatId) || chatId <= 0) return file;
+  const dir = SHOT_DIRS.find((d) => abs.startsWith(d + path.sep));
+  if (!dir) return file;
+  if (path.relative(dir, abs).includes(path.sep)) return abs;   // 已经归置过
+  try {
+    const own = path.join(dir, String(chatId));
+    fs.mkdirSync(own, { recursive: true });
+    const dst = path.join(own, path.basename(abs));
+    fs.renameSync(abs, dst);
+    return dst;
+  } catch (e) { return file; }
+}
+
+/**
  * 把截图拼进回喂文本：回喂正文 = 「[[img:token]] + 原来的文字」。
  * 存库和给前端看的还是那份纯文字（marker 只活在这一轮的上游请求里），
  * 图片本身在内存表里 30 分钟后销毁，不会把对话记录撑大。
  */
-function feedTextWithShot(result, echoText, put) {
-  const shot = result && result.image_file ? shotFromFile(result.image_file, put) : null;
+function feedTextWithShot(result, echoText, put, opts = {}) {
+  const shot = result && result.image_file
+    ? shotFromFile(result.image_file, put, { allowAny: !!result.image_trusted, chatId: opts.chatId })
+    : null;
   if (!shot) return { text: echoText, token: null };
   if (shot.note) return { text: `${echoText}\n${shot.note}`, token: null };
   return { text: `${shot.marker}\n${echoText}`, token: shot.token };
 }
 
-module.exports = { shotFromFile, feedTextWithShot, insideShotDir, SHOT_DIRS, MAX_BYTES };
+module.exports = { shotFromFile, feedTextWithShot, insideShotDir, claimForChat, SHOT_DIRS, MAX_BYTES };

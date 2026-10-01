@@ -21,21 +21,36 @@
         </button>
       </div>
 
-    <div ref="treeEl" class="tree">
+      <!-- 条目级搜索（#220，和设置页那条搜索同一思路）：会话/项目/主机一多就翻不到。
+           只按标题过滤、命中即展开 —— 搜正文要走服务端检索，那是另一件事。 -->
+      <div class="rail-search">
+        <input
+          v-model="rq"
+          class="k-input"
+          type="search"
+          placeholder="搜索会话 / 项目 / 主机…"
+          @keydown.esc="rq = ''"
+        />
+        <button v-if="rq" class="rail-search-x" type="button" title="清空搜索" @click="rq = ''">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+
+      <div ref="treeEl" class="tree">
       <!-- 跟着当前会话滑的高亮胶囊：和设置页标签页同一套动效 -->
       <span class="tree-pill" :style="treePillStyle"></span>
-      <div class="tree-label">
+      <div v-if="!filtering || shownProjects.length" class="tree-label">
         <span>项目</span>
         <button class="icon-btn" type="button" title="新建项目" @click="$emit('new-project')">
           <i class="fas fa-plus"></i>
         </button>
       </div>
 
-      <div v-if="!localProjects.length && !localFreeChats.length" class="tree-empty">
+      <div v-if="!localProjects.length && !localFreeChats.length && !filtering" class="tree-empty">
         暂无项目，请点击「新建项目」或「新建会话」。
       </div>
 
-      <div v-for="p in localProjects" :key="'p' + p.id" class="proj">
+      <div v-for="p in shownProjects" :key="'p' + p.id" class="proj">
         <button
           class="proj-head"
           :class="{ 'drop-above': dropTarget === 'p' + p.id && dropPos === 'above', 'drop-below': dropTarget === 'p' + p.id && dropPos === 'below' }"
@@ -55,10 +70,10 @@
             <i class="fas fa-xmark"></i>
           </span>
         </button>
-        <div class="proj-body" :class="{ open: p.open }">
+        <div class="proj-body" :class="{ open: p.open || filtering }">
           <div class="proj-body-in">
             <button
-              v-for="c in chatsOf(p.id)"
+              v-for="c in shownChatsOf(p.id)"
               :key="'c' + c.id"
               class="chat-row"
               :class="{ active: c.id === activeChatId, pinned: c.pinned, 'drop-above': dropTarget === 'c' + c.id && dropPos === 'above', 'drop-below': dropTarget === 'c' + c.id && dropPos === 'below' }"
@@ -80,22 +95,22 @@
                 <i class="fas fa-xmark"></i>
               </span>
             </button>
-            <div v-if="!chatsOf(p.id).length" class="tree-empty indent">该项目下暂无会话</div>
+            <div v-if="!shownChatsOf(p.id).length && !filtering" class="tree-empty indent">该项目下暂无会话</div>
           </div>
         </div>
       </div>
 
       <!-- 远程连接：与「项目」「最近」同级的一棵大树。展开后是这台机器下的远端项目与会话 -->
-      <div class="tree-label" style="margin-top:8px">
+      <div v-if="!filtering || shownHosts.length" class="tree-label" style="margin-top:8px">
         <span>远程连接</span>
         <button class="icon-btn" type="button" title="新建 SSH 连接" @click="$emit('new-host')">
           <i class="fas fa-plus"></i>
         </button>
       </div>
-      <div v-if="!hosts.length" class="tree-empty">
+      <div v-if="!hosts.length && !filtering" class="tree-empty">
         还没有远程主机，点击 + 新建SSH连接。
       </div>
-      <div v-for="h in hosts" :key="'h' + h.id" class="proj">
+      <div v-for="h in shownHosts" :key="'h' + h.id" class="proj">
         <button
           class="proj-head"
           type="button"
@@ -113,9 +128,9 @@
           </span>
         </button>
         <!-- 与「项目」同一套展开动画：grid-template-rows 0fr→1fr（v-if 硬挂载是没动画的） -->
-        <div class="proj-body" :class="{ open: h.open }">
+        <div class="proj-body" :class="{ open: h.open || filtering }">
           <div class="proj-body-in">
-          <div v-for="rp in remoteProjects(h.id)" :key="'rp' + rp.id" class="proj">
+          <div v-for="rp in shownRemoteProjects(h.id)" :key="'rp' + rp.id" class="proj">
             <button
               class="proj-head sub"
               type="button"
@@ -129,10 +144,10 @@
                 <i class="fas fa-xmark"></i>
               </span>
             </button>
-            <div class="proj-body" :class="{ open: rp.open }">
+            <div class="proj-body" :class="{ open: rp.open || filtering }">
               <div class="proj-body-in">
                 <button
-                  v-for="c in chatsOf(rp.id)"
+                  v-for="c in shownChatsOf(rp.id)"
                   :key="'rc' + c.id"
                   class="chat-row"
                   :class="{ active: c.id === activeChatId, pinned: c.pinned }"
@@ -147,12 +162,12 @@
                     <i class="fas fa-xmark"></i>
                   </span>
                 </button>
-                <div v-if="!chatsOf(rp.id).length" class="tree-empty indent">该远端项目下暂无会话</div>
+                <div v-if="!shownChatsOf(rp.id).length && !filtering" class="tree-empty indent">该远端项目下暂无会话</div>
               </div>
             </div>
           </div>
           <button
-            v-for="c in remoteFreeChats(h.id)"
+            v-for="c in shownRemoteFreeChats(h.id)"
             :key="'rf' + c.id"
             class="chat-row sub free"
             :class="{ active: c.id === activeChatId, pinned: c.pinned }"
@@ -167,16 +182,16 @@
               <i class="fas fa-xmark"></i>
             </span>
           </button>
-          <div v-if="!remoteProjects(h.id).length && !remoteFreeChats(h.id).length" class="tree-empty indent">
+          <div v-if="!shownRemoteProjects(h.id).length && !shownRemoteFreeChats(h.id).length && !filtering" class="tree-empty indent">
             这台机器下还没有项目。右键连接选「新建远端项目」，选好远端目录即可。
           </div>
           </div>
         </div>
       </div>
 
-      <div class="tree-label" style="margin-top:8px">最近</div>
+      <div v-if="!filtering || shownFreeChats.length" class="tree-label" style="margin-top:8px">最近</div>
       <button
-        v-for="c in freeChats"
+        v-for="c in shownFreeChats"
         :key="'f' + c.id"
         class="chat-row free"
         :class="{ active: c.id === activeChatId, pinned: c.pinned, 'drop-above': dropTarget === 'f' + c.id && dropPos === 'above', 'drop-below': dropTarget === 'f' + c.id && dropPos === 'below' }"
@@ -196,6 +211,7 @@
           <i class="fas fa-xmark"></i>
         </span>
       </button>
+      <div v-if="filtering && !hitCount" class="tree-empty">没有匹配「{{ rq.trim() }}」的会话、项目或连接</div>
     </div>
 
     <div class="foot">
@@ -313,6 +329,63 @@ function remoteFreeChats(hostId) {
 function chatsOf(pid) {
   return (props.chats || []).filter((c) => c.project_id === pid).slice().sort(byOrder);
 }
+
+/* ---- 条目级搜索（#220）：命中即展开 ----
+   只过滤标题、不碰 props 那份数据：选中/拖拽/删除走的还是原路径，清空搜索框界面立刻回到平时的样子。
+   命中的是项目名时整组会话都露出来（"这个项目"本身就是要找的东西）。 */
+const rq = ref('');
+const filtering = computed(() => rq.value.trim().length > 0);
+
+function rqLower() {
+  return rq.value.trim().toLowerCase();
+}
+function chatHit(c) {
+  return String(c.title || '新会话').toLowerCase().includes(rqLower());
+}
+function projHit(p) {
+  return `${p.name || ''} ${p.root_path || ''}`.toLowerCase().includes(rqLower());
+}
+function hostHit(h) {
+  return `${h.name || ''} ${h.host || ''} ${h.username || ''}`.toLowerCase().includes(rqLower());
+}
+function projHasHitChat(p) {
+  return chatsOf(p.id).some(chatHit);
+}
+
+function shownChatsOf(pid) {
+  const list = chatsOf(pid);
+  if (!filtering.value) return list;
+  const p = (props.projects || []).find((x) => x.id === pid);
+  if (p && projHit(p)) return list;
+  return list.filter(chatHit);
+}
+function shownRemoteProjects(hostId) {
+  return remoteProjects(hostId).filter((p) => projHit(p) || projHasHitChat(p));
+}
+function shownRemoteFreeChats(hostId) {
+  const list = remoteFreeChats(hostId);
+  return filtering.value ? list.filter(chatHit) : list;
+}
+
+const shownProjects = computed(() =>
+  (filtering.value ? localProjects.value.filter((p) => projHit(p) || projHasHitChat(p)) : localProjects.value));
+const shownFreeChats = computed(() =>
+  (filtering.value ? localFreeChats.value.filter(chatHit) : localFreeChats.value));
+const shownHosts = computed(() => {
+  const list = props.hosts || [];
+  if (!filtering.value) return list;
+  return list.filter((h) => hostHit(h)
+    || remoteProjects(h.id).some((p) => projHit(p) || projHasHitChat(p))
+    || remoteFreeChats(h.id).some(chatHit));
+});
+const hitCount = computed(() => shownProjects.value.length + shownFreeChats.value.length
+  + shownHosts.value.reduce((n, h) => n + shownRemoteProjects(h.id).length + shownRemoteFreeChats(h.id).length, 0));
+
+// 过滤会增删整棵树里的行，选中行的位置跟着变 —— 胶囊得重量一次（和上面那个 watcher 同一套收尾时机）
+watch(rq, () => {
+  nextTick(() => measureTreePill());
+  setTimeout(() => measureTreePill(), 260);
+});
 
 function onDragStart(kind, id, e) {
   dragKind.value = kind;
@@ -460,6 +533,24 @@ function onDragEnd() {
 .action:hover { background: var(--bg-hover); }
 .action.primary { background: var(--bg-panel); }
 .action i { width: 16px; text-align: center; color: var(--text-2); }
+/* 条目级搜索框（#220）：贴着那两颗动作按钮，收栏时跟着一起让位 */
+.rail-search { position: relative; padding: 0 8px 8px; }
+.rail-search .k-input { padding: 7px 26px 7px 10px; font-size: 12px; }
+.rail-search .k-input::-webkit-search-cancel-button { display: none; }
+.rail-search-x {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.rail-search-x:hover { color: var(--text); background: var(--bg-hover); }
 .tree {
   position: relative; /* 高亮胶囊的定位基准 */
   flex: 1;

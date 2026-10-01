@@ -28,7 +28,14 @@ const state = reactive({
   planMode: localStorage.getItem('nu_plan') === '1',
   readonlyMode: localStorage.getItem('nu_readonly') === '1',
   autoMode: localStorage.getItem('nu_auto') === '1',
-  approvalMode: localStorage.getItem('nu_approval') || 'default',
+  // 审批模式的事实源在服务端（全局 settings + 会话行），这里只缓存**生效值**用于显示。
+  // 以前它由 localStorage.nu_approval 决定并每条请求都发上去，服务端顺手写进会话行 ——
+  // 于是会话发过一句话就被钉死，之后在控制台改全局对该条会话永远无效（显示一个值、按另一个值判）。
+  approvalMode: 'default',
+  /** true = 用户为**这条会话**显式选过（才允许落进会话行）；false = 跟随全局，请求里发空串 */
+  approvalExplicit: false,
+  /** 全局那一份（控制台/设置页改的就是它），新建会话还没 id 时显示它 */
+  approvalGlobal: 'default',
   thinkingLevel: localStorage.getItem('nu_think') || 'medium',
   temperature: 0.7,
   frequency_penalty: 0,
@@ -74,16 +81,15 @@ const state = reactive({
   },
 });
 
-// 模式持久化
+// 模式持久化（审批模式不在这里：它归服务端，见 setApprovalMode）
 watch(
-  () => [state.agentMode, state.planMode, state.readonlyMode, state.autoMode, state.approvalMode, state.thinkingLevel],
-  ([agent, plan, ro, auto, approval, think]) => {
+  () => [state.agentMode, state.planMode, state.readonlyMode, state.autoMode, state.thinkingLevel],
+  ([agent, plan, ro, auto, think]) => {
     try {
       localStorage.setItem('nu_agent', agent ? '1' : '0');
       localStorage.setItem('nu_plan', plan ? '1' : '0');
       localStorage.setItem('nu_readonly', ro ? '1' : '0');
       localStorage.setItem('nu_auto', auto ? '1' : '0');
-      localStorage.setItem('nu_approval', approval || 'default');
       localStorage.setItem('nu_think', think || 'medium');
     } catch { /* ignore */ }
   }
@@ -303,7 +309,9 @@ export function useChatStore() {
       }));
       state.tasks = res?.tasks || [];
       state.planMode = !!chat.plan_mode;
-      state.approvalMode = chat.approval_mode || state.approvalMode || 'default';
+      // 显示服务端算出的**生效值**；会话行非空才算「本会话显式覆盖」
+      state.approvalExplicit = !!chat.approval_mode;
+      state.approvalMode = chat.approval_effective || chat.approval_mode || state.approvalGlobal || 'default';
       state.thinkingLevel = chat.thinking_level || state.thinkingLevel || 'medium';
       state.temperature = chat.temperature ?? 0.7;
       state.frequency_penalty = chat.frequency_penalty ?? 0;
@@ -443,11 +451,52 @@ export function useChatStore() {
     }
     reply.content += text;
   }
+  function tlAppendReason(reply, text) {
+    if (!text) return;
+    if (!reply.timeline) reply.timeline = [];
+    const last = reply.timeline[reply.timeline.length - 1];
+    if (last && last.kind === 'reason') last.text += text;
+    else reply.timeline.push({ kind: 'reason', text });
+    reply.reasoning += text;
+  }
+
+  /* 流式合并刷新（#231）：SSE 每来一块就改一次响应式数据 → 每块渲染一次。
+     攒到 ~30ms 再落地，一次渲染替掉十几次的重排重绘；入库文本一个字没改（那是服务端的事），
+     界面最多钝 30ms。别用 requestAnimationFrame 当唯一驱动：窗口没焦点时它被节流到 ~1/s，
+     他会看到「切回来才刷」，所以用定时器。 */
+  function queueStream(reply, kind, text) {
+    if (!text) return;
+    if (!reply._buf) reply._buf = { text: '', reason: '' };
+    reply._buf[kind] += text;
+    if (reply._bufQueued) return;
+    reply._bufQueued = true;
+    setTimeout(() => {
+      reply._bufQueued = false;
+      const buf = reply._buf;
+      if (!buf) return;
+      if (buf.text) { tlAppendText(reply, buf.text); buf.text = ''; }
+      if (buf.reason) { tlAppendReason(reply, buf.reason); buf.reason = ''; }
+    }, 30);
+  }
+  function flushStream(reply) {
+    const buf = reply._buf;
+    if (buf && (buf.text || buf.reason)) {
+      if (buf.text) tlAppendText(reply, buf.text);
+      if (buf.reason) tlAppendReason(reply, buf.reason);
+      buf.text = '';
+      buf.reason = '';
+    }
+    reply._bufQueued = false;
+  }
 
   function handleEvent(evt, reply) {
     const t = evt.t;
     state.lastEventAt = Date.now();
+    // 增量之外的任何事件都要先把攒着的文字落地，否则顺序会串（工具卡插在一截正文前面）
+    if (t !== 'delta' && t !== 'reason') flushStream(reply);
     if (t === 'chat') {
+      // 新建会话这轮才拿到 id：顺手把服务端算出的生效审批模式接过来显示（内存里选的那份就此落地）
+      if (evt.approval_effective) state.approvalMode = evt.approval_effective;
       const prevId = state.chatId;
       const nextId = evt.chat_id || state.chatId;
       if (nextId && nextId !== prevId) {
@@ -489,15 +538,11 @@ export function useChatStore() {
     } else if (t === 'delta') {
       if (evt.text && !state.firstTokenMs) state.firstTokenMs = Date.now() - (reply._startedAt || Date.now());
       state.streamTokens += estTok(evt.text);
-      tlAppendText(reply, evt.text || '');
+      queueStream(reply, 'text', evt.text || '');
     } else if (t === 'reason') {
       const rt = evt.text || '';
       state.streamTokens += estTok(rt);
-      reply.reasoning += rt;
-      if (!reply.timeline) reply.timeline = [];
-      const last = reply.timeline[reply.timeline.length - 1];
-      if (last && last.kind === 'reason') last.text += rt;
-      else reply.timeline.push({ kind: 'reason', text: rt });
+      queueStream(reply, 'reason', rt);
     } else if (t === 'compress') {
       // 「先压缩上下文、再回答」要在消息流里看得见：一条 compress 步骤卡，
       // start → done/skipped/failed 就地更新同一张卡（timeline 那边存的是 ref，改 ref 即改显示）
@@ -581,6 +626,8 @@ export function useChatStore() {
         is_high: !!evt.is_high,
         mode: evt.mode || state.approvalMode,
         chat_id: evt.chat_id || state.chatId,
+        // 「审阅」要的数据：服务端在弹审批前算好的真 diff / 命令原文 / 目标文件信息（#214）
+        preview: evt.preview || null,
       }]);
       notifyHidden('KHarness 需要审批', `${evt.tool}：${evt.reason || '敏感操作'}`);
     } else if (t === 'question') {
@@ -711,6 +758,17 @@ export function useChatStore() {
     if (continueMode && state.busyChats[busyId]) return;
     if (!continueMode) state.draft = '';
 
+    // 「先点」的池子只有打开池选择器确认时才落地，localStorage 里存的却是 autoMode=true ——
+    // 于是重启之后池是空的：以前这里把空数组发上去，model_row_id 就是 undefined，
+    // 服务端一路回「未指定模型」，界面只剩一条红条。现在退回当前选中的那一个模型；
+    // 一个模型都没有时先把话放回输入框并给一句人话，不再发一个注定失败的请求。
+    const autoPool = state.autoMode ? state.pool.filter(Boolean) : [];
+    const pool = autoPool.length ? autoPool : [currentModel.value?.id].filter(Boolean);
+    if (!pool.length) {
+      if (!continueMode) state.draft = text;
+      return toast('还没有可用模型：先到模型管理添加或启用一个模型（「先点」模式下还要选一个模型池）', 'warn', 5000);
+    }
+
     if (!continueMode) pushMessage({ role: 'user', content: text, speaker: opts.fromSupervisor ? 'supervisor' : '' });
     const reply = { role: 'assistant', content: '', reasoning: '', steps: [], usage: null, model_name: '', unfinished: false };
     pushMessage(reply);
@@ -721,10 +779,6 @@ export function useChatStore() {
     state.runningCmd = null;
     state.lastEventAt = Date.now();
     if (busyId) state.busyChats = { ...state.busyChats, [busyId]: true };
-
-    const pool = state.autoMode
-      ? state.pool.slice()
-      : [currentModel.value?.id].filter(Boolean);
 
     const runId = state.chatId || 'tmp';
     const st = openChatStream(
@@ -738,7 +792,9 @@ export function useChatStore() {
         agent: state.agentMode,
         cwd: state.cwd || undefined,
         readonly: state.readonlyMode,
-        approval_mode: state.approvalMode,
+        // 只有用户为这条会话显式选过才发具体值；否则发空串 = 跟随全局，
+        // 服务端就不会把会话行钉成一个前端缓存的旧值。
+        approval_mode: state.approvalExplicit ? state.approvalMode : '',
         thinking_level: state.thinkingLevel || undefined,
         labs: readLabs(),
         continue: continueMode,
@@ -847,8 +903,8 @@ export function useChatStore() {
           return true;
         }
         if (['strict', 'default', 'exempt'].includes(flag)) {
-          state.approvalMode = flag;
-          toast(`审批模式：${{ strict: '严格', default: '默认', exempt: '免除' }[flag]}`, 'success');
+          await setApprovalMode(flag);
+          toast(`本会话审批模式：${{ strict: '严格', default: '默认', exempt: '免除' }[flag]}`, 'success');
           return true;
         }
         return toast('用法：/mode [plan|auto|agent|readonly] [on|off|toggle]，或 /mode strict|default|exempt', 'warn'), true;
@@ -901,6 +957,34 @@ export function useChatStore() {
     }
   }
 
+  /** 全局审批模式（控制台/设置页那三颗按钮管的那份）：启动时拉一次，新建会话显示它 */
+  async function loadGlobalApproval() {
+    try {
+      const r = await aiApi.getApprovalMode();
+      if (r?.mode) state.approvalGlobal = r.mode;
+      if (!state.approvalExplicit && !state.chatId) state.approvalMode = r?.mode || 'default';
+    } catch { /* 拿不到就沿用当前显示 */ }
+  }
+
+  /** 本会话显式选一个审批模式。会话还没 id（新会话没发过话）时先记在内存，第一条消息会把它落库 */
+  async function setApprovalMode(mode) {
+    if (!['strict', 'default', 'exempt'].includes(mode)) return;
+    state.approvalMode = mode;
+    state.approvalExplicit = true;
+    if (state.chatId) {
+      try { await aiApi.overrideApprovalMode(mode, state.chatId); } catch { /* 服务端没写成的话下一条请求还会带 */ }
+    }
+  }
+
+  /** 取消本会话的覆盖，回到跟随全局 */
+  async function followGlobalApproval() {
+    state.approvalExplicit = false;
+    state.approvalMode = state.approvalGlobal || 'default';
+    if (state.chatId) {
+      try { await aiApi.overrideApprovalMode('', state.chatId); } catch { /* 同上 */ }
+    }
+  }
+
   async function setThinkingLevel(level) {
     // 空值归一成 'auto'（跟随模型默认）：下拉里每一项都该是真档位，
     // 空串在界面上没有对应条目，会把当前档位显示成「medium」而实际什么都没发。
@@ -915,16 +999,17 @@ export function useChatStore() {
   async function saveModelParams(patch) {
     Object.assign(state, patch);
     if (!state.chatId) return;
-    try {
-      await aiApi.updateChatSettings(state.chatId, {
-        thinking_level: state.thinkingLevel || 'auto',
-        temperature: state.temperature,
-        frequency_penalty: state.frequency_penalty,
-        presence_penalty: state.presence_penalty,
-        context_limit: state.contextLimit || 0,
-        censored_words: state.censoredWords || '',
-      });
-    } catch { /* 会话未创建时忽略 */ }
+    const r = await aiApi.updateChatSettings(state.chatId, {
+      thinking_level: state.thinkingLevel || 'auto',
+      temperature: state.temperature,
+      frequency_penalty: state.frequency_penalty,
+      presence_penalty: state.presence_penalty,
+      context_limit: state.contextLimit || 0,
+      censored_words: state.censoredWords || '',
+    });
+    // 以服务端算出的**生效值**为准（会话设定 → 模型上限 → 全局默认），界面不再显示「我刚敲的那个数」
+    const eff = Number(r?.context_effective);
+    if (Number.isInteger(eff)) state.contextLimit = eff;
   }
 
   /** 找到某个步骤所属消息（撤销要把标注写回正确的 assistant 消息） */
@@ -1093,6 +1178,9 @@ export function useChatStore() {
     decideApproval,
     answerQuestion,
     setThinkingLevel,
+    loadGlobalApproval,
+    setApprovalMode,
+    followGlobalApproval,
     saveModelParams,
     persistModel,
     toggleModelPin,

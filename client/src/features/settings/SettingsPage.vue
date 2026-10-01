@@ -1,9 +1,28 @@
 <template>
-  <div class="page">
+  <div ref="pageEl" class="page">
     <header class="page-head">
       <div>
         <h1>设置</h1>
         <p>Shell、MCP、权限等……</p>
+      </div>
+      <!-- 条目级搜索：这一页已经长到翻不动了，所以搜的是「每一条设置项」而不是分区标题。
+           设置页所有分区是一次性挂载（v-show 隐藏），所以能一次扫全量 DOM 建索引；
+           关掉开关被 v-if 摘掉的项本来就不存在，点了会提示找不到而不是跳错地方。 -->
+      <div class="set-search">
+        <input
+          v-model="setQuery"
+          class="k-input"
+          type="search"
+          placeholder="搜设置项（卡带 / 审批 / 主题 / 回收站…）"
+          @keydown.esc="setQuery = ''"
+        />
+        <div v-if="setHits.length" class="set-hits">
+          <button v-for="(h, i) in setHits" :key="i" type="button" class="set-hit" @click="gotoSetting(h)">
+            <span class="set-hit-title">{{ h.title }}</span>
+            <span class="set-hit-where">{{ h.tabName }}<template v-if="h.sec"> · {{ h.sec }}</template></span>
+          </button>
+        </div>
+        <p v-else-if="setQuery.trim()" class="set-nohit">没有设置项含「{{ setQuery.trim() }}」</p>
       </div>
     </header>
 
@@ -13,7 +32,7 @@
     <Transition name="pane" mode="out-in">
       <div :key="tab" class="pane-wrap">
     <!-- 常规 -->
-    <section v-show="tab === 'general'" class="card">
+    <section v-show="tab === 'general'" data-tab="general" class="card">
       <h3>Shell执行器</h3>
       <div class="form">
         <label class="field">
@@ -40,7 +59,7 @@
     </section>
 
     <!-- 常规 · 全局提示词：所有本机会话都会带上的那一份 AGENTS.md -->
-    <section v-show="tab === 'general'" class="card">
+    <section v-show="tab === 'general'" data-tab="general" class="card">
       <h3>全局提示词</h3>
       <div class="form">
         <p class="muted gp-note">
@@ -63,7 +82,7 @@
     </section>
 
     <!-- 常规 · 对话显示与提示音：改动即时生效，不用点保存 -->
-    <section v-show="tab === 'general'" class="card">
+    <section v-show="tab === 'general'" data-tab="general" class="card">
       <h3>对话与提示音</h3>
       <div class="form">
         <label class="field line">
@@ -112,6 +131,37 @@
           模型连续 {{ prefs.repeatBreak }} 次调用同一个操作（工具名和参数完全一样）就打断这一轮，避免它陷在自循环里白烧额度。
           调到 2 很激进 —— 正常的「换个写法再试一次」也会被掐断；弱模型反复重试同一个命令时才需要往上调。改完下一轮对话就生效。
         </p>
+        <div class="field line stall-line">
+          <label class="field line">
+            <input class="k-check" type="checkbox" :checked="prefs.stallGuard" @change="savePref({ stallGuard: $event.target.checked })" />
+            <span>卡带检测（模型原地复读时掐断）</span>
+          </label>
+          <input
+            v-if="prefs.stallGuard"
+            class="k-input w120"
+            type="number"
+            min="60"
+            max="2000"
+            step="20"
+            title="连续重复多少字判定为卡带"
+            :value="prefs.stallMin"
+            @change="savePref({ stallMin: Number($event.target.value) })"
+          />
+        </div>
+        <p v-if="prefs.stallGuard" class="field-note">
+          跟上面那条不是一回事：那条管「同一个工具反复调」，这条管「同一段话反复写」。
+          命中后本轮直接掐断，尾部重复内容会被裁掉，你回一句「继续」就能接上。
+          60 很灵敏（模型正常引用同一段代码也可能被掐），2000 基本只抓最恶劣的死循环。
+        </p>
+        <label class="field line">
+          <input class="k-check" type="checkbox" :checked="prefs.toolMap" @change="savePref({ toolMap: $event.target.checked })" />
+          <span>把可用工具清单写进系统提示</span>
+        </label>
+        <p class="field-note">
+          开了以后每轮会把「当前真正能用的工具」压成一行行分组概览发给模型，
+          专门治「工具其实开着，但它想不到要用」。代价是每轮多几百 token，
+          工具开得越多涨得越多；嫌费额度就关掉。
+        </p>
         <label class="field line">
           <input class="k-check" type="checkbox" :checked="prefs.reasonOpen" @change="savePref({ reasonOpen: $event.target.checked })" />
           <span>思考默认展开</span>
@@ -128,7 +178,7 @@
     </section>
 
     <!-- 网络：代理总闸。提供商上勾的「代理」只是声明要走它，这里能一键全免 -->
-    <section v-show="tab === 'general'" class="card">
+    <section v-show="tab === 'general'" data-tab="general" class="card">
       <h3>网络</h3>
       <div class="form">
         <label class="field line">
@@ -143,7 +193,7 @@
     </section>
 
     <!-- 安全 -->
-    <section v-show="tab === 'security'" class="card">
+    <section v-show="tab === 'security'" data-tab="security" class="card">
       <h3>审批模式</h3>
       <div class="links">
         <button
@@ -157,7 +207,7 @@
       </div>
     </section>
 
-    <section v-show="tab === 'security'" class="card">
+    <section v-show="tab === 'security'" data-tab="security" class="card">
       <h3>敏感数据脱敏</h3>
       <div class="form">
         <KInput v-model="secretForm" label="新规则（原样替换为 ***）" block placeholder="sk-xxx / 密码字段名" />
@@ -169,7 +219,7 @@
       </div>
     </section>
 
-    <section v-show="tab === 'security'" class="card">
+    <section v-show="tab === 'security'" data-tab="security" class="card">
       <h3>权限规则</h3>
       <p class="muted">命中黑名单直接拒绝（即使免除审批也拦得住）；白名单用于在严格/默认模式下放行特定目标。</p>
       <div class="grid-4">
@@ -212,7 +262,7 @@
     </section>
 
     <!-- 技能 -->
-    <section v-show="tab === 'skills'" class="card">
+    <section v-show="tab === 'skills'" data-tab="skills" class="card">
       <h3>自定义技能</h3>
       <div class="form">
         <KInput v-model="skillName" label="技能名（kebab-case）" block />
@@ -239,7 +289,7 @@
     </section>
 
     <!-- 工具 -->
-    <section v-show="tab === 'tools'" class="card">
+    <section v-show="tab === 'tools'" data-tab="tools" class="card">
       <h3>工具（按需启用）</h3>
       <p class="muted">内置 12 个基础工具（读写文件、edit_file、grep/glob、run_command 等）始终可用；这里只管增强工具与外部接口。</p>
       <div class="tool-search">
@@ -316,7 +366,7 @@
     </section>
 
     <!-- MCP 服务器：外部能力接入（发现出的工具在上面的「工具」页里逐个启用） -->
-    <section v-show="tab === 'mcp'" class="card">
+    <section v-show="tab === 'mcp'" data-tab="mcp" class="card">
       <h3>MCP 服务器</h3>
       <p class="muted">
         接外部 MCP 能力（stdio 子进程或 Streamable HTTP）。发现出来的工具会出现在「工具」页的 MCP 一节，默认关闭。
@@ -411,7 +461,7 @@
     </section>
 
     <!-- 外观 -->
-    <section v-show="tab === 'appearance'" class="card">
+    <section v-show="tab === 'appearance'" data-tab="appearance" class="card">
       <h3>外观</h3>
       <div class="form">
         <div class="field">
@@ -453,7 +503,7 @@
     </section>
 
     <!-- 实验室功能 -->
-    <section v-show="tab === 'lab'" class="card">
+    <section v-show="tab === 'lab'" data-tab="lab" class="card">
       <h3>实验室功能</h3>
       <div class="form">
         <label v-for="x in labsSimple" :key="x.key" class="k-row-card" style="display:flex;align-items:center;gap:12px">
@@ -652,7 +702,7 @@
     </section>
 
     <!-- 关于 -->
-    <section v-show="tab === 'about'" class="card">
+    <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>关于 KHarness</h3>
       <div class="muted">
         本地 AI Harness：模型管理 / 延迟测试 / Playground（Agent 工具调用、项目会话、任务面板、用量与轨迹）。
@@ -663,7 +713,7 @@
     </section>
 
     <!-- 数据库：桌面端与仓库端之间不自动搬，只有这两个口子 -->
-    <section v-show="tab === 'about'" class="card">
+    <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>数据库</h3>
       <p class="muted">
         导出走的是一致性快照（含 WAL 里还没落盘的写入），拿到的是一个自包含的单文件；
@@ -725,7 +775,7 @@
     </section>
 
     <!-- 恢复出厂设置：清库不可逆，所以逐字确认 + 三次点击，误触不了 -->
-    <section v-show="tab === 'about'" class="card">
+    <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>恢复出厂设置</h3>
       <p class="muted">
         清空整份数据库：模型与提供方、全部会话与消息、用量记录、设置全部归零。
@@ -787,7 +837,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { aiApi, settingsApi } from '../../api';
 import { toast } from '../../stores/toast';
 import { toastErr, errFull } from '../../utils/errText';
@@ -813,6 +863,63 @@ const tabs = [
   { id: 'about', label: '关于' },
 ];
 const tab = ref('general');
+
+/* ---------- 条目级搜索（#220） ----------
+   索引直接从已挂载的 DOM 里长出来，不维护第二份清单（那份必和页面脱节）。
+   一行 = 一个控件行（label.field / .row / .cfg-item / 实验室卡片），
+   标题取整行文字的前 80 字，分区名取卡片自己的标题 —— 两者都参与匹配。 */
+const pageEl = ref(null);
+const setQuery = ref('');
+
+function rowIndex() {
+  const root = pageEl.value;
+  if (!root) return [];
+  const tabName = new Map(tabs.map((t) => [t.id, t.label]));
+  const seen = new Set();
+  const out = [];
+  for (const sec of root.querySelectorAll('section.card[data-tab]')) {
+    const head = sec.querySelector('h2, h3, h4, .card-title, .cu-head');
+    const secName = (head ? head.textContent : '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    const tid = sec.dataset.tab;
+    for (const el of sec.querySelectorAll('label.field, .row, .cfg-item, .k-row-card, .cu-line, .cu-sec')) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      const title = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (title.length < 2) continue;
+      out.push({ el, title: title.slice(0, 80), sec: secName, tab: tid, tabName: tabName.get(tid) || tid });
+    }
+  }
+  return out;
+}
+
+const setHits = computed(() => {
+  const q = setQuery.value.trim().toLowerCase();
+  if (q.length < 1) return [];
+  const rows = rowIndex();
+  const hit = [];
+  for (const r of rows) {
+    const t = r.title.toLowerCase();
+    let score = -1;
+    if (t.startsWith(q)) score = 0;
+    else if (t.includes(q)) score = 1;
+    else if ((r.sec || '').toLowerCase().includes(q)) score = 2;
+    if (score < 0) continue;
+    hit.push({ ...r, score });
+    if (hit.length > 40) break;
+  }
+  hit.sort((a, b) => a.score - b.score);
+  return hit.slice(0, 12);
+});
+
+async function gotoSetting(h) {
+  if (!h.el.isConnected) { setQuery.value = ''; return toast('这条设置当前不可用（可能被某个开关关掉了）', 'warn'); }
+  tab.value = h.tab;
+  await nextTick();
+  h.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  h.el.classList.add('set-flash');
+  setTimeout(() => h.el.classList.remove('set-flash'), 1600);
+  setQuery.value = '';
+}
 
 const shell = ref('');
 const shellCandidates = ref([]);
@@ -1384,6 +1491,7 @@ async function savePref(patch) {
   if (patch.volume !== undefined) patch.volume = Math.min(1, Math.max(0, Number(patch.volume) || 0));
   if (patch.imgMaxSide !== undefined) patch.imgMaxSide = Math.min(8192, Math.max(0, Math.round(Number(patch.imgMaxSide) || 0)));
   if (patch.repeatBreak !== undefined) patch.repeatBreak = Math.min(20, Math.max(2, Math.round(Number(patch.repeatBreak) || 3)));
+  if (patch.stallMin !== undefined) patch.stallMin = Math.min(2000, Math.max(60, Math.round(Number(patch.stallMin) || 240)));
   const okk = await uiPrefs.save(patch);
   if (okk && patch.volume !== undefined && patch.sound !== false) soundApproval();
   return okk;
@@ -1471,6 +1579,8 @@ async function addSecret() {
 }
 
 async function removeSecret(s) {
+  // 密钥值界面上从不回显，删了就只能重新粘贴一遍 —— 值得问一句
+  if (!(await confirmDialog(`删除这条密钥配置${s.pattern ? `「${s.pattern}」` : ''}？密钥值不会显示出来，删掉后要重新粘贴。`))) return;
   try {
     await aiApi.deleteSecret(s.id);
     secrets.value = secrets.value.filter((x) => x.id !== s.id);
@@ -1595,6 +1705,8 @@ async function onPickSkillFile(ev) {
 }
 
 async function removeSkill(s) {
+  // 服务端是 unlinkSync，没有回收站：这个 .md 删掉就真的没了
+  if (!(await confirmDialog(`删除技能「${s.name}」？文件直接从技能目录移除，不进回收站，找不回来。`, { title: '删除技能', danger: true }))) return;
   try {
     await aiApi.deleteSkill(s.name);
     skills.value = skills.value.filter((x) => x.name !== s.name);
@@ -1971,6 +2083,8 @@ async function toggleMcp(s) {
 }
 
 async function removeMcp(s) {
+  // 删的不只是这条配置：它带进来的那批工具会一起从注册表摘掉，模型当场就不会用了
+  if (!(await confirmDialog(`删除 MCP 服务「${s.name}」？它的命令/参数配置会一并删除，由它提供的工具同时从注册表摘除。`))) return;
   try {
     await aiApi.deleteMcpServer(s.id);
     toast(`已删除「${s.name}」，其工具同时从注册表摘除`, 'success');
@@ -2085,9 +2199,49 @@ pre.cu-err {
   .pane-enter-active,
   .pane-leave-active { transition: none; }
 }
-.page-head { margin-bottom: 16px; }
+.page-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .page-head h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; }
+/* 条目级搜索的下拉：结果按「以关键词开头 > 含关键词 > 只中分区名」排 */
+.set-search { position: relative; flex: 1 1 auto; max-width: 420px; margin-left: auto; }
+.set-search > input { width: 100%; }
+.set-hits {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 340px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+}
+.set-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.set-hit:hover { background: var(--bg-hover); }
+.set-hit-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-hit-where { flex: 0 0 auto; color: var(--text-3); font-size: 11px; }
+.set-nohit { margin: 6px 0 0; color: var(--text-3); font-size: 11px; }
+.set-flash { animation: set-flash 1.6s ease-out 1; border-radius: var(--radius-sm); }
+@keyframes set-flash {
+  0%, 55% { background: var(--gold-soft); box-shadow: 0 0 0 1px var(--gold-line); }
+  100% { background: transparent; box-shadow: none; }
+}
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border-soft);
@@ -2102,6 +2256,12 @@ pre.cu-err {
 /* 勾选项：方框和文字并排，整行可点 */
 .field.line { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
 .field.line span { font-size: 12px; color: var(--text-2); }
+/* 卡带检测：勾选框和它的数字输入同一行（数字不再带说明文字，下面那段 note 已经讲清了）。
+   输入框必须钉死 flex：全局 `input.k-input { width: 100% }` 会把它撑满整行，
+   把旁边的文字挤成一字一行（就是截图里那个竖排）。 */
+.stall-line { justify-content: space-between; cursor: default; }
+.stall-line > .field.line { flex: 1 1 auto; min-width: 0; }
+.stall-line > .k-input { flex: 0 0 auto; }
 /* 自定义 Shell：输入框 + 那颗「用这个」贴在一起，路径长会截断（有 title 可看全） */
 .shell-custom { display: flex; align-items: flex-end; gap: 8px; }
 .shell-custom :deep(.k-input) { flex: 1 1 auto; min-width: 0; }
