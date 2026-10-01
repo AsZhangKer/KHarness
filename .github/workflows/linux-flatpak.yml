@@ -57,9 +57,14 @@ jobs:
           bwrap --dev-bind / / true && echo 'bwrap: OK' || echo '!! bwrap 跑不了'
           sysctl kernel.unprivileged_userns_clone 2>/dev/null || true
 
-      # electron-builder 的 flatpak 目标要把 runtime / BaseApp 装进本地仓库，缺这个远程源会直接失败
+      # 远程源要加**两份**：bundler 和我后面的预装步骤用的都是 `flatpak --user install`，
+      # 而在这个 runner 上 `sudo flatpak remote-add`（系统级）那份对 --user 上下文不可见，
+      # 症状就是「No remote refs found similar to 'flathub'」—— 它把 flathub 当成 ref 去搜了。
       - name: 添加 Flathub 源
-        run: sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          echo '--- 系统级远程 ---' && flatpak remotes && echo '--- 用户级远程 ---' && flatpak remotes --user
 
       # 排查用的读数：node 版本、electron 的 dist 在不在、图标尺寸。
       # 注意这条必须排在三层 npm ci **之后** —— 第一轮就是排到了前面，
