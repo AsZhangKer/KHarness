@@ -51,15 +51,10 @@ jobs:
       - name: 添加 Flathub 源
         run: sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-      # 排查用的读数：版本、图标尺寸（flatpak 只收 ≤512px 的图标，1150px 那份会被静默跳过）
-      - name: 构建机自检
-        run: |
-          node -v && npm -v && uname -m
-          flatpak --version && flatpak-builder --version
-          ls -d node_modules/electron/dist || { echo "!! electron 的 dist 没落地，electronDist 指的目录不存在"; exit 1; }
-          node -e "const b=require('fs').readFileSync('icon.png').subarray(0,26);console.log('icon.png',b.readUInt32BE(16)+'x'+b.readUInt32BE(20))"
-          node -e "const b=require('fs').readFileSync('icon-256.png').subarray(0,26);const w=b.readUInt32BE(16),h=b.readUInt32BE(20);console.log('icon-256.png',w+'x'+h);if(w>512||h>512){console.log('!! flatpak 图标必须 ≤512px');process.exit(1)}"
-
+      # 排查用的读数：node 版本、electron 的 dist 在不在、图标尺寸。
+      # 注意这条必须排在三层 npm ci **之后** —— 第一轮就是排到了前面，
+      # 于是 `ls node_modules/electron/dist` 必然失败，报的还是最不像原因的样（exit code 1）。
+      # 概览页那条「Node.js 20 is deprecated」只是 checkout/setup-node 自身的告警，不是失败原因。
       - name: 装依赖（根：electron / electron-builder）
         run: npm ci
 
@@ -68,6 +63,14 @@ jobs:
 
       - name: 装依赖（client：vite）
         run: npm ci --prefix client
+
+      - name: 构建机自检
+        run: |
+          node -v && npm -v && uname -m
+          flatpak --version && flatpak-builder --version
+          ls -d node_modules/electron/dist || { echo "!! electron 的 dist 没落地，electronDist 指的目录不存在"; exit 1; }
+          node -e "const b=require('fs').readFileSync('icon.png').subarray(0,26);console.log('icon.png',b.readUInt32BE(16)+'x'+b.readUInt32BE(20))"
+          node -e "const b=require('fs').readFileSync('icon-256.png').subarray(0,26);const w=b.readUInt32BE(16),h=b.readUInt32BE(20);console.log('icon-256.png',w+'x'+h);if(w>512||h>512){console.log('!! flatpak 图标必须 ≤512px');process.exit(1)}"
 
       - name: 构建前端
         run: npm run build --prefix client
@@ -85,6 +88,19 @@ jobs:
       - name: 检查产物
         run: |
           ls -l release-flatpak/*.flatpak || { echo "!! 没出 .flatpak"; exit 1; }
+
+      # 出得来包不等于装得上。三件事构建阶段一律看不出来，只能进沙箱真跑：
+      #   ① 包装脚本里调的是 zypak-wrapper —— electron-builder **不会**自动加 zypak 模块
+      #      （FlatpakTarget 只把 modules 原样透传），全靠 org.electronjs.Electron2.BaseApp 自带；
+      #   ② 随包的 resources/runtime/node 是构建机（glibc 2.35）上编的，runtime 的 glibc 不够就起不来；
+      #   ③ desktop 入口 / 包装脚本有没有落进 /app/bin。
+      # 哪条红了就说明这个包在他 Arch 机器上是坏的，别等他装了再报。
+      - name: 在沙箱里验产物
+        run: |
+          flatpak install --user -y release-flatpak/*.flatpak
+          flatpak run --user --command=sh dev.kharness.desktop -ec 'ls -l /app/bin && grep -q zypak /app/bin/* || { echo "!! /app/bin 里的包装脚本没引用 zypak"; exit 1; }'
+          flatpak run --user --command=sh dev.kharness.desktop -ec 'command -v zypak-wrapper || { echo "!! BaseApp 里没有 zypak-wrapper（Electron 起不来）"; exit 1; }'
+          flatpak run --user --command=sh dev.kharness.desktop -ec '/app/lib/dev.kharness.desktop/resources/runtime/node -v || { echo "!! 随包 node 在这个 runtime 里跑不起来：glibc 不匹配，把 runtimeVersion 往上调"; exit 1; }'
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
