@@ -41,11 +41,21 @@ jobs:
             server/package-lock.json
             client/package-lock.json
 
-      # flatpak-builder 不在 GitHub  runner 的预装清单里，得自己 apt 装
+      # flatpak-builder 要在用户命名空间里跑 bwrap。Ubuntu 24.04 那条内核（GitHub runner 现在用的
+      # 就是 6.8.0-xx-azure）默认可能挡掉非特权 userns，症状是 flatpak 一句「status code 1」就死了。
+      # 这个开关在不存在的内核上会报错，所以 best-effort，不作为失败。
       - name: 装 flatpak 工具链
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || echo '(没有这个开关，忽略)'
+
+      # 单独一步报读数：真要是命名空间被挡，这里就能看到，不用猜 flatpak 为什么死
+      - name: 探测非特权用户命名空间
+        run: |
+          unshare --user --map-root-user echo 'userns: OK' || echo '!! userns 不可用'
+          bwrap --dev-bind / / true && echo 'bwrap: OK' || echo '!! bwrap 跑不了'
+          sysctl kernel.unprivileged_userns_clone 2>/dev/null || true
 
       # electron-builder 的 flatpak 目标要把 runtime / BaseApp 装进本地仓库，缺这个远程源会直接失败
       - name: 添加 Flathub 源
@@ -79,10 +89,24 @@ jobs:
       - name: 打包准备（pack-prep）
         run: node desktop/pack-prep.js
 
+      # 先把三个 ref 显式装上，这样「哪个 runtime 拉不到」会红在独立一步里，
+      # 而不是混进 flatpak-builder 那一大坨（bundler 自己也会装，装过就是 no-op 更新）。
+      - name: 预装 runtime 与 BaseApp
+        run: |
+          flatpak --user install -y --no-deps --arch=x86_64 flathub org.freedesktop.Platform//23.08
+          flatpak --user install -y --no-deps --arch=x86_64 flathub org.freedesktop.Sdk//23.08
+          flatpak --user install -y --no-deps --arch=x86_64 flathub org.electronjs.Electron2.BaseApp//23.08
+          flatpak --user list --columns=name,arch,ref,runtime,is-active
+
       # 只出 flatpak（-c 覆盖输出目录，避免和 deb / 本机 Windows 的 release-new 撞名）。
       # 权限口径写在 package.json 的 build.flatpak.finishArgs：filesystem=host + device=all
       # （Agent 要开任意位置的项目目录、终端要 /dev/ptmx），沙箱靠 zypak 兜 Chromium 的嵌套 bwrap。
+      #
+      # DEBUG 这一条不是可选项：@malept/flatpak-bundler 把每条 flatpak 命令和它们的
+      # stdout/stderr 全喂给 debug 日志（spawnWithLogging），不开就是「status code 1」一个字都不给。
       - name: 打 flatpak
+        env:
+          DEBUG: '@malept/flatpak-bundler,electron-builder*'
         run: npx electron-builder --linux flatpak -c.directories.output=release-flatpak --publish never
 
       - name: 检查产物
