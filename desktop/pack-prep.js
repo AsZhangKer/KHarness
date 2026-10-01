@@ -55,6 +55,19 @@ if (process.platform === 'win32') {
   console.log('非 Windows：图标用 build/icon.png（不生成 .ico）');
 }
 
+// flatpak 只收 ≤512px 的图标（electron-builder 的 FlatpakTarget.copyIcons 会**直接跳过**大于 512 的），
+// 而我们的 build/icon.png 是 1150×1150 —— 不补一份小的，装出来就是没图标。
+// 这份 icon-256.png 是仓库里的源文件（从 build/icon.ico 的 256 条目抽出来的），CI 在 Linux 上也不需要缩放工具。
+const smallIcon = path.join(ROOT, 'icon-256.png');
+if (fs.existsSync(smallIcon)) {
+  fs.mkdirSync(path.join(BUILD, 'icons'), { recursive: true });
+  fs.copyFileSync(smallIcon, path.join(BUILD, 'icons', '256x256.png'));
+  console.log('icons/256x256.png ← icon-256.png（flatpak 用）');
+} else {
+  console.log('!! 仓库根缺 icon-256.png，flatpak 包会没有图标');
+  process.exit(1);
+}
+
 /* ---------- 3) 后端负载（自己拷，绕开 electron-builder 的 node_modules 剔除） ----------
  * electron-builder 拷 extraResources 时会把 **from 目录下一层的 node_modules 整个剔掉**
  * （实测：build/server-payload/node_modules 消失，而更深一层的 xxx/node_modules 完好）。

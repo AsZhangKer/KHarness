@@ -86,6 +86,27 @@
       "description": "KHarness：模型管理、Agent 工具调用、内置浏览器、SSH 与终端都在本机运行。无鉴权，服务只监听 127.0.0.1，数据留在用户配置目录。",
       "artifactName": "KHarness-${version}_${arch}.deb"
     },
+    "flatpak": {
+      "runtimeVersion": "23.08",
+      "baseVersion": "23.08",
+      "category": "Utility",
+      "useWaylandFlags": true,
+      "synopsis": "本地单用户 AI Agent Harness",
+      "description": "KHarness：模型管理、Agent 工具调用、内置浏览器、SSH 与终端都在本机运行。无鉴权，服务只监听 127.0.0.1，数据留在用户配置目录。",
+      "finishArgs": [
+        "--socket=wayland",
+        "--socket=x11",
+        "--share=ipc",
+        "--device=dri",
+        "--socket=pulseaudio",
+        "--share=network",
+        "--talk-name=org.freedesktop.Notifications",
+        "--filesystem=host",
+        "--device=all",
+        "--allow=devel"
+      ],
+      "artifactName": "KHarness-${version}-${arch}.flatpak"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

@@ -1,0 +1,104 @@
+# 构建 flatpak 包（Arch / 任意发行版通用）。
+#
+# 为什么单独一条工作流，不塞进 linux-deb.yml：
+#   flatpak 要在构建机上装 flatpak + flatpak-builder 并从 Flathub 拉 23.08 的 runtime 和
+#   org.electronjs.Electron2.BaseApp（几百 MB），慢且容易因为 Flathub 抖动而红。
+#   跟 deb 混在一条里，deb 会被连累重跑。
+#
+# 为什么能在 Arch 上用：flatpak 自带 runtime，不依赖发行版的 glibc / 库版本；
+#   装完 `flatpak install --user KHarness-*.flatpak` 即可，不需要 AUR/PKGBUILD。
+#
+# runtime 选 23.08 而不是 electron-builder 默认的 20.08：构建机是 ubuntu-22.04（glibc 2.35），
+#   随包 node 与 better-sqlite3 / node-pty 都是在那上面编的；20.08 runtime 的 glibc 只有 2.31，
+#   跑不起来。23.08 是 glibc 2.36，留有余量。
+name: 构建 Linux flatpak
+
+on:
+  workflow_dispatch:      # Actions 页面手动点，分支选 main
+  push:
+    tags: ['v*']          # 和 deb 那条一样，打 v* tag 时顺手把 flatpak 附到 Release
+
+permissions:
+  contents: write         # 要建 Release、传产物
+
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # 与 better-sqlite3 / node-pty 的 ABI 对齐（和 pack-prep 的说明一致）
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      # flatpak-builder 不在 GitHub  runner 的预装清单里，得自己 apt 装
+      - name: 装 flatpak 工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder bubblewrap
+
+      # electron-builder 的 flatpak 目标要把 runtime / BaseApp 装进本地仓库，缺这个远程源会直接失败
+      - name: 添加 Flathub 源
+        run: sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      # 排查用的读数：版本、图标尺寸（flatpak 只收 ≤512px 的图标，1150px 那份会被静默跳过）
+      - name: 构建机自检
+        run: |
+          node -v && npm -v && uname -m
+          flatpak --version && flatpak-builder --version
+          ls -d node_modules/electron/dist || { echo "!! electron 的 dist 没落地，electronDist 指的目录不存在"; exit 1; }
+          node -e "const b=require('fs').readFileSync('icon.png').subarray(0,26);console.log('icon.png',b.readUInt32BE(16)+'x'+b.readUInt32BE(20))"
+          node -e "const b=require('fs').readFileSync('icon-256.png').subarray(0,26);const w=b.readUInt32BE(16),h=b.readUInt32BE(20);console.log('icon-256.png',w+'x'+h);if(w>512||h>512){console.log('!! flatpak 图标必须 ≤512px');process.exit(1)}"
+
+      - name: 装依赖（根：electron / electron-builder）
+        run: npm ci
+
+      - name: 装依赖（server：better-sqlite3 / node-pty 现场编译）
+        run: npm ci --prefix server
+
+      - name: 装依赖（client：vite）
+        run: npm ci --prefix client
+
+      - name: 构建前端
+        run: npm run build --prefix client
+
+      # 产出 build/runtime/node、build/icon.png、build/icons/256x256.png、build/server-payload/app（含隐私硬卡口）
+      - name: 打包准备（pack-prep）
+        run: node desktop/pack-prep.js
+
+      # 只出 flatpak（-c 覆盖输出目录，避免和 deb / 本机 Windows 的 release-new 撞名）。
+      # 权限口径写在 package.json 的 build.flatpak.finishArgs：filesystem=host + device=all
+      # （Agent 要开任意位置的项目目录、终端要 /dev/ptmx），沙箱靠 zypak 兜 Chromium 的嵌套 bwrap。
+      - name: 打 flatpak
+        run: npx electron-builder --linux flatpak -c.directories.output=release-flatpak --publish never
+
+      - name: 检查产物
+        run: |
+          ls -l release-flatpak/*.flatpak || { echo "!! 没出 .flatpak"; exit 1; }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kharness-flatpak
+          path: release-flatpak/*.flatpak
+          if-no-files-found: error
+
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="flatpak 由 GitHub Actions 构建（run ${GITHUB_RUN_ID}），Arch 及其它发行版通用；Windows 安装包在本机出，不在这里。"
+          gh release create "$TAG" release-flatpak/*.flatpak --title "KHarness $TAG" --notes "$NOTES" \
+            || gh release upload "$TAG" release-flatpak/*.flatpak --clobber
