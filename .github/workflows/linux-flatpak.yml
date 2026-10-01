@@ -101,7 +101,9 @@ jobs:
           flatpak --user install -y --no-deps --arch=x86_64 flathub org.freedesktop.Platform//23.08
           flatpak --user install -y --no-deps --arch=x86_64 flathub org.freedesktop.Sdk//23.08
           flatpak --user install -y --no-deps --arch=x86_64 flathub org.electronjs.Electron2.BaseApp//23.08
-          flatpak --user list --columns=name,arch,ref,runtime,is-active
+          # 别用 --columns=is-active：flatpak 1.12 没这个列名（会「Unknown column」直接红在这一步），
+          # 默认列就够看装上了什么
+          flatpak --user list
 
       # 只出 flatpak（-c 覆盖输出目录，避免和 deb / 本机 Windows 的 release-new 撞名）。
       # 权限口径写在 package.json 的 build.flatpak.finishArgs：filesystem=host + device=all
