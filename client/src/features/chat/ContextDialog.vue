@@ -110,8 +110,10 @@ function toMarkdown(ctx) {
   for (const m of ctx.messages || []) {
     lines.push(m.role === 'user' ? '## 你' : `## AI${m.model ? ` · ${m.model}` : ''}`, '');
     const steps = Array.isArray(m.steps) ? m.steps : [];
+    // 标题里的「N 步」只数真的工具调用；note（限流重试、越界说明等过程提示）在下面照列，但不计步
+    const toolSteps = steps.filter((s) => s.type === 'tool' || s.type === 'result').length;
     if (steps.length) {
-      lines.push('<details><summary>工具轨迹（' + steps.length + ' 步）</summary>', '');
+      lines.push('<details><summary>工具轨迹（' + toolSteps + ' 步）</summary>', '');
       for (const s of steps) {
         if (s.type === 'tool') lines.push(`- ▶ \`${s.name}\` ${JSON.stringify(s.args || {}).slice(0, 200)}`);
         else if (s.type === 'result') lines.push(`- ◀ \`${s.name}\` ${(s.error || s.output || '').toString().split('\n')[0].slice(0, 200)}`);

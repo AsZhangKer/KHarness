@@ -135,6 +135,17 @@ fs.cpSync(path.join(ROOT, 'server'), payload, {
     return true;
   },
 });
+/* 版本号写进服务端载荷：设置-关于要显示真实版本（v1.3.3），而且**不能依赖外壳** ——
+   旧 app.asar 里没有 KH_APP_VERSION 这条环境变量，只靠外壳传就会把装机版标成 v1.3.3d（他定的口径：d = 非正式版）。
+   这份文件由打包机写，源码/自测跑法没有它 → 后端读根 package.json 并补 d。 */
+const ROOT_VERSION = String(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version || '');
+if (!ROOT_VERSION) {
+  console.error('pack-prep: 根 package.json 没有 version 字段');
+  process.exit(1);
+}
+fs.writeFileSync(path.join(payload, 'version.json'), JSON.stringify({ version: ROOT_VERSION, packaged: true }) + '\n', 'utf8');
+console.log(`pack-prep: 写入 server/version.json（v${ROOT_VERSION}，正式版）`);
+
 for (const stack = [payload]; stack.length;) {
   const dir = stack.pop();
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

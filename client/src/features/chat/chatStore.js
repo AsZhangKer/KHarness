@@ -1,14 +1,14 @@
 // 会话工作台状态（从零实现，不复用旧 AiPlayground）
 import { reactive, computed, watch } from 'vue';
 import { aiApi } from '../../api';
-import { openChatStream } from './chatStream';
+import { openChatStream, openPressStream } from './chatStream';
 import { superviseStore } from './superviseStore';
 import { toast } from '../../stores/toast';
 import { uiPrefs } from '../../stores/prefs';
 import { recycleBin } from '../../stores/recycle';
 import { soundDone, soundError, soundApproval, soundQuestion } from '../../utils/sound';
 import { logErr } from '../../utils/errlog';
-import { errReport } from '../../utils/errText';
+import { errReport, toastErr } from '../../utils/errText';
 
 const recycle = recycleBin();
 
@@ -49,6 +49,8 @@ const state = reactive({
   question: null,
   usage: {},
   contextUsed: 0,
+  // 手动压缩在跑（/press 或右栏按钮）：按钮禁用 + 转圈全靠它
+  pressing: false,
   latencyMs: 0,
   tokPerSec: 0,
   /** 本轮已产出的输出 token 估算（正文+思考），实时速度就按它的增量算 */
@@ -451,11 +453,23 @@ export function useChatStore() {
     }
     reply.content += text;
   }
+  /* 同一段思考不许被过程提示切成两张卡（#243）。
+     任何非 delta/reason 的事件都会先封口缓冲区，于是服务端每遇 429 限流 / 超时 / 参数重试发的那条
+     note 一插进来，后面的思考就只能新开一条 reason —— 用户看到的是「一段思考被截成两段」。
+     note 不是模型在动手，往回找段时越过它；碰到正文或工具卡才算真的换段了。 */
+  function tailReason(tl) {
+    for (let i = tl.length - 1; i >= 0; i--) {
+      const it = tl[i];
+      if (it.kind === 'reason') return it;
+      if (!(it.kind === 'step' && it.type === 'note')) return null;
+    }
+    return null;
+  }
   function tlAppendReason(reply, text) {
     if (!text) return;
     if (!reply.timeline) reply.timeline = [];
-    const last = reply.timeline[reply.timeline.length - 1];
-    if (last && last.kind === 'reason') last.text += text;
+    const r = tailReason(reply.timeline);
+    if (r) r.text += text;
     else reply.timeline.push({ kind: 'reason', text });
     reply.reasoning += text;
   }
@@ -640,11 +654,22 @@ export function useChatStore() {
         chat_id: evt.chat_id || state.chatId,
       };
       notifyHidden('AI 在等你回答', String(evt.question || '').slice(0, 120));
+    } else if (t === 'approval_expired') {
+      // 服务端到点按拒绝处理并删掉了挂起的审批：卡片必须跟着退场。
+      // 留着它，用户点哪颗键都是一个 404，而且永远点不掉（他报的「赖着不走」）。
+      state.approvals = state.approvals.filter((a) => a.id !== evt.id);
+    } else if (t === 'question_expired') {
+      if (state.question?.id === evt.id) state.question = null;
     } else if (t === 'cmd_running') {
       // run_command 开始/结束：驱动「判定超时」按钮与已跑时长
       state.runningCmd = evt.command
         ? { command: String(evt.command), startedAt: Date.now(), elapsedMs: 0 }
         : null;
+    } else if (t === 'usage') {
+      // 回合中途的用量刷新（Agent 每读完一批工具就发一次）：右侧百分比要跟着往上走，
+      // 而不是整回合结束才跳一下 —— 以前那种「连读几十个文件界面纹丝不动」就是这么来的。
+      if (Number(evt.used) > 0) state.contextUsed = Number(evt.used);
+      if (Number(evt.limit) > 0) state.contextLimit = Number(evt.limit);
     } else if (t === 'heartbeat') {
       // 15s 一次；命令运行时带 pid/command/elapsed_ms
       if (evt.command || evt.pid) {
@@ -702,8 +727,11 @@ export function useChatStore() {
       if (evt.usage) {
         reply.usage = evt.usage;
         state.usage = evt.usage;
-        if (evt.usage.prompt_tokens > 0) state.contextUsed = evt.usage.prompt_tokens;
       }
+      // 百分比只认服务端那一份：done 事件带的 context_used 是回合结束后按锚点重算的
+      // （锚点 = 上游真实 prompt+completion，还含工具 schema 的开销）。
+      // 以前这里用 evt.usage.prompt_tokens 覆盖一次 —— 少了 completion，等于一轮结束后换了一把尺。
+      if (evt.context_used > 0) state.contextUsed = evt.context_used;
       if (evt.tasks) state.tasks = evt.tasks;
       if (evt.context_limit != null) state.contextLimit = evt.context_limit;
       state.runningCmd = null;
@@ -718,6 +746,11 @@ export function useChatStore() {
         detail: String(evt.detail || evt.note || JSON.stringify(evt.context || evt.raw || '')).slice(0, 1200),
       });
       notifyHidden('KHarness 本轮出错', reply.errorText.slice(0, 120));
+      // 自动重试打光才断的（429/5xx）：红条上那颗键改叫「重试」，别让人以为一点就又是失败
+      reply.retryExhausted = !!evt.retry_exhausted;
+      // 已经吐出字却被打断 → 标未完成，下方留「继续生成」（服务端同一口径落库，刷新后还在）。
+      // 一个字没出就不标：那时「继续」在上游没有锚点可接，红条那颗「重试」才是对的用法。
+      if (String(reply.content || '').trim()) reply.unfinished = true;
     }
   }
 
@@ -741,9 +774,16 @@ export function useChatStore() {
       if (text.startsWith('\\')) {
         text = text.slice(1);
       } else {
-        const handled = await runCommand(text);
+        // 先把输入框清空再执行：命令一旦抛错（压缩超时、窗口校验 400…），
+        // 原来那句 `state.draft = ''` 永远走不到 —— 表现就是「按了回车命令执行了、字还留在框里」。
         state.draft = '';
-        if (handled) return;
+        try {
+          const handled = await runCommand(text);
+          if (handled) return;
+        } catch (e) {
+          toastErr(e, `命令 ${text.split(' ')[0]} 执行失败`);
+          return;
+        }
       }
     }
 
@@ -1050,14 +1090,21 @@ export function useChatStore() {
     const always = allow === 'always';
     const okFlag = always || allow === true;
     if (always && !p.target) toast('该操作没有可固定的目标，将只允许本次', 'info', 2500);
-    await aiApi.approve({
-      id: p.id,
-      allow: okFlag,
-      always,
-      target: p.target || undefined,
-      chat_id: p.chat_id || state.chatId,
-    });
+    // 卡片一律先出队再报错：服务端那半边的挂起项可能已经超时删掉了（审批超时 / 换页断流 / 后端重启），
+    // 这时请求回 404。以前 404 会抛出去、卡片一条不减，于是每次点都弹一版全量报错窗且永远点不掉。
     state.approvals = state.approvals.filter((x) => x.id !== p.id);
+    try {
+      await aiApi.approve({
+        id: p.id,
+        allow: okFlag,
+        always,
+        target: p.target || undefined,
+        chat_id: p.chat_id || state.chatId,
+      }, true);
+    } catch (e) {
+      if (e?.response?.status === 404) toast('该审批已超时或已结束，操作按拒绝处理', 'warn', 3000);
+      else throw e;
+    }
   }
 
   async function answerQuestion({ text, option, cancelled }) {
@@ -1066,8 +1113,13 @@ export function useChatStore() {
     const body = { id: q.id, chat_id: q.chat_id || state.chatId };
     if (cancelled) body.cancel = true;
     else body.answer = String(text || option || '').trim();
-    await aiApi.answerQuestion(body);
     state.question = null;
+    try {
+      await aiApi.answerQuestion(body, true);
+    } catch (e) {
+      if (e?.response?.status === 404) toast('该提问已超时或已结束，AI 会自行决定下一步', 'warn', 3000);
+      else throw e;
+    }
   }
 
   async function addInsert(text) {
@@ -1080,6 +1132,14 @@ export function useChatStore() {
     if (!state.chatId) return;
     await aiApi.clearInsert(state.chatId);
     state.insertItems = [];
+  }
+
+  /** 删掉某一条待注入提示词（服务端按现存列表回一份，前端不自己 splice —— 免得两边错位） */
+  async function removeInsert(index) {
+    if (!state.chatId) return;
+    const d = await aiApi.removeInsert(state.chatId, index);
+    if (d && Array.isArray(d.items)) state.insertItems = d.items;
+    else await refreshSidecar(state.chatId);
   }
 
   async function saveSkills(loaded) {
@@ -1097,25 +1157,77 @@ export function useChatStore() {
     state.cwd = res?.cwd || path;
   }
 
-  /** 手动压缩：不指定模型，服务端默认用本会话正在用的那个 */
-  async function pressChat() {
-    if (!state.chatId) return;
-    let res = null;
-    try {
-      res = await aiApi.pressChat({ chat_id: state.chatId });
-    } catch {
-      return; // 拦截器已弹错误
-    }
-    const d = res?.data || {};
-    await openChat(state.chatId);
-    if (d.skipped) return toast(res?.message || '没有可压缩的内容', 'warn');
-    toast(res?.message || '已压缩上下文', 'success');
+  /** 手动压缩（/press 与右栏那颗按钮共用）。
+   *  进度看得见靠两件事：① 往消息流尾部插一张**本地**压缩卡，服务端 t:'compress' 的每个阶段
+   *  就地改它（start 转圈 → done/skipped/failed），跑完 openChat 重拉时自然消失 —— 这一次压缩
+   *  不属于任何一轮回复，没有消息可以挂，所以不落库；② state.pressing 让那颗按钮禁用 + 转圈，
+   *  以前它连 disabled 都没有，90 秒里可以反复点。 */
+  async function pressChat(modelRowId) {
+    if (state.pressing) return;
+    if (!state.chatId) return toast('还没有会话，没有历史可压缩', 'warn', 4000);
+    const chatId = state.chatId;
+    if (state.busyChats[chatId]) return toast('本轮还在生成，先停止再压缩', 'warn', 4000);
+    state.pressing = true;
+    state.messages.push({
+      id: null, role: 'assistant', content: '', reasoning: '',
+      steps: [{ type: 'compress', name: '压缩上下文', phase: 'start', manual: true, used: state.contextUsed, limit: state.contextLimit, percent: 0 }],
+      timeline: null, usage: null, model_name: '', unfinished: false, local: true,
+    });
+    // 必须从响应式数组里取引用：直接改推进去的那个原始对象不会触发渲染（Vue 只代理拿到的那条路径），
+    // 表现就是「进度条一直转、数字永远停在按下那一刻」—— 有用例守着（client/__tests__/press-progress.test.js）
+    const card = () => state.messages[state.messages.length - 1]?.steps?.[0];
+    let failed = '';
+    let result = null;
+    openPressStream({ chat_id: chatId, model_row_id: modelRowId || undefined }, {
+      onEvent: (evt) => {
+        if (evt.t !== 'compress') return;
+        const c = card();
+        if (c) Object.assign(c, evt);
+        if (evt.phase === 'failed') failed = evt.message || '压缩失败';
+        else result = evt;
+      },
+      // 校验类失败（没模型 / 会话不存在）服务端回的是 JSON，openStreamAt 会把它变成 onError
+      onError: (e) => {
+        failed = String(e?.message || e);
+        const c = card();
+        if (c) Object.assign(c, { phase: 'failed', message: failed });
+      },
+      onDone: async () => {
+        state.pressing = false;
+        if (result?.after != null) state.contextUsed = result.after;
+        if (state.chatId !== chatId) return;   // 中途切了会话：别把那边的消息拉掉
+        await openChat(chatId);
+        if (failed) return toastErr(new Error(failed), '压缩失败');
+        if (result?.phase === 'skipped') return toast(result.message || '没有可压缩的内容', 'warn');
+        const arch = result?.archived ?? 0;
+        const chars = result?.chars ?? 0;
+        const after = result?.after;
+        toast(`已压缩：归档 ${arch} 条、摘要 ${chars} 字${after != null ? `，上下文降到 ${after}/${state.contextLimit || '?'}` : ''}`, 'success', 6000);
+        return undefined;
+      },
+    });
+    return undefined;
   }
 
   async function setContext(limit) {
-    if (!state.chatId) return;
-    await aiApi.setContext({ chat_id: state.chatId, limit });
+    if (!state.chatId) return toast('还没有会话，无法设定上下文窗口', 'warn', 4000);
+    // 窗口数字本地就能定：先立刻写进状态，右侧百分比当场按新分母重算。
+    // 以前要等服务端那趟「设窗口 + 顺手压缩」（可能几十秒）回来才动，看着就像「没生效，得强刷」。
     state.contextLimit = limit;
+    toast(`上下文窗口已设为 ${limit}，正在压缩较早的历史…`, 'info', 4000);
+    let d = null;
+    try {
+      d = await aiApi.setContext({ chat_id: state.chatId, limit });
+    } catch (e) {
+      return toastErr(e, '设定上下文窗口失败');
+    }
+    if (d && d.limit != null) state.contextLimit = d.limit;
+    if (d && d.used != null) state.contextUsed = d.used;
+    if (d && d.compressed) {
+      await openChat(state.chatId);   // 压过了：历史条数变了，不重拉一遍界面还是旧的
+      if (d.compressed.error) toastErr(new Error(d.compressed.error), '窗口已改，但压缩失败');
+      else toast('窗口已更新，并压缩了一轮历史', 'success');
+    }
   }
 
   async function updateTask(id, patch) {
@@ -1174,6 +1286,9 @@ export function useChatStore() {
     openInExplorer,
     send,
     stop,
+    // SSE 事件分发器：正常只有 send() 内部在调，导出是为了给测试直接灌事件序列
+    // （#243 那条「思考被 note 切成两段」只能从这一层验）
+    handleEvent,
     undo,
     decideApproval,
     answerQuestion,
@@ -1186,6 +1301,7 @@ export function useChatStore() {
     toggleModelPin,
     addInsert,
     clearInserts,
+    removeInsert,
     saveSkills,
     setCwd,
     pressChat,

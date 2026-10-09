@@ -162,6 +162,10 @@ function startServer() {
       KH_HOST: '127.0.0.1',
       KH_STATIC_DIR: STATIC_DIR,
       KH_SHUTDOWN_TOKEN: token,
+      // 关于页要显示真实版本号：安装包带的是 app.getVersion()（electron-builder 填的），
+      // 源码跑法没有这个概念，服务端拿不到 PACKAGED 标志就补 d 后缀（v1.3.3d）。
+      KH_APP_VERSION: app.getVersion(),
+      KH_APP_PACKAGED: PACKAGED ? '1' : '0',
     };
     log(`[desktop] boot node=${NODE_BIN} dataDir=${DATA_DIR} port=${pref || '随机'}`);
     child = spawn(NODE_BIN, ['index.js'], {
@@ -324,9 +328,9 @@ function createWindow(url) {
     const k = String(input.key || '').toLowerCase();
     if (k === 'w') { e.preventDefault(); win.close(); return; }
     if (k === 'r') { e.preventDefault(); wc.reload(); return; }
-    if (k === '=' || k === '+') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() + ZOOM_STEP)); return; }
-    if (k === '-') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() - ZOOM_STEP)); return; }
-    if (k === '0') { e.preventDefault(); wc.setZoomFactor(1); return; }
+    if (k === '=' || k === '+') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() + ZOOM_STEP)); bviewResync(); return; }
+    if (k === '-') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() - ZOOM_STEP)); bviewResync(); return; }
+    if (k === '0') { e.preventDefault(); wc.setZoomFactor(1); bviewResync(); return; }
   });
 
   // 右栏内置浏览器的那个 <webview>：窗口被盖住/最小化时默认会降帧，
@@ -412,6 +416,30 @@ let bwin = null;
 // 拖边缩放进行中的那一次：{ id, b=起始内容边界 }
 let khResizeBase = { id: null, b: null };
 
+/**
+ * 前端洞位换视图边界。
+ * 前端 getBoundingClientRect 量到的是 **CSS 像素**，页面缩放不是 100% 时一 CSS 像素 ≠ 一 DIP，
+ * 直接塞给 setBounds 就会错位（他实测：视图·放大 / 改屏幕分辨率之后网页块压不住栏位）。
+ * 所以进来先存一份原始 CSS 值，出去一律按当前缩放换算；缩放变了再用存的这份重算一次。
+ */
+function bviewDip(b) {
+  if (!b) return b;
+  const z = (win && !win.isDestroyed() ? win.webContents.getZoomFactor() : 1) || 1;
+  const k = (v) => Math.round((Number(v) || 0) * z);
+  return { x: k(b.x), y: k(b.y), width: k(b.width), height: k(b.height) };
+}
+
+/** 缩放或分辨率变了：拿存着的 CSS 洞位重算一遍（浏览器栏正在显示才有意义） */
+function bviewResync() {
+  if (!bview || bview.detached || !bview.cssBounds || !win || win.isDestroyed()) return;
+  if (!bview.shown) return;
+  const b = bviewDip(bview.cssBounds);
+  try {
+    bview.view.setBounds(b);
+    bview.shown = b;
+  } catch (e) { /* 视图正在搬走 */ }
+}
+
 function bviewDetachLayout() {
   if (!bwin || bwin.isDestroyed() || !bview) return;
   const c = bwin.getContentBounds();
@@ -435,10 +463,10 @@ function bviewReattach() {
   if (gone && !gone.isDestroyed()) {
     try { gone.removeBrowserView(bview.view); } catch (e) { /* 正在销毁 */ }
   }
-  const b = bview.sidebarBounds;
+  const b = bviewDip(bview.sidebarBounds);
   if (win && !win.isDestroyed()) {
     win.addBrowserView(bview.view);
-    if (b) { bview.view.setBounds(b); bview.shown = b; }
+    if (b) { bview.view.setBounds(b); bview.shown = b; bview.cssBounds = bview.sidebarBounds; }
     log(`[desktop] 浏览器搬回侧栏 主窗视图数=${win.getBrowserViews().length} 边界=${JSON.stringify(bview.view.getBounds())}`);
   }
   if (gone && !gone.isDestroyed()) gone.destroy();
@@ -555,8 +583,9 @@ async function handleBview(msg = {}, sender = null) {
       }
       if (!bview) return { error: '窗口还没准备好' };
       if (msg.bounds) {
-        if (fromOwner) { bview.view.setBounds(msg.bounds); bview.shown = msg.bounds; }
-        else bview.sidebarBounds = msg.bounds;   // 视图活在另一扇窗里：只登记洞位，等搬回来用
+        bview.cssBounds = msg.bounds;
+        if (fromOwner) { const b = bviewDip(msg.bounds); bview.view.setBounds(b); bview.shown = b; }
+        else bview.sidebarBounds = msg.bounds;   // 视图活在另一扇窗里：只登记洞位（CSS 原值），搬回来时再按当时缩放换算
       }
       // UA 要在第一次导航前就位（建视图时就带上），否则首页还是电脑版渲染的
       if (msg.ua !== undefined) applyUserAgent(bview, msg.ua);
@@ -575,7 +604,8 @@ async function handleBview(msg = {}, sender = null) {
       case 'attach': bviewReattach(); return { ok: true, detached: false };
       case 'bounds': {
         if (!fromOwner) return { ok: true, ignored: 'not-host', detached: !!(bview && bview.detached) };
-        const b = msg.bounds || {};
+        const b = bviewDip(msg.bounds || {});
+        bview.cssBounds = msg.bounds || bview.cssBounds;
         bview.view.setBounds(b);
         if (Number(b.width) > 0 && Number(b.height) > 0) bview.shown = b;
         return { ok: true };
@@ -594,7 +624,13 @@ async function handleBview(msg = {}, sender = null) {
       case 'show':
         if (!fromOwner) return { ok: true, ignored: 'not-host' };
         if (bview.detached) { bviewDetachLayout(); return { ok: true, detached: true }; }
-        bview.view.setBounds(bview.shown || msg.bounds || bview.view.getBounds());
+        // 优先按存着的 CSS 洞位重算：收起期间可能改过缩放/分辨率，拿旧的 DIP 值直接放回去就是错位
+        {
+          const back = bview.cssBounds ? bviewDip(bview.cssBounds)
+            : (bview.shown || msg.bounds || bview.view.getBounds());
+          bview.view.setBounds(back);
+          bview.shown = back;
+        }
         return { ok: true };
       // 隐藏 = 把边界收成 0×0。
       // 两条路都不能用：setVisible() 在 Electron 33 的 BrowserView 上根本不存在
@@ -815,7 +851,11 @@ if (!gotLock) {
 
     // 截图统一落盘：browser-shots / screen-shots 两个目录，回 {file, bytes}。
     // 服务端与外壳共用 DATA_DIR，所以后端能直接按这个路径把图片喂给模型，不必把 base64 穿过动作队列。
+    // 空 buffer 一律不落盘：以前 0 字节的 PNG 也会照样写出去，后端读到文件是真的、照样发 token，
+    // 于是模型收到一张「空图片」并以为自己看过了 —— 现在直接抛错，让调用方走退路（视口截图/报错）。
     const saveShot = (buf, kind, ext = 'png') => {
+      if (!buf || !buf.length) throw new Error('截图是空的（没抓到画面，没落盘）');
+      if (buf.length < 512) throw new Error(`截图只有 ${buf.length} 字节，不像一张图（没落盘）`);
       const dir = path.join(DATA_DIR, kind === 'screen' ? 'screen-shots' : 'browser-shots');
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${kind}-${Date.now()}.${ext}`);
@@ -842,7 +882,9 @@ if (!gotLock) {
 
     /** nativeImage → 按最长边缩放 → JPEG。回 {buf, ext, width, height, scaled} */
     function encodeForModel(img, maxSide) {
+      if (!img || img.isEmpty()) throw new Error('拿到的画面是空的（nativeImage isEmpty）');
       const s0 = img.getSize();
+      if (!s0.width || !s0.height) throw new Error(`画面尺寸为 0（${s0.width}×${s0.height}）`);
       const longSide = Math.max(s0.width, s0.height);
       if (!maxSide || longSide <= maxSide) {
         // 尺寸本来就合规：只转 JPEG 压体积，不重采样（免得把小字糊掉）
@@ -1158,6 +1200,80 @@ if (!gotLock) {
 
     ipcMain.handle('kh:bview', async (e, msg = {}) => handleBview(msg, e.sender));
 
+    /**
+     * 「浏览…」选目录：新建项目那栏不该逼人手打绝对路径（他点名的体验问题）。
+     * 模态挂到发起请求的那扇窗上，独立窗口里点也能正常出框。
+     */
+    ipcMain.handle('kh:pick-dir', async (e, msg = {}) => {
+      const host = e.sender && e.sender.getOwnerWindow ? e.sender.getOwnerWindow() : win;
+      const opt = {
+        title: msg.title || '选择目录',
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      const start = String(msg.defaultPath || '');
+      if (start && fs.existsSync(start)) opt.defaultPath = start;
+      try {
+        const r = host && !host.isDestroyed() ? await dialog.showOpenDialog(host, opt) : await dialog.showOpenDialog(opt);
+        if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: true, path: null };
+        return { ok: true, path: r.filePaths[0] };
+      } catch (err) {
+        return { ok: false, error: String(err.message || err).slice(0, 160) };
+      }
+    });
+
+    /**
+     * 系统已安装字体的 family 名列表（设置-外观「界面字体」要用）。
+     * Windows 走 .NET 的 InstalledFontCollection：它给的就是 CSS font-family 能直接写的家族名，
+     * 而且 PowerShell 里显式把输出编码设成 UTF-8 —— 中文家族名按 GBK 拿回来会全是问号。
+     * Linux 用 fc-list，macOS 扫字体目录（那里的文件名基本就等于家族名，够用）。
+     * 字体表很少变，进程内缓存一次；前端要强制刷新带 refresh:true。
+     */
+    let fontCache = null;
+    ipcMain.handle('kh:system-fonts', async (e, msg = {}) => {
+      if (fontCache && !(msg && msg.refresh)) return { ok: true, fonts: fontCache };
+      const run = (cmd, args) => new Promise((resolve) => {
+        execFile(cmd, args, { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: 15000 }, (err, stdout) => {
+          resolve(err ? '' : String(stdout || ''));
+        });
+      });
+      let list = [];
+      try {
+        if (process.platform === 'win32') {
+          const ps = [
+            '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
+            'Add-Type -AssemblyName System.Drawing',
+            '(New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }',
+          ].join('; ');
+          const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+          list = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        } else if (process.platform === 'darwin') {
+          const dirs = ['/System/Library/Fonts', '/Library/Fonts', path.join(app.getPath('home'), 'Library/Fonts')];
+          for (const d of dirs) {
+            let names = [];
+            try { names = fs.readdirSync(d); } catch (err) { continue; }
+            for (const n of names) {
+              if (!/\.(ttf|otf|ttc|dfont)$/i.test(n)) continue;
+              list.push(n.replace(/\.(ttc|ttf|otf|dfont)$/i, '').replace(/(Bold|Italic|Regular|Light|Medium|Thin|Black|Semibold|UltraBold|Std|Pro)$/i, '').trim());
+            }
+          }
+        } else {
+          const out = await run('fc-list', ['--format=%{family}\\n']);
+          list = out.split(/\r?\n/).flatMap((s) => s.split(',')).map((s) => s.trim()).filter(Boolean);
+        }
+      } catch (err) {
+        log(`[desktop] 系统字体枚举失败：${String(err.message || err).slice(0, 120)}`);
+      }
+      fontCache = [...new Set(list)].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+      log(`[desktop] 系统字体 ${fontCache.length} 个`);
+      return { ok: true, fonts: fontCache };
+    });
+
+    // 分辨率/DPI/缩放比变了（拔副屏、改系统缩放）：DOM 会自己重排，BrowserView 不会 ——
+    // 不重摆它就会停在旧尺寸的洞上，网页块看着就错位（他实测那条）。
+    try {
+      screen.on('display-metrics-changed', () => { bviewResync(); });
+    } catch (err) { /* screen 在 app ready 前不可用，这里已经在 whenReady 内 */ }
+
     /* 自绘顶栏的三颗键 + 菜单动作：全在这里落，动作是白名单，页面传什么都不怕。
        用 fromWebContents 拿发信那个窗口，不拿全局 win —— 以后要是有第二个窗口，
        页面点自己标题栏上的关闭键才不会把主窗口关掉。 */
@@ -1213,6 +1329,7 @@ if (!gotLock) {
         const f = what === 'in' ? clampZoom(now + ZOOM_STEP) : what === 'out' ? clampZoom(now - ZOOM_STEP) : what === 'reset' ? 1 : null;
         if (f === null) return { ok: false, error: `未知缩放动作 ${what}` };
         w.webContents.setZoomFactor(f);
+        bviewResync();   // 缩放一变，浏览器叠加层那块就得按新倍数重摆（他实测的错位就在这）
         log(`[desktop] 缩放 ${what} → ${(f * 100).toFixed(0)}%`);
       } else if (act === 'reload') {
         w.webContents.reload();

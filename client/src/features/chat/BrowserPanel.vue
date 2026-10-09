@@ -40,6 +40,8 @@
       <button class="icon-btn sm" type="button" :disabled="!st.canBack" @click="go(-1)"><i class="fas fa-arrow-left"></i></button>
       <button class="icon-btn sm" type="button" :disabled="!st.canForward" @click="go(1)"><i class="fas fa-arrow-right"></i></button>
       <button class="icon-btn sm" type="button" @click="reload()"><i class="fas fa-rotate-right"></i></button>
+      <!-- 关闭 = 回到默认空白页。「收起」只是藏起这一栏、网页还活着，之前没有真正的关闭入口 -->
+      <button class="icon-btn sm" type="button" title="关闭页面（回到空白页）" @click="closePage"><i class="fas fa-file-circle-xmark"></i></button>
       <input class="k-input mono addr" v-model="addrInput" placeholder="输入域名、IP地址……" @keydown.enter.prevent="navFromBox()" />
       <!-- UA：一颗键管两种形态，图标就是当前形态（AI 的 browser_useragent 工具改的是同一个值） -->
       <button
@@ -73,7 +75,15 @@
       独立窗口模式下这块洞四周各让出 10px：原生视图永远盖在网页上面，DOM 抓手做在它
       底下就点不到，让出来才有地方放边（见下面 .bg-*）。
     -->
-    <div ref="holeEl" class="bc-hole"></div>
+    <div ref="holeEl" class="bc-hole">
+      <!-- 空白页占位：原生视图此时是隐藏的（见 syncBounds 里 blankPage 那条分支），
+           所以这块 DOM 不会被网页盖住。以前关了页面只剩一片白，看不出「这栏活着但没内容」。 -->
+      <div v-if="blankPage" class="bc-blank">
+        <i class="fas fa-globe"></i>
+        <div class="bc-blank-t">空白页</div>
+        <div class="muted">在上方输入网址后回车，或者直接让 AI 打开网页。</div>
+      </div>
+    </div>
     <template v-if="isWin">
       <div
         v-for="e in GRIP_EDGES"
@@ -120,6 +130,8 @@ const props = defineProps({ mode: { type: String, default: 'sidebar' } });
 const isWin = props.mode === 'window';
 // 独立窗口那一扇永远算「展开」：它没有收起这个概念，收起只属于侧栏那一条
 const shown = computed(() => isWin || st.open);
+/** 没有页面或已经关到 about:blank —— 空状态与「藏视图」都按它判 */
+const blankPage = computed(() => !st.url || st.url === 'about:blank');
 const holeEl = ref(null);
 const colEl = ref(null);
 const addrInput = ref('');
@@ -232,6 +244,9 @@ async function attachToSidebar() {
 async function syncBounds() {
   if (!shown.value) { await bv({ op: 'hide' }).catch(() => {}); return; }
   if (!viewReady) return;
+  // 空白页：把原生视图藏起来，让那块 DOM 空状态露出来。视图本体留着（下次导航直接show回来），
+  // 否则用户点「关闭」之后看到的还是一整块白，和「网页挂死」长得一模一样。
+  if (blankPage.value) { await bv({ op: 'hide' }).catch(() => {}); return; }
   const bounds = holeBounds();
   if (!bounds) return;
   await bv({ op: 'bounds', bounds }).catch(() => {});
@@ -369,6 +384,23 @@ async function go(dir) {
   if (dir < 0 && st.canBack) applyState(await bv({ op: 'back' }));
   else if (dir > 0 && st.canForward) applyState(await bv({ op: 'forward' }));
   await waitIdle(8000);
+}
+
+/**
+ * 「关闭」：把这栏送回默认空白页。
+ * 以前只能「收起」—— 栏是藏了，网页还挂在那儿，下次展开又是上一张页面；
+ * 想回到干净状态没有任何入口（他点名的那条）。
+ * 走的就是 AI 那边 browser_close 同一条 nav about:blank，行为一致。
+ */
+async function closePage() {
+  addrInput.value = '';
+  if (!viewReady) { st.url = ''; st.title = ''; return; }
+  try {
+    applyState(await bv({ op: 'nav', url: 'about:blank' }));
+    st.url = 'about:blank';
+    st.title = '';
+    toast('已关闭页面，回到空白页', 'info', 2000);
+  } catch (e) { flash(e.message); }
 }
 
 async function reload(hard) {
@@ -918,6 +950,13 @@ watch(shown, async (v) => {
   syncBounds().catch(() => {});
 });
 
+// 空白页 ↔ 有页面 的来回切换也要重摆视图：
+// 藏起来才能露出那块 DOM 空状态，导航走了就得把位置还回去（hide 是把边界收成 0×0，setBounds 就恢复）。
+watch(blankPage, async () => {
+  await nextTick();
+  syncBounds().catch(() => {});
+});
+
 onBeforeUnmount(() => {
   stopped = true;
   if (statusTimer) clearInterval(statusTimer);
@@ -991,6 +1030,29 @@ onBeforeUnmount(() => {
 .bc-bar .addr { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; }
 /* 主进程的 BrowserView 浮在这块洞上：头部 46 + 地址栏 48，底栏 28 */
 .bc-hole { position: absolute; top: 94px; right: 0; bottom: 28px; left: 0; background: #fff; }
+/* 空白页占位（原生视图此时被藏着，这块才露得出来） */
+.bc-blank {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text-2);
+  text-align: center;
+}
+.bc-blank i {
+  font-size: 26px;
+  opacity: 0.45;
+}
+.bc-blank-t {
+  font-size: 14px;
+  color: var(--text-1);
+}
+.bc-blank .muted { font-size: 12px; line-height: 1.6; }
 /* ---- 独立窗口：整页就是这一栏 ---------------------------------------------
    视图四周各让出 10px，那条带子留给 DOM 抓手（原生视图永远盖在网页上面，
    抓手做在它底下点不到）；顶栏兼作窗口拖拽区，但最上那 10px 让给缩放。 */

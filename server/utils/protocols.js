@@ -32,11 +32,14 @@ function maxTokensOf(provider) {
 
 /* ============================ OpenAI 兼容（现状，直通） ============================ */
 /**
- * 整包只保留**最后一张**图片，更早的图片块换成一句「[过期的图片]」。
+ * 整包只保留**最近两张**图片，更早的图片块换成一句「[过期的图片]」。
  *
  * 为什么要：Agent 每做一步就截一张图，而这些图会作为历史一路跟着后面每一轮请求 ——
  * 十几步之后请求体就大到上游直接拒收（主人实测到的就是「最终请求过大被服务端拒收」）。
  * 旧图对模型也没有增量价值：它已经看过并据此做了下一步，画面早变了。
+ * 为什么是两张不是一张：只带一张会把「上一张」当场挤掉，而那一张模型可能还没看过
+ * （截图那次的请求被 429 重发、或那一轮根本没轮到看图）—— 等于剥夺权限。带两张 = 每张
+ * 至少两次连续请求里出现过，才算「模型看过了」再换占位。
  *
  * 三条实现约束：
  *  · 只在出发前裁剪，**不动传进来的数组**（payload 在思考变体重试时会被复用，就地改会把
@@ -44,27 +47,55 @@ function maxTokensOf(provider) {
  *  · 落库和前端显示走的不是这条路，所以用户在轨迹里仍能看到每一步那张图。
  *  · 占位文字要留：整条消息只剩「[过期的图片]」时，Anthropic 会拒绝空 content 的块。
  */
+/* 图片块里的数据到底能不能用：空 base64（截图写坏了 / 上游解码不出东西）必须算「没有图」。
+   不挡的话它会当上「最近一张」，把更早那张有效图挤成 [过期的图片] —— 模型看到的就是一张空图。 */
+function imagePayload(p) {
+  if (!p) return '';
+  if (p.type === 'image_url') return String((p.image_url && p.image_url.url) || '');
+  if (p.type === 'image') return String((p.source && p.source.data) || '');
+  return '';
+}
+function imageUsable(p) {
+  const s = imagePayload(p);
+  const i = s.indexOf('base64,');
+  const b64 = (i >= 0 ? s.slice(i + 7) : s).trim();
+  return b64.length >= 16;
+}
+
+/* 一次请求最多带几张图：见 onlyLatestImage。改这里要同步改 routes/ai.js 的 packageTokens（估算按同一张数算）。 */
+const MAX_IMAGES_PER_REQUEST = 2;
+
 function onlyLatestImage(messages) {
   const list = Array.isArray(messages) ? messages : null;
   if (!list) return messages;
-  // 先找最后一张图在哪条消息的哪个块
-  let lastMsg = -1; let lastPart = -1;
+  // 先数清「哪几张是有效图」。留 2 张而不是 1 张：只带一张时，上一张刚被裁掉、模型却还没
+  // 有机会看它（截图那次请求常被 429 重发、或模型那轮根本没轮到看图）—— 等于把没看过的图
+  // 直接剥夺。带最近两张，任何一张都至少能在两次连续请求里出现，看过的才会被换占位。
+  const keep = [];
+  let sawImage = false;
   for (let i = 0; i < list.length; i++) {
     const c = list[i] && list[i].content;
     if (!Array.isArray(c)) continue;
     for (let j = 0; j < c.length; j++) {
       const p = c[j];
-      if (p && (p.type === 'image_url' || p.type === 'image')) { lastMsg = i; lastPart = j; }
+      if (p && (p.type === 'image_url' || p.type === 'image')) {
+        sawImage = true;
+        if (imageUsable(p)) keep.push(`${i}:${j}`);
+      }
     }
   }
-  if (lastMsg < 0) return messages;          // 一张图都没有：原样返回，别白拷贝一遍
+  if (!sawImage) return messages;
+  const kept = new Set(keep.slice(-MAX_IMAGES_PER_REQUEST));
   return list.map((msg, i) => {
     const c = msg && msg.content;
     if (!Array.isArray(c)) return msg;
     let touched = false;
     const parts = c.map((p, j) => {
       const isImg = p && (p.type === 'image_url' || p.type === 'image');
-      if (!isImg || (i === lastMsg && j === lastPart)) return p;
+      if (!isImg) return p;
+      // 有效图只留最近那两张；空图一律换成占位文字（Anthropic 会把空 dataURL 的块整个丢掉，
+      // 留着只会让请求里一张图都没有，而正文还写着一堆「[过期的图片]」）
+      if (isImg && kept.has(`${i}:${j}`)) return p;
       touched = true;
       return { type: 'text', text: '[过期的图片]' };
     });
@@ -530,10 +561,10 @@ function anthropicVariants(norm) {
 }
 
 module.exports = {
-  STYLES, DEFAULT_MAX_TOKENS,
+  STYLES, DEFAULT_MAX_TOKENS, MAX_IMAGES_PER_REQUEST,
   styleOf, customConfig, maxTokensOf,
   buildChatRequest, createChunkNormalizer, normalizeReply,
   listRequest, parseModelList, anthropicVariants,
   // 暴露给测试
-  _internal: { toAnthropicMessages, anthropicThinking, anthropicRequest, anthropicReplyToOpenai, createAnthropicNormalizer, getPath, renderTemplate, customRequest, customVars, createCustomNormalizer }
+  _internal: { toAnthropicMessages, anthropicThinking, anthropicRequest, anthropicReplyToOpenai, createAnthropicNormalizer, getPath, renderTemplate, customRequest, customVars, createCustomNormalizer, onlyLatestImage, imageUsable }
 };

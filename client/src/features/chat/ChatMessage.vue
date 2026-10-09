@@ -35,8 +35,10 @@
              marked + DOMPurify + hljs（实测一轮 30 段渲染 30 次），「收起」不等于「没加载」。
              外面这层 template 带着下标 i 走，里面的 v-else-if 链仍然按整条时间线判，位置不会串。 -->
         <template v-if="!hiddenByFold(i)">
-        <details v-if="item.kind === 'reason' && item.text" class="reason" :open="busy || item.open || prefs.reasonOpen">
-          <summary>思考过程</summary>
+        <!-- 思考卡在流式期间也不再自动摊开：以前 :open 里挂着 busy，所以「思考默认展开」没勾也照样展开。
+             折叠只是不显示，内容仍在收、仍入库、仍进上下文；卡片只留一个标题（跑的时候带转圈 +「思考中…」）。 -->
+        <details v-if="item.kind === 'reason' && item.text" class="reason" :open="!!(item.open || prefs.reasonOpen)">
+          <summary><i :class="busy ? 'fas fa-circle-notch fa-spin' : 'fas fa-brain'"></i> {{ busy ? '思考中…' : '思考过程' }}</summary>
           <pre>{{ item.text }}</pre>
         </details>
 
@@ -108,13 +110,24 @@
             <div
               v-if="item.image_token"
               class="step-shot"
-              role="button"
-              tabindex="0"
-              title="双击放大查看（滚轮缩放、拖动平移、Esc 关闭）"
-              @dblclick="iv.openViewer({ url: `/api/ai/chat/image/${item.image_token}`, title: `${item.name || '截图'} · 双击缩放` })"
-              @keydown.enter="iv.openViewer({ url: `/api/ai/chat/image/${item.image_token}`, title: item.name || '截图' })"
+              :class="{ dead: deadShots[item.image_token] }"
+              :role="deadShots[item.image_token] ? null : 'button'"
+              :tabindex="deadShots[item.image_token] ? -1 : 0"
+              :title="deadShots[item.image_token] ? '' : '双击放大查看（滚轮缩放、拖动平移、Esc 关闭）'"
+              @dblclick="deadShots[item.image_token] || iv.openViewer({ url: `/api/ai/chat/image/${item.image_token}`, title: `${item.name || '截图'} · 双击缩放` })"
+              @keydown.enter="deadShots[item.image_token] || iv.openViewer({ url: `/api/ai/chat/image/${item.image_token}`, title: item.name || '截图' })"
             >
-              <img :src="`/api/ai/chat/image/${item.image_token}`" alt="截图" loading="lazy" />
+              <!-- 图片地址是服务端内存里的 30 分钟 token：重启或超时之后 <img> 会拿到 404。
+                   以前留一个破图图标 + 「截图」两个字，看着像「AI 截了张打不开的图」；
+                   现在直接说明这张已被清理（他要的口径），也不再让它可点/可双击。 -->
+              <img
+                v-if="!deadShots[item.image_token]"
+                :src="`/api/ai/chat/image/${item.image_token}`"
+                alt=""
+                loading="lazy"
+                @error="deadShots[item.image_token] = true"
+              />
+              <span v-else class="shot-dead">图片已被清理</span>
             </div>
             <button v-if="preview(item)" class="copy-code" type="button" title="复制" @click.stop="copyText(preview(item))">
               <i class="fas fa-copy"></i>
@@ -275,6 +288,8 @@ async function copyMention(abs) {
 
 const openDiff = reactive({});
 const textOpen = reactive({});
+// 加载失败的截图 token（内存表 30 分钟就清，重启也清）：标出来换成一句人话，别留破图标
+const deadShots = reactive({});
 
 /** 托管模式下的说话人标签：普通对话仍是「你 / AI」，载荷一字不变 */
 const whoLabel = computed(() => {
@@ -295,17 +310,29 @@ function diffOpen(i) {
 const timeline = computed(() => {
   let items;
   if (Array.isArray(props.timeline) && props.timeline.length) {
-    // 关键：step 的展示字段从 ref（steps 里的活对象）取，撤销等状态变化才会即时回写
+    // 关键：step 的展示字段从 ref（steps 里的活对象）取，撤销等状态变化才会即时回写。
+    // 条目自己没带 ref 时退回它本身 —— 不然一条没有 ref 的 step 会被展成空对象（type 全丢，整条渲染不出来）
     items = props.timeline.map((item) =>
-      item.kind === 'step' ? { kind: 'step', ...item.ref, ref: item.ref || item } : item
+      item.kind === 'step' ? { kind: 'step', ...(item.ref || item), ref: item.ref || item } : item
     );
   } else {
+    // 重进会话这一路：库里只有 content / reasoning / steps 三份，顺序全靠 steps 里
+    // type:'text' 的那几条（第五十五轮 #241 起才存）。老消息没有这些条目，仍退回
+    // 「工具卡在前、整段正文在尾」的旧摆法。
     const out = [];
     if (props.reasoning && String(props.reasoning).trim()) {
       out.push({ kind: 'reason', text: String(props.reasoning) });
     }
-    for (const s of props.steps || []) out.push({ kind: 'step', ...s, ref: s });
-    if (props.content) out.push({ kind: 'text', text: props.content });
+    let hasSeg = false;
+    for (const s of props.steps || []) {
+      if (s && s.type === 'text') {
+        hasSeg = true;
+        if (s.text) out.push({ kind: 'text', text: String(s.text) });
+        continue;
+      }
+      out.push({ kind: 'step', ...s, ref: s });
+    }
+    if (!hasSeg && props.content) out.push({ kind: 'text', text: props.content });
     items = out;
   }
   // 工具调用行与它的结果行成对出现时，只留结果行（编辑卡一张就够）
@@ -341,7 +368,8 @@ watch(mermaidSig, drawMermaid);
 /* 长回合向上折叠（#231 三条里的第二条）：一轮里段落一多，就把**上面**那些折起来，只留最近 ROUND_KEEP 段。
    流式时 foldFrom 跟着数组长度往前推，所以「最新那一段永远在眼前」，不必手动下翻；
    方向特意选向上而不是向下 —— 向下折会把刚吐出来的结论藏掉（原来长回复的 clamped 就是折下面，只适合单段正文）。
-   隐藏用 v-show 而不是切数组：时间线的下标被审阅/折叠组/光标到处用着，切一刀就会串位。 */
+   隐藏用 v-if 而不是切数组：时间线的下标被审阅/折叠组/光标到处用着，切一刀就会串位。
+   已知遮蔽（他这轮说先不修）：整组落在 foldFrom 之上时连组头也不渲染，于是看不出「工具调用自动折叠」勾选的差别。 */
 const ROUND_KEEP = 14;
 const roundOpen = ref(false);
 const foldFrom = computed(() => (roundOpen.value ? 0 : Math.max(0, timeline.value.length - ROUND_KEEP)));
@@ -358,16 +386,30 @@ const hiddenByFold = (i) => {
    「N 步工具调用 · 展开」；正在流式输出时永远不折，否则用户看不见 AI 在干嘛。
    只有一步不成组 —— 收成一行反而更难看。 */
 const foldOpen = reactive({});
+/* 只有真的工具调用才算「一步」。note（429 限流重试、越界说明、注入提示这些过程消息）、
+   question、insert、compress 都不是模型在动手 —— 以前只排了 compress，
+   结果两条连排的 note 就能自成一组「N 步工具调用」，把步数虚报出来。 */
+const isToolStep = (it) => !!it && it.kind === 'step' && !it.hide && (it.type === 'tool' || it.type === 'result');
+/* 调用行与结果行成对时调用行被 hide 掉了（上面那个配对循环），但它仍在数组里占位：
+   连排判断必须把它算进同一段，否则 [调用,结果,调用,结果] 这种最常见的形状会被拆成一堆长度 1 的段，
+   「N 步工具调用」这个折叠永远出不来。步数只数可见的那几张卡（一次调用一张结果）。 */
+const isGluedToolLine = (it) => !!it && it.kind === 'step' && it.hide;
 const stepGroup = computed(() => {
   const map = new Map();
   const tl = timeline.value || [];
   let start = -1;
+  let count = 0;
   for (let i = 0; i <= tl.length; i++) {
-    const isStep = i < tl.length && tl[i].kind === 'step' && !tl[i].hide && tl[i].type !== 'compress';
-    if (isStep) { if (start < 0) start = i; continue; }
+    const it = tl[i];
+    if (isToolStep(it) || isGluedToolLine(it)) {
+      if (start < 0) start = i;
+      if (isToolStep(it)) count += 1;
+      continue;
+    }
     if (start >= 0) {
-      for (let j = start; j < i; j++) map.set(j, { start, len: i - start });
+      for (let j = start; j < i; j++) map.set(j, { start, len: count });
       start = -1;
+      count = 0;
     }
   }
   return map;
@@ -493,8 +535,10 @@ const fmtTok = (n) => (Number(n) >= 1000 ? `${(Number(n) / 1000).toFixed(1)}k` :
 function compressLine(s) {
   const pct = s.percent != null ? `${s.percent}%` : '';
   if (s.phase === 'start') {
-    const from = s.from ? `，窗口来自${s.from}` : '';
-    return `上下文 ${fmtTok(s.used)}/${fmtTok(s.limit)} tok（${pct}${from}）已达 80% → 先压缩再回答`;
+    const src = s.from ? `，窗口来自${s.from}` : '';
+    // 手动压缩没有「80% 这条线」，写成已达 80% 就是假话；自动压缩才用下面那句。
+    if (s.manual) return `正在压缩上下文… ${fmtTok(s.used)}/${fmtTok(s.limit)} tok（${pct}${src}）`;
+    return `上下文 ${fmtTok(s.used)}/${fmtTok(s.limit)} tok（${pct}${src}）已达 80% → 先压缩再回答`;
   }
   if (s.phase === 'done') {
     // 压完锚点作废、要等下一次上游回执才重新校准 → 这个「剩多少」在没锚点时只是正文口径，标清楚
@@ -711,6 +755,21 @@ function preview(s) {
   border-radius: var(--radius-xs);
   background: var(--bg-sunken);
 }
+/* 图已经不在内存里：给一句说明，不再给破图标，也不再响应双击 */
+.step-shot.dead {
+  line-height: 1.5;
+  cursor: default;
+}
+.shot-dead {
+  display: inline-block;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-sunken);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.shot-dead i { margin-right: 6px; }
 .path {
   font-family: var(--mono);
   font-size: 11px;

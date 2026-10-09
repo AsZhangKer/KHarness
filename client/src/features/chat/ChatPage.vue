@@ -4,8 +4,8 @@
     :class="{ immersive, dragging, 'rail-open': railOpen, 'dock-open': dockOpen }"
     :style="railStyle"
     @click="menu = null; titleMenu = false"
-    @dragenter.prevent="dragging = true"
-    @dragover.prevent="dragging = true"
+    @dragenter.prevent="onDragEnter"
+    @dragover.prevent="onDragOver"
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
   >
@@ -203,7 +203,9 @@
         <i class="fas fa-circle-exclamation"></i>
         <span class="err-text">{{ lastError }}</span>
         <button class="k-btn sm" type="button" title="复制完整报错（时间 / 页面 / 概括 / 详情 / 最近日志）" @click="copyLastError">复制详情</button>
-        <button class="k-btn sm" type="button" @click="onRetryLast">撤回重发</button>
+        <button class="k-btn sm" type="button" :title="lastFailedMsg?.retryExhausted ? '自动重试已用尽：撤回本轮并按原文重发' : '撤回本轮并按原文重发'" @click="onRetryLast">
+          {{ lastFailedMsg?.retryExhausted ? '重试' : '撤回重发' }}
+        </button>
         <button class="k-btn sm ghost" type="button" @click="dismissError">忽略</button>
       </div>
 
@@ -271,6 +273,7 @@
       :insert-items="store.state.insertItems"
       :context-used="store.state.contextUsed"
       :context-limit="store.state.contextLimit"
+      :pressing="store.state.pressing"
       :lab-git="!!labFlags.gitPreview"
       :dock-w="dockW"
       @undo="onUndo"
@@ -278,6 +281,7 @@
       @press="store.pressChat"
       @set-context="store.setContext"
       @clear-insert="store.clearInserts"
+      @remove-insert="store.removeInsert"
       @git-action="onGitAction"
     />
 
@@ -395,12 +399,23 @@
     <KModal :open="projModal" :title="projForm.remote_id ? '新建远端项目' : '新建项目'" width="480px" @close="projModal = false">
       <div class="form">
         <KInput v-model="projForm.name" label="项目名称" block placeholder="例如：my-project" />
-        <KInput
-          v-model="projForm.root_path"
-          :label="projForm.remote_id ? '远端目录（绝对路径）' : '项目根目录（绝对路径）'"
-          block
-          :placeholder="projForm.remote_id ? '/srv/app' : 'D:\\projects\\foo'"
-        />
+        <div class="path-row">
+          <KInput
+            v-model="projForm.root_path"
+            :label="projForm.remote_id ? '远端目录（绝对路径）' : '项目根目录（绝对路径）'"
+            block
+            :placeholder="projForm.remote_id ? '/srv/app' : 'D:\\projects\\foo'"
+          />
+          <!-- 桌面端才给这颗键：系统目录选择框必须由主进程弹（网页模式没这能力，藏掉比摆一颗死键好）。
+               远端项目也藏掉：选的是本机目录，填到远端路径上是错的。 -->
+          <button
+            v-if="canPickDir && !projForm.remote_id"
+            class="k-btn ghost sm pick-dir"
+            type="button"
+            title="在窗口里选一个文件夹"
+            @click="pickProjectDir"
+          ><i class="fas fa-folder-open"></i> 浏览…</button>
+        </div>
         <div v-if="projForm.remote_id" class="muted hint-line">
           <i class="fas fa-server"></i>
           建在 {{ projHost ? `${projHost.name}（${projHost.username}@${projHost.host}）` : '所选连接' }} 上；
@@ -714,15 +729,16 @@ const lastUnfinished = computed(() => {
   return last && last.role === 'assistant' && last.unfinished;
 });
 
-/** 最近一条回复的错误（红条 + 撤回重发）；生成中不显示 */
-const lastError = computed(() => {
-  if (store.state.busy) return '';
+/** 最近一条出错的回复（红条 + 那颗重试键）；生成中不显示 */
+const lastFailedMsg = computed(() => {
+  if (store.state.busy) return null;
   const list = store.state.messages;
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].role === 'assistant') return list[i].errorText || '';
+    if (list[i].role === 'assistant') return list[i].errorText ? list[i] : null;
   }
-  return '';
+  return null;
 });
+const lastError = computed(() => lastFailedMsg.value?.errorText || '');
 
 function lastAssistantMsg() {
   const list = store.state.messages;
@@ -942,6 +958,10 @@ function onStreamScroll() {
   if (scrollAnimActive) return;
   const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
   showDown.value = gap > 80;
+  // 动画刚收尾那一瞬：内容在这 0.5 秒里还在长，我们写下去的 scrollTop 已经落后于新的底部，
+  // 这一次 scroll 事件是「我们自己造成的」而不是用户上翻 —— 有个短暂豁免窗，别把它读成用户意图，
+  // 否则就是他报的「点了回到底部反而不再跟随」。
+  if (Date.now() < ignoreUnpinUntil) return;
   // 用户上翻就停止跟随，回到底部附近自动恢复跟随
   pinnedToBottom.value = gap <= 80;
 }
@@ -964,37 +984,51 @@ function scrollBottom(force = false) {
  * 流式跟随仍然走上面的 scrollBottom（瞬移），否则每来一个字都在动画，读起来是抖。
  */
 let scrollAnim = null;
+let ignoreUnpinUntil = 0;   // 「这次 scroll 是我们自己滚出来的」豁免窗（见 onStreamScroll）
 function stopScrollAnim() {
   if (scrollAnim) { cancelAnimationFrame(scrollAnim); scrollAnim = null; }
   scrollAnimActive = false;
+}
+/** 把「用户自己动滚轮/触摸」那两个一次性监听摘干净：{ once:true } 只在事件真的发生时才自动解绑，
+ *  动画自然结束时它们还没触发 —— 不摘就会留到下一次点击上，新动画刚起步就被上一轮的 giveUp 掐掉。 */
+let scrollAnimReleasers = [];
+function releaseScrollAnimListeners() {
+  for (const off of scrollAnimReleasers.splice(0)) off();
 }
 function scrollBottomAnimated() {
   const el = streamEl.value;
   if (!el) return;
   if (scrollAnim) cancelAnimationFrame(scrollAnim);
-  const to = el.scrollHeight - el.clientHeight;
+  releaseScrollAnimListeners();
   const from = el.scrollTop;
-  const dist = to - from;
   const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   pinnedToBottom.value = true;
   showDown.value = false;
-  if (dist <= 4 || reduced) { el.scrollTop = to; return; }
+  // 目标是「滚动过程中的最新底部」而不是点下去那一瞬的底部：流式还在吐字时底部一直在长
+  const bottom = () => el.scrollHeight - el.clientHeight;
+  if (reduced) { el.scrollTop = bottom(); ignoreUnpinUntil = Date.now() + 300; return; }
   const D = 500;
   const t0 = performance.now();
+  const startGap = bottom() - from;
   const ease = (p) => 1 - Math.pow(1 - p, 3);   // easeOutCubic：一起步就快，末尾带衰减的惯性
   scrollAnimActive = true;
-  // 用户在这 0.5 秒里自己动了滚轮/触摸 → 立刻撒手，不跟他抢滚动条（scroll 事件这段被屏蔽，只能听输入）
-  const giveUp = () => stopScrollAnim();
-  el.addEventListener('wheel', giveUp, { once: true, passive: true });
-  el.addEventListener('touchstart', giveUp, { once: true, passive: true });
+  const giveUp = () => { stopScrollAnim(); releaseScrollAnimListeners(); };
+  el.addEventListener('wheel', giveUp, { passive: true });
+  el.addEventListener('touchstart', giveUp, { passive: true });
+  scrollAnimReleasers = [
+    () => el.removeEventListener('wheel', giveUp),
+    () => el.removeEventListener('touchstart', giveUp),
+  ];
   const step = (now) => {
     const p = Math.min(1, (now - t0) / D);
-    el.scrollTop = from + dist * ease(p);
+    // 起点固定、终点跟着内容长：距离按当前值重算，短内容（startGap 很小）就直接落底
+    el.scrollTop = startGap <= 4 ? bottom() : from + (bottom() - from) * ease(p);
     if (p < 1) { scrollAnim = requestAnimationFrame(step); return; }
-    el.removeEventListener('wheel', giveUp);
-    el.removeEventListener('touchstart', giveUp);
+    releaseScrollAnimListeners();
     scrollAnim = null;
     scrollAnimActive = false;
+    // 收尾这一下算「落到底」，紧接着的 scroll 事件不能反过来把跟随关掉
+    ignoreUnpinUntil = Date.now() + 300;
   };
   scrollAnim = requestAnimationFrame(step);
 }
@@ -1083,6 +1117,19 @@ const chatModal = ref(false);
 const projForm = reactive({ name: '', root_path: '', remote_id: 0 });
 const chatForm = reactive({ title: '', project_id: null });
 const projHost = computed(() => remoteStore.state.hosts.find((h) => h.id === projForm.remote_id) || null);
+
+/** 桌面端才有系统目录选择框（主进程弹）；网页模式不摆死键 */
+const canPickDir = typeof window !== 'undefined' && !!(window.khDesktop && window.khDesktop.pickDir);
+async function pickProjectDir() {
+  try {
+    const r = await window.khDesktop.pickDir({ title: '选择项目根目录', defaultPath: projForm.root_path || undefined });
+    if (r && r.ok && r.path) {
+      projForm.root_path = r.path;
+      // 名字空着时用目录名填上，省一次打字（他抱怨的就是「得手输绝对路径」）
+      if (!projForm.name) projForm.name = String(r.path).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+    } else if (r && !r.ok) toast(r.error || '没拿到目录', 'warn');
+  } catch (e) { toastErr(e, '打开目录选择框失败'); }
+}
 
 const hostModal = ref(false);
 const hostEditing = ref(null);
@@ -1569,6 +1616,27 @@ async function onUpload() {
 }
 
 const dragging = ref(false);
+
+/**
+ * 遮罩只在「真的拖的是文件」时亮。
+ * 以前 dragenter/dragover 一律 dragging=true，于是在会话栏里拖动条目排序（HTML5 draggable，
+ * types 只有 text/plain）也会把「拖动到此处上传文件」那块遮罩叫出来 —— 他报的那条。
+ */
+const hasFiles = (e) => {
+  const t = e?.dataTransfer?.types;
+  if (!t) return false;
+  return Array.from(t).includes('Files');
+};
+
+function onDragEnter(e) {
+  if (hasFiles(e)) dragging.value = true;
+}
+
+function onDragOver(e) {
+  // 没在亮就不碰：内部排序拖拽每帧都触发 dragover，来回写响应式值白白惹渲染
+  if (dragging.value && !hasFiles(e)) dragging.value = false;
+  else if (!dragging.value && hasFiles(e)) dragging.value = true;
+}
 
 function onDragLeave(e) {
   if (e?.currentTarget && !e.currentTarget.contains(e.relatedTarget)) {
@@ -2101,6 +2169,21 @@ function applyPool() {
   align-items: flex-start;
 }
 .hint-line i { margin-top: 2px; }
+/* 项目根目录那一行：输入框吃满宽度，「浏览…」贴在右下与输入框对齐（KInput 带标题，标题占掉一行） */
+.path-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.path-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.path-row .pick-dir {
+  flex: 0 0 auto;
+  margin-bottom: 1px;
+  white-space: nowrap;
+}
 .toggle-btn {
   display: inline-flex;
   align-items: center;

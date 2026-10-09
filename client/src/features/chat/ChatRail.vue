@@ -189,7 +189,7 @@
         </div>
       </div>
 
-      <div v-if="!filtering || shownFreeChats.length" class="tree-label" style="margin-top:8px">最近</div>
+      <div v-if="!filtering || shownFreeChats.length" class="tree-label" style="margin-top:8px">自由会话</div>
       <button
         v-for="c in shownFreeChats"
         :key="'f' + c.id"
@@ -455,30 +455,40 @@ function onDragEnd() {
 .drop-above::before { top: -1px; }
 .drop-below::after { bottom: -1px; }
 
-/* 左栏：参考图侧栏——近黑底、弱分隔、小圆角列表 */
+/* 左栏：改成与右栏 .dock 同一种「悬浮卡片」—— 外层只留边、透明，卡片本身画在 .rail-inner 上。
+   （原来它是贴边满高、实底 + 右边框，和右栏那种浮在背景上的观感不一致，他要统一。） */
 .rail {
   width: var(--rail-w, 260px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-soft);
-  background: var(--bg);
+  background: transparent;
+  border-right: 0;
   min-height: 0;
   position: relative;   /* 把手要挂在右边缘上 */
+  padding: 10px 0 10px 10px;
   transition: width var(--dur) var(--ease);
 }
 /* 收起 = 只剩一颗把手；宽度走过渡，栏内内容直接让位（和右栏 .dock 一致） */
-.rail.collapsed { width: 36px; }
+.rail.collapsed { width: 36px; padding-left: 0; }
 /* 贴边临时探出：老老实实占排版位置，把后面那一层推过去。
    原来用 position:absolute 盖在上面 —— 云母主题下 --bg 是半透明的，
    聊天记录会直接从栏背后透出来，两层文字叠在一起没法读。 */
-.rail.collapsed.peek { width: var(--rail-w, 260px); }
+.rail.collapsed.peek { width: var(--rail-w, 260px); padding: 10px 0 10px 10px; }
 .rail-inner {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   min-width: 0;
+  /* 卡片本体：与 .dock-inner 同一组变量，观感才真的一致 */
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+  /* 卡片四角要真的裁住里面的行背景（.brand / 列表行的 hover），和 .dock-inner 同一做法。
+     栏里的右键菜单不在这一层 DOM 内（由 ChatPage 画），所以裁不到菜单。 */
+  overflow: hidden;
 }
 .rail-toggle {
   position: absolute;

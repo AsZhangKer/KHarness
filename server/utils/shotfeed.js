@@ -57,12 +57,34 @@ function shotFromFile(file, put, opts = {}) {
   try { buf = fs.readFileSync(abs); } catch (e) {
     return { note: `[图片未回喂] 读取失败：${String(e.message || e).slice(0, 120)}` };
   }
+  /* 空图 / 半截文件必须挡在这里。
+     上游拿到的是一张解不出内容的图，模型只会说「图片为空 / 已失效」，而这一轮的 token 已经花掉了；
+     更糟的是 protocols.onlyLatestImage 会把这张空图当成「最近一张」选中，把更早的有效图全换成占位文本。
+     所以：0 字节、小到不可能是截图、文件头与扩展名对不上（PNG/JPEG/GIF/WEBP 魔数）一律只回文字说明。 */
+  const bad = imageSanity(buf, abs);
+  if (bad) return { note: `[图片未回喂] ${bad}：${file}` };
   // MIME 跟着文件后缀走，不能写死 png：外壳按实验室「图片大小控制」压缩后落盘的是 .jpg，
   // 用 png 标一条 JPEG 数据，上游要么当坏图丢掉、要么解码成灰块 —— 模型会说它「看到了图」其实没看到。
   const mime = /\.jpe?g$/i.test(abs) ? 'image/jpeg' : /\.gif$/i.test(abs) ? 'image/gif'
     : /\.webp$/i.test(abs) ? 'image/webp' : 'image/png';
   const token = put(`data:${mime};base64,${buf.toString('base64')}`);
   return { token, marker: `[[img:${token}]]`, file: abs, bytes: buf.length, mime };
+}
+
+/** 一张真截图的最小尺寸：连最省的 PNG 也远大于这个数（1KB 以下是被截断/写坏的痕迹） */
+const MIN_IMAGE_BYTES = 1024;
+
+/** 回一句「为什么这张图不能用」；null = 看起来是张正常的图 */
+function imageSanity(buf, abs) {
+  if (!buf || !buf.length) return '文件是空的（截图没写进去）';
+  if (buf.length < MIN_IMAGE_BYTES) return `只有 ${buf.length} 字节，不像一张完整截图`;
+  const head = buf.subarray(0, 12);
+  const png = head[0] === 0x89 && head.toString('ascii', 1, 4) === 'PNG';
+  const jpg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  const gif = head.toString('ascii', 0, 3) === 'GIF';
+  const webp = head.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  if (png || jpg || gif || webp) return null;
+  return `文件头不是任何已知图片格式（前 4 字节 ${head.subarray(0, 4).toString('hex')}），多半是写坏了或被别的程序占了`;
 }
 
 /**
@@ -102,4 +124,4 @@ function feedTextWithShot(result, echoText, put, opts = {}) {
   return { text: `${shot.marker}\n${echoText}`, token: shot.token };
 }
 
-module.exports = { shotFromFile, feedTextWithShot, insideShotDir, claimForChat, SHOT_DIRS, MAX_BYTES };
+module.exports = { shotFromFile, feedTextWithShot, insideShotDir, claimForChat, imageSanity, SHOT_DIRS, MAX_BYTES };

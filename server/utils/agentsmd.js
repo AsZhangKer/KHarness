@@ -82,11 +82,13 @@ function resolveAgentsFile(dir, opts = {}) {
   return path.join(d, NAMES[0]);
 }
 
-// 估算 token（经验公式：CJK 约 0.6 tok/字，其余约 0.25 tok/字符；仅用于无 API 真实值时的兜底）
+// 估算 token：口径「宁多不少」（主人定的）。中文按 1 tok/字、其余按 0.3 tok/字符 —— 各 tokenizer
+// 对中文普遍落在 0.6~1.2 之间，取 0.6 会低估整包、让界面显示个位数百分比而模型那边已经撑爆。
+// 估高一点的代价是提前压缩（少烧一点上下文精度），估低了是直接报错罢工，两害取其轻。
 function estimateTokens(text) {
   const s = String(text || '');
-  const cjk = (s.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) || []).length;
-  return Math.ceil(cjk * 0.6 + (s.length - cjk) * 0.25);
+  const cjk = (s.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  return Math.ceil(cjk * 1 + (s.length - cjk) * 0.3);
 }
 
 /**

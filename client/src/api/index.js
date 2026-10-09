@@ -111,11 +111,12 @@ export const aiApi = {
   setCwd: (path, chat_id, base) => http.post('/ai/chat/cwd', { path, chat_id, base }).then(pick),
   // @文件提及的候选：本地列 fs、远程列 SFTP，只列一层（输入框补全用）
   fsLs: (params) => http.get('/ai/fs/ls', { params, timeout: 15000 }).then(pick),
-  approve: (b) => http.post('/ai/chat/approve', b, { timeout: 60000 }).then(pick),
-  answerQuestion: (b) => http.post('/ai/chat/answer', b, { timeout: 30000 }).then(pick),
+  // silent：审批/回答点下去却撞上 404（已超时）时，store 自己会说一句「已超时」，
+  // 不该每次都甩一版含堆栈和台账的全量报错窗（他报的那串 404 就是这么来的）
+  approve: (b, silent) => http.post('/ai/chat/approve', b, { timeout: 60000, silent: !!silent }).then(pick),
+  answerQuestion: (b, silent) => http.post('/ai/chat/answer', b, { timeout: 30000, silent: !!silent }).then(pick),
   toolTimeout: (chat_id) => http.post('/ai/chat/tool-timeout', { chat_id }, { timeout: 30000 }).then(pick),
-  // 不走 pick：要把「用哪个模型压的、摘要多少字」这句 message 带回界面
-  pressChat: (b) => http.post('/ai/chat/press', b, { timeout: 120000 }),
+  // 手动压缩不在这里：它改成 SSE 了（chatStream.openPressStream），普通请求看不到进度
   setContext: (b) => http.post('/ai/chat/context', b, { timeout: 120000 }).then(pick),
   systemNotify: (b) => http.post('/ai/notify', b, { timeout: 25000 }).then(pick),
   retractChat: (b) => http.post('/ai/chat/retract', b, { timeout: 60000 }).then(pick),
@@ -201,6 +202,7 @@ export const aiApi = {
   getInsert: (chatId) => http.get(`/ai/chats/${chatId}/insert`).then(pick),
   addInsert: (chatId, text) => http.post(`/ai/chats/${chatId}/insert`, { text }).then(pick),
   clearInsert: (chatId) => http.delete(`/ai/chats/${chatId}/insert`).then(pick),
+  removeInsert: (chatId, index) => http.delete(`/ai/chats/${chatId}/insert/${index}`).then(pick),
   getChatSkills: (chatId) => http.get(`/ai/chats/${chatId}/skills`).then(pick),
   setChatSkills: (chatId, loaded) => http.put(`/ai/chats/${chatId}/skills`, { loaded }).then(pick),
   getSkills: () => http.get('/ai/skills').then(pick),
@@ -266,6 +268,7 @@ export const aiApi = {
 export const settingsApi = {
   getAll: () => http.get('/settings').then(pick),
   update: (b) => http.put('/settings', b).then(pick),
+  appInfo: () => http.get('/settings/app-info').then(pick),
 };
 
 export default { aiApi, settingsApi };

@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('khDesktop', {
   clipboardWrite: (text) => ipcRenderer.invoke('kh:clipboard-write', { text }),
   // 内置浏览器：视图本体是主进程里的 BrowserView，页面只报位置、收发事件
   bview: (msg) => ipcRenderer.invoke('kh:bview', msg),
+  // 「浏览…」选目录（新建项目用）与系统字体表（外观页字体下拉用）：都得主进程办
+  pickDir: (opts) => ipcRenderer.invoke('kh:pick-dir', opts || {}),
+  systemFonts: (opts) => ipcRenderer.invoke('kh:system-fonts', opts || {}),
   onBview: (cb) => {
     const h = (e, data) => cb(data);
     ipcRenderer.on('kh:bview-event', h);

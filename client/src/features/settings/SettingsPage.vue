@@ -52,6 +52,7 @@
         <KInput v-model="cmdTimeout" label="命令超时（秒，0=不限）" type="number" block />
         <KInput v-model="defaultContext" label="默认上下文窗口（token）" type="number" block />
         <KInput v-model="rlRetryMax" label="上游 429 最大重试" type="number" block />
+        <KInput v-model="gwRetryMax" label="上游不可用（500/502/503/504/524）最大重试" type="number" block />
         <button class="k-btn primary sm" type="button" @click="saveUpstream">
           <i class="fas fa-floppy-disk"></i> 保存上游设置
         </button>
@@ -707,7 +708,7 @@
       <div class="muted">
         本地 AI Harness：模型管理 / 延迟测试 / Playground（Agent 工具调用、项目会话、任务面板、用量与轨迹）。
       </div>
-      <div class="row"><span class="muted">前端</span><span>NewUI-dev 重构版</span></div>
+      <div class="row"><span class="muted">版本号</span><span class="mono">{{ versionLabel }}</span></div>
       <div class="row"><span class="muted">形态</span><span>{{ isDesktop ? '桌面端（Electron）' : '网页端（浏览器直连本机服务）' }}</span></div>
       <div class="row"><span class="muted">文档</span><span>README.md / TOOLS-CALLING.md</span></div>
     </section>
@@ -926,7 +927,10 @@ const shellCandidates = ref([]);
 const shellCustom = ref('');
 const cmdTimeout = ref(360);
 const defaultContext = ref(0);
-const rlRetryMax = ref(2);
+// 默认值和后端一致（rl_retry_max / gw_retry_max 没设过时服务端按 16 算），
+// 界面上写 2、实际跑 16 那种「名实不符」别再犯。
+const rlRetryMax = ref(16);
+const gwRetryMax = ref(16);
 const approvalMode = ref('default');
 const secretForm = ref('');
 const secrets = ref([]);
@@ -940,7 +944,8 @@ const skillBody = ref('');
 const skills = ref([]);
 const tools = ref([]);
 const fontChoice = ref(localStorage.getItem('nu_font') || '');
-const fontList = [
+// 内置几套是「搭配好的栈」（中英回退都写在里面），系统字体表另外并进来 —— 见下面 sysFontItems。
+const BUILTIN_FONTS = [
   { value: '', label: '默认' },
   { value: 'Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif', label: '系统默认' },
   { value: '"PingFang SC", "Microsoft YaHei", sans-serif', label: '苹方 / 微软雅黑' },
@@ -948,6 +953,24 @@ const fontList = [
   { value: 'Georgia, "Times New Roman", serif', label: '衬线' },
   { value: '"Segoe UI", Tahoma, sans-serif', label: 'Segoe UI' },
 ];
+const sysFonts = ref([]);
+/**
+ * 字体下拉 = 内置栈（置顶）+ 本机已安装字体（按首字母排序）。
+ * 系统字体表只能由桌面外壳枚举（渲染进程没这权限），网页模式拿不到就只显示内置那几套，
+ * 不给一颗点了没反应的入口。
+ */
+const fontList = computed(() => [
+  ...BUILTIN_FONTS,
+  ...sysFonts.value.map((f) => ({ value: `"${f}", "PingFang SC", "Microsoft YaHei", sans-serif`, label: f })),
+]);
+async function loadSystemFonts() {
+  const api = typeof window !== 'undefined' ? window.khDesktop : null;
+  if (!api || typeof api.systemFonts !== 'function') return;
+  try {
+    const r = await api.systemFonts({});
+    if (r && r.ok && Array.isArray(r.fonts)) sysFonts.value = r.fonts;
+  } catch (e) { /* 枚举失败就只剩内置那几套，不报错打扰 */ }
+}
 
 function applyFont() {
   localStorage.setItem('nu_font', fontChoice.value);
@@ -1413,9 +1436,18 @@ onMounted(() => {
   loadLoc();
   loadGlobalPrompt();
   loadWhale();
+  loadSystemFonts();
+  loadAppInfo();
   // Computer Use 的状态进页面就读一次：总开关摆在哪都要看得见，重启警告也要靠它
   loadComputerState();
 });
+
+// 关于页要显示真实版本号：服务端才知道眼下跑的是装机版还是源码版（非正式版带 d 后缀）
+const appInfo = ref(null);
+async function loadAppInfo() {
+  try { appInfo.value = await settingsApi.appInfo(); } catch (e) { appInfo.value = null; }
+}
+const versionLabel = computed(() => (appInfo.value && appInfo.value.display) || '读取失败');
 
 async function loadAll() {
   // 逐项独立加载：任何一项失败都要说出来，别静默用默认值盖住真值
@@ -1437,7 +1469,8 @@ async function loadAll() {
     const st = await settingsApi.getAll();
     cmdTimeout.value = Number(st?.cmd_timeout_seconds ?? 360);
     defaultContext.value = Number(st?.default_context_limit ?? 0);
-    rlRetryMax.value = Number(st?.rl_retry_max ?? 2);
+    rlRetryMax.value = Number(st?.rl_retry_max ?? 16);
+    gwRetryMax.value = Number(st?.gw_retry_max ?? 16);
   } catch { bad.push('上游设置'); }
   try {
     const am = await aiApi.getApprovalMode();
@@ -1534,6 +1567,7 @@ async function saveUpstream() {
     cmd_timeout_seconds: Number(cmdTimeout.value) || 0,
     default_context_limit: Number(defaultContext.value) || 0,
     rl_retry_max: Number(rlRetryMax.value) || 0,
+    gw_retry_max: Number(gwRetryMax.value) || 0,
   };
   try {
     await settingsApi.update(payload);

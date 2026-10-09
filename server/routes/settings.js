@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { db } = require('../database');
 const { ok, fail, wrap } = require('../utils/respond');
 
@@ -14,6 +16,32 @@ router.get('/', wrap((req, res) => {
   ok(res, settingsObj);
 }));
 
+/**
+ * 版本信息（设置-关于要显示真实版本号，别再写死「NewUI-dev 重构版」）。
+ *
+ * 三个来源按优先级：
+ *   1) 新版外壳传的环境变量 KH_APP_VERSION（= app.getVersion()），KH_APP_PACKAGED=1 才算正式版；
+ *   2) 打包时 `pack-prep` 写进服务端载荷里的 version.json —— 它不依赖外壳，所以旧外壳的装机版也认得出正式版；
+ *   3) 都没有就是源码/自测跑法：读仓库根 package.json，并按他的口径补 `d` 后缀（v1.3.3d）。
+ */
+router.get('/app-info', wrap((req, res) => {
+  const fromShell = String(process.env.KH_APP_VERSION || '').trim();
+  let fromFile = null;
+  try {
+    // pack-prep 写的是服务端载荷根目录（server/version.json），不是 routes/ 下 —— 别搞错层级
+    fromFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'version.json'), 'utf8'));
+  } catch (e) { fromFile = null; }
+  let base = fromShell || String((fromFile && fromFile.version) || '');
+  if (!base) {
+    try {
+      base = String(JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')).version || '');
+    } catch (e) { base = ''; }
+  }
+  const packaged = process.env.KH_APP_PACKAGED === '1' || !!(fromFile && fromFile.packaged) || !!(fromFile && fromFile.version);
+  const display = base ? (packaged ? `v${base}` : `v${base}d`) : '';
+  ok(res, { version: base, display, packaged, platform: process.platform, node: process.version });
+}));
+
 // 布尔型设置统一存成 '1' / '0'
 function boolSetting(v) {
   if (v === true || v === 1 || v === '1' || v === 'true') return '1';
@@ -24,9 +52,11 @@ function boolSetting(v) {
 // 更新设置（白名单键；桌面端无鉴权）
 const SETTING_KEYS = {
   rl_retry_max: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 100 ? String(n) : null; },
+  // 上游不可用（500/502/503/504/524）的自动重试次数，和 429 各算各的
+  gw_retry_max: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 100 ? String(n) : null; },
   // run_command 单次超时（秒）；0 = 不限制（长构建场景）
   cmd_timeout_seconds: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 7200 ? String(n) : null; },
-  default_context_limit: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 1000000 ? String(n) : null; },
+  default_context_limit: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 2147483647 ? String(n) : null; },
   agent_shell: v => String(v || '').trim().substring(0, 300) || null,
   // 提示音总闸与音量（音量和音效一起存，界面上滑条即时生效）
   sound_enabled: boolSetting,

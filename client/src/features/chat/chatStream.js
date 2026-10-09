@@ -18,6 +18,12 @@ export function openHostedStream(body, handlers) {
   return openStreamAt('/api/ai/hosted/run', body, handlers);
 }
 
+// 手动压缩（POST /api/ai/chat/press）：一次摘要要等上游几十秒，
+// 所以它也从普通请求改成流式，前端才有地方显示进度（t:'compress' 的 start→done/failed）
+export function openPressStream(body, handlers) {
+  return openStreamAt('/api/ai/chat/press', body, handlers);
+}
+
 function openStreamAt(url, body, { onEvent, onError, onDone, onAbort } = {}) {
   const ctrl = new AbortController();
   const run = (async () => {

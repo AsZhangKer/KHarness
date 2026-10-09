@@ -663,27 +663,28 @@ function noteTextAttempt(row) {
   return false;
 }
 
-function waitApproval(id, deniedList) {
+function waitApproval(id, deniedList, onExpire) {
   return new Promise((resolve) => {
     // 等待时长可在「设置 → 常规」改；到点按拒绝处理，不让一轮对话永远挂在那儿
     const waitMs = numSetting('approval_timeout_seconds', 180, 30, 3600) * 1000;
-    const timer = setTimeout(() => {
-      if (pendingApprovals.has(id)) {
-        pendingApprovals.delete(id);
-        resolve({ allow: false, timeout: true });
-      }
-    }, waitMs);
-    pendingApprovals.set(id, (allow) => {
-      clearTimeout(timer);
+    let timer = null;
+    // 统一出口：超时/随流终止都算「用户没裁决」。前端那张审批卡必须跟着退场，
+    // 否则它挂在队列里点一下就是一个 404（他报的「赖着不走」）。
+    const settle = (r) => {
+      if (!pendingApprovals.has(id)) return;
       pendingApprovals.delete(id);
+      if (timer) clearTimeout(timer);
+      resolve(r);
+      if (r.timeout) { try { onExpire && onExpire(); } catch (e) { /* 流已断开 */ } }
+    };
+    timer = setTimeout(() => settle({ allow: false, timeout: true }), waitMs);
+    pendingApprovals.set(id, (allow) => {
+      if (!pendingApprovals.has(id)) return;
+      pendingApprovals.delete(id);
+      if (timer) clearTimeout(timer);
       resolve({ allow });
     });
-    deniedList.push(() => {
-      if (pendingApprovals.has(id)) {
-        pendingApprovals.delete(id);
-        resolve({ allow: false, timeout: true });
-      }
-    });
+    deniedList.push(() => settle({ allow: false, timeout: true }));
   });
 }
 
@@ -742,7 +743,7 @@ const activeHolders = new Map(); // chatId -> holder
 const pendingQuestions = new Map(); // id -> { resolve, chatId }
 const QUESTION_DEFAULT_TIMEOUT = 10 * 60 * 1000;
 
-function waitQuestion(id, chatId, timeoutMs, deniedList) {
+function waitQuestion(id, chatId, timeoutMs, deniedList, onExpire) {
   return new Promise((resolve) => {
     let timer = null;
     const finish = (r) => {
@@ -752,6 +753,8 @@ function waitQuestion(id, chatId, timeoutMs, deniedList) {
       const i = deniedList.indexOf(cancel);
       if (i >= 0) deniedList.splice(i, 1);
       resolve(r);
+      // 用户没答上（超时/随流取消/被新一轮顶掉）：前端那张问答卡同样要退场，留着点它就是 404
+      if (!r.answered) { try { onExpire && onExpire(); } catch (e) { /* 流已断开 */ } }
     };
     const cancel = () => finish({ answered: false, cancelled: true });
     pendingQuestions.set(id, { resolve: (r) => finish(r), chatId });
@@ -853,6 +856,19 @@ router.delete('/chats/:id/insert', wrap((req, res) => {
   const chatId = parseInt(req.params.id);
   clearInsertBuffer(chatId);
   ok(res, { items: [] }, '待注入提示词已清空');
+}));
+
+// 单条删除：以前只有一把「清空全部」，写错一条就得整堆丢掉（他要的那条）
+router.delete('/chats/:id/insert/:index', wrap((req, res) => {
+  const chatId = parseInt(req.params.id);
+  const idx = parseInt(req.params.index);
+  const list = readInsertBuffer(chatId);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= list.length) {
+    return fail(res, 404, '这一条已经不在了（列表变过），界面上刷新一下就好');
+  }
+  const [removed] = list.splice(idx, 1);
+  writeJsonCol(chatId, 'insert_buffer', list);
+  ok(res, { items: list, removed }, '已删除这条待注入提示词');
 }));
 
 router.get('/chats/:id/skills', wrap((req, res) => {
@@ -2353,11 +2369,18 @@ function isToolArgsError(status, body) {
 /**
  * 上游以「输入太长」拒绝整包。各家措辞不一但都带长度语义；判得太宽会把普通 400 当溢出治，
  * 所以只认明确的 context/length/token 组合词。
+ *
+ * 免费层/配额型的 prompt 上限也算这一类（他实测撞到的 orcarouter 就是这种）：
+ * 「This prompt is longer than the free tier allows」既没写 context 也没写 too long，
+ * 老正则认不出来 → 直接罢工。他的口径是「宁多不少，先把这一包裁小压一遍再发，别把错误丢给用户」。
  */
 function isContextLengthError(status, body) {
   const s = Number(status);
   if (s !== 400 && s !== 413 && s !== 500 && s !== 502) return false;
-  return /context[_ ]length|maximum context|context window|prompt is too long|input (length|tokens)|too many tokens|exceed\w{0,3}\s.{0,24}(context|token|length)|range of (input|context) length/i.test(String(body || ''));
+  const t = String(body || '');
+  // 免费层单请求 prompt 上限：code/reason 里带 prompt_cap 的，或正文明说 prompt 比允许的长
+  if (/err_free_prompt_cap|prompt[_ ]cap|prompt is (?:too long|longer than|over)|longer than the free tier/i.test(t)) return true;
+  return /context[_ ]length|maximum context|context window|input (length|tokens)|too many tokens|exceed\w{0,3}\s.{0,24}(context|token|length)|range of (input|context) length/i.test(t);
 }
 
 /**
@@ -2367,17 +2390,21 @@ function isContextLengthError(status, body) {
  * 三条红线：system（index 0）与最后一条永远留；带 tool_calls 的 assistant 和它的 tool 回执**只许缩不许删** ——
  * 少一条配对，上游会用另一个 400 把整包再拒一次，症状和原错误一模一样。
  */
-function shedTailForOverflow(msgs, tools) {
+function shedTailForOverflow(msgs, tools, ratio = 0.2) {
   const sizeOf = (m) => (
     estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''))
     + (m.tool_calls ? estimateTokens(JSON.stringify(m.tool_calls)) : 0)
   );
   const total = packageTokens(msgs, tools);
-  const need = Math.ceil(total * 0.2);
+  const need = Math.ceil(total * ratio);
   const PLACE = '（这一段因超出上游长度限制被省略，内容仍在本地记录里）';
   const cands = [];
   let span = 0;
-  for (let i = msgs.length - 2; i >= 1; i--) {
+  // 最后一条一般要留（那是用户刚说的、或模型正要往下接的）。但如果它就是那条肥得压不动的工具回执，
+  // 超长正是它撑的 —— 这里只许「换成占位」不许「删掉」，tool_call_id 与配对都还在，上游不会因此另抛一个 400。
+  const lastIdx = msgs.length - 1;
+  const startIdx = msgs[lastIdx] && msgs[lastIdx].role === 'tool' ? lastIdx : lastIdx - 1;
+  for (let i = startIdx; i >= 1; i--) {
     cands.push(i);
     span += sizeOf(msgs[i]);
     if (span >= need * 2) break;
@@ -3019,6 +3046,9 @@ async function compressChat(chatId, modelRow, dispatcher, signal, send = null) {
   // 而保留的消息、摘要、固定开销全都还在上下文里。按压缩后的整包重设一个估算锚点，
   // 下一次上游回执 prompt_tokens 时 recordContextAnchor 再校准成真值。
   reanchorAfterCompress(chatId, fixedOverhead);
+  // 整包换掉了，生成期间那份「压缩前的整包估算」必须作废 —— 否则用量会一直顶在压缩前的大值，
+  // 看上去「压了等于没压」（这就是他说的「不但没增加反而减少/增速不对」里最难查的那一半）。
+  clearLivePackage(chatId);
   return { skipped: false, length: summary.length, summary, archived: toCompress.length };
 }
 
@@ -3039,9 +3069,9 @@ function resolveContextWindow(chatId) {
 /** 一批上游消息（外加 tools schema）按经验尺子换成 token —— 与 agentsmd 的估算同一把尺，保证可比 */
 function packageTokens(msgs, tools) {
   let n = 0;
-  // 发出去的整包只保留最后一张图（protocols.buildChatRequest 里裁的），这里也要按 1 张算，
-  // 否则「历史里攒了十几张截图」会被估成上万 tok，把自动压缩提前触发到根本不满的会话上。
-  let imagesLeft = 1;
+  // 发出去的整包只保留最近两张图（protocols.buildChatRequest 里裁的，见 MAX_IMAGES_PER_REQUEST），
+  // 这里也要按同样的张数算：按 1 张会低估，按全部估则一张 4MB 图能被估成上百万 tok 触发误压缩。
+  let imagesLeft = protocols.MAX_IMAGES_PER_REQUEST || 1;
   for (const m of msgs || []) {
     // content 数组是带图的那条（截图回喂 / 用户附图）。不能 JSON.stringify —— 那样会把
     // base64 整串按字符估 token，一张图报出上百万 tok，直接误触发自动压缩。
@@ -3074,6 +3104,54 @@ function packageTokens(msgs, tools) {
  * 为什么非要真实值：只按正文估算实测低估 99%（三条短消息正文 38 tok，整包 5619 tok），
  * 结果就是「界面写着 ≥80% 将自动压缩、服务端却以为自己还很空」，问题被直接抛给模型。
  */
+/**
+ * 生成过程中的「实时整包」。
+ *
+ * 为什么要有这一层：锚点只在**回合结束**时才写（`recordContextAnchor`），而一轮 Agent 可能连开几十个
+ * 工具 —— 那些工具结果只躺在 `upstreamMsgs` 里、从不入库，`chatContextUsage` 光读库就完全看不见它们。
+ * 实测后果就是他报的那三条：界面写着个位数百分比、模型那边已经报「上下文过长」；撞 80% 压完之后
+ * 锚点被重设成「未归档正文 + 固定开销」（工具负载 body=0），显示值不升反降。
+ *
+ * 做法：每次真的往上游发请求之前，按「这一次实际要发出去的整包」（含 system、历史、工具结果、
+ * 几十个工具 schema）估一次，记在内存里；用量取「锚点 + 新增正文」与它的**较大值**。
+ * 回合结束拿到真实 prompt_tokens 后作废（`recordContextAnchor` / 压缩后都清）。
+ */
+const livePkgByChat = new Map();
+
+function noteLivePackage(chatId, msgs, tools) {
+  if (!chatId || !Array.isArray(msgs)) return;
+  try {
+    livePkgByChat.set(Number(chatId), { tokens: packageTokens(msgs, tools), at: Date.now() });
+  } catch (e) { /* 估算失败不影响请求 */ }
+}
+
+function clearLivePackage(chatId) { livePkgByChat.delete(Number(chatId)); }
+
+/** 只在「这一场生成还活着」时采信：超过 10 分钟没刷新就当成陈旧值 */
+function livePackageTokens(chatId) {
+  const rec = livePkgByChat.get(Number(chatId));
+  if (!rec) return 0;
+  if (Date.now() - rec.at > 10 * 60 * 1000) { livePkgByChat.delete(Number(chatId)); return 0; }
+  return rec.tokens || 0;
+}
+
+/**
+ * 手动压缩对「正在跑的那一轮」生效的口子。
+ *
+ * `/press`、`/context` 是独立的 HTTP 请求：它们改库（写摘要、把旧消息 archived=1、重设锚点），
+ * 但回合中间那个循环手里还攥着**压缩前**的整包 `upstreamMsgs`。于是界面按新锚点显示 3%，
+ * 实际发出去的仍是全文 —— 这就是他说的「压完看着空了，模型那边还是撑爆」。
+ * 这里只放一个脏标记：下一发请求前（安全边界）按 `buildBaseMsgs()` 重建基底，输出一个字都不打断。
+ */
+const baseDirtyChats = new Set();
+const markBaseDirty = (chatId) => { const n = Number(chatId); if (n) baseDirtyChats.add(n); };
+function consumeBaseDirty(chatId) {
+  const n = Number(chatId);
+  if (!n || !baseDirtyChats.has(n)) return false;
+  baseDirtyChats.delete(n);
+  return true;
+}
+
 function chatContextUsage(chatId, opts = {}) {
   const rows = db.prepare(
     "SELECT id, content FROM ai_chat_messages WHERE chat_id = ? AND archived = 0"
@@ -3096,6 +3174,9 @@ function chatContextUsage(chatId, opts = {}) {
     used = body + (Number(opts.overhead) || 0);
     basis = opts.overhead ? 'body+overhead' : 'body';
   }
+  // 生成中的整包估算只往上抬、不往下压（真实锚点永远优先于估算）
+  const live = livePackageTokens(chatId);
+  if (live > used) { used = live; basis = 'live-package'; }
   const { limit, source } = resolveContextWindow(chatId);
   return { used, body, anchor, anchor_msg_id: anchorMsg, basis, limit, limit_source: source };
 }
@@ -3126,6 +3207,8 @@ function recordContextAnchor(chatId, usage) {
   try {
     db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
       .run(anchor, last ? last.id : 0, chatId);
+    // 真实整包到手，生成期间那份估算就该退场了（继续留着会把用量顶在偏高的位置不放）
+    clearLivePackage(chatId);
   } catch (e) { /* 旧库无列时忽略 */ }
 }
 
@@ -3152,7 +3235,11 @@ function modelRowForCompress(chatId, modelRowId) {
   return any ? db.prepare(SELECT).get(any.id) : null;
 }
 
-// 手动压缩（/press 指令）
+// 手动压缩（/press 指令 + 右栏「压缩上下文」按钮）
+// 为什么改成 SSE 而不是普通 JSON：一次摘要要等上游十几到几十秒，以前这段时间界面上什么都没有
+// （按钮连 disabled 都没有），没人判断得了「在跑」还是「卡死」。事件形状与自动压缩完全一致
+// （t:'compress' 的 start/skipped/done/failed），前端那套压缩卡片直接复用。
+// 校验类的失败仍然回 JSON —— 那种情况压根没开始跑，不需要进度。
 router.post('/chat/press', wrap(async (req, res) => {
   const chatId = parseInt(req.body?.chat_id);
   if (!Number.isInteger(chatId) || chatId < 1) return fail(res, 400, '无效的对话ID');
@@ -3160,14 +3247,47 @@ router.post('/chat/press', wrap(async (req, res) => {
   if (!chat) return fail(res, 404, '对话不存在');
   const modelRow = modelRowForCompress(chatId, req.body?.model_row_id);
   if (!modelRow) return fail(res, 400, '本机没有可用模型，无法压缩。请先到「模型」页添加提供商与模型。');
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (obj) => {
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+    } catch (e) { /* 客户端已断开 */ }
+  };
+  const { limit, source } = resolveContextWindow(chatId);
+  const usage = chatContextUsage(chatId);
+  const pct = limit ? Math.round(usage.used / limit * 100) : 0;
+  // from 是「窗口从哪来」（与自动压缩同一个字段、同一套文案），manual 才是「谁按的」：
+  // 手动压缩没有 80% 这条线，卡片文案不能写成「已达 80%」。
+  const fromLabel = { chat: '会话设定', model: '模型上限', default: '全局默认' }[source] || source || '';
+  send({ t: 'compress', phase: 'start', used: usage.used, limit, percent: pct, basis: usage.basis, from: fromLabel, manual: true, model: modelRow.model_id });
   const dispatcher = proxylayer.proxyFor(modelRow);
+  // 关窗口 / 切走页面就中止上游请求，别让它继续烧钱（和主对话那条 res 'close' 同一套判据）
+  const ac = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   try {
-    const r = await compressChat(chatId, { ...modelRow, base_url: modelRow.base_url }, dispatcher, AbortSignal.timeout(90 * 1000));
-    if (r.skipped) return ok(res, { length: r.length, skipped: true, model: modelRow.model_id }, '没有可压缩的对话内容');
-    ok(res, { length: r.length, model: modelRow.model_id }, `已用 ${modelRow.model_id} 压缩，摘要 ${r.length} 字符`);
+    const r = await compressChat(chatId, { ...modelRow, base_url: modelRow.base_url }, dispatcher, ac.signal);
+    if (r.skipped) {
+      send({ t: 'compress', phase: 'skipped', used: usage.used, limit, percent: pct, message: r.message || '最近交互保留中，没有可压缩的内容' });
+    } else {
+      const after = chatContextUsage(chatId);
+      // 让正在跑的那一轮在下次发请求前换基底，否则界面显示压完了、发出去的还是压缩前那份全文
+      markBaseDirty(chatId);
+      send({
+        t: 'compress', phase: 'done', used: usage.used, limit, percent: pct,
+        after: after.used, after_basis: after.basis, chars: r.length, archived: r.archived,
+        summary: r.summary, model: modelRow.model_id,
+      });
+    }
   } catch (e) {
-    failErr(res, 502, '压缩失败', e);
+    send({ t: 'compress', phase: 'failed', used: usage.used, limit, percent: pct, message: String(e.message || e).substring(0, 160) });
   }
+  res.end();
 }));
 
 // 设定上下文窗口并立即压缩（/context 指令）
@@ -3175,8 +3295,8 @@ router.post('/chat/context', wrap(async (req, res) => {
   const chatId = parseInt(req.body?.chat_id);
   const limit = parseInt(req.body?.limit);
   if (!Number.isInteger(chatId) || chatId < 1) return fail(res, 400, '无效的对话ID');
-  if (!Number.isInteger(limit) || limit < 1000 || limit > 1000000) {
-    return fail(res, 400, '上下文窗口需为 1000 ~ 1000000 的整数（token 数）');
+  if (!Number.isInteger(limit) || limit < 1000 || limit > 2147483647) {
+    return fail(res, 400, '上下文窗口需为 1000 ~ 2147483647 的整数（token 数）');
   }
   const chat = db.prepare('SELECT id FROM ai_chats WHERE id = ? AND user_id = ?').get(chatId, 1);
   if (!chat) return fail(res, 404, '对话不存在');
@@ -3193,6 +3313,7 @@ router.post('/chat/context', wrap(async (req, res) => {
     }
   }
   const usage = chatContextUsage(chatId);
+  if (compressed && !compressed.error && !compressed.skipped) markBaseDirty(chatId);   // 同 /press：窗口改了、基底也得跟着换
   ok(res, { ...usage, compressed }, compressed && compressed.error ? `窗口已设为 ${limit}，但压缩失败：${compressed.error}` : `上下文窗口已设为 ${limit} 字符，历史已压缩`);
 }));
 
@@ -4439,7 +4560,11 @@ router.post('/chat', (req, res) => {
     let lastReqSentAt = 0;
     let turnErrText = '';
     let turnAbortedByUser = false;
-    const noteTurnError = (msg) => { turnErrText = String(msg || '').substring(0, 400); send({ t: 'error', message: msg }); };
+    const noteTurnError = (msg, exhausted) => {
+      turnErrText = String(msg || '').substring(0, 400);
+      // retry_exhausted：这一轮是「自动重试打光之后」断的，前端据此标未完成并留按钮
+      send({ t: 'error', message: msg, ...(exhausted ? { retry_exhausted: true } : {}) });
+    };
     try {
       if (!chatId) {
         chatTitle = stripImageTokens(content).trim().substring(0, 30) || '新对话';
@@ -4592,13 +4717,16 @@ router.post('/chat', (req, res) => {
           return new RegExp(keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
         };
         let rlRetry = 0;   // 429 限流重试计数（独立于变体切换，互不挤占）
-        let gwRetry = 0;   // 524/504 网关超时重试计数（同参数重试，不切变体）
+        let gwRetry = 0;   // 上游不可用（500/502/503/504/524）重试计数（同参数重试，不切变体）
         let samplingStripped = false; // 已剥离 penalty/temperature（部分模型要求 presence_penalty 恒为 0）
         let directOnly = false;       // 代理连不上后本轮改走直连（见下面的 catch）
         // 429 最大重试次数可在设置页自定义（rl_retry_max，默认 16）
         const rlMax = (() => { const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'rl_retry_max'").get()?.value); return Number.isInteger(n) && n >= 0 ? n : 16; })();
-        for (let attempt = 0; attempt < rlMax + 8; attempt++) {
+        // 网关/服务不可用的重试次数同样可调（gw_retry_max，默认 16）：和 429 各算各的，互不挤占
+        const gwMax = (() => { const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'gw_retry_max'").get()?.value); return Number.isInteger(n) && n >= 0 ? n : 16; })();
+        for (let attempt = 0; attempt < rlMax + gwMax + 8; attempt++) {
           // 按提供商协议构造真实请求（openai 直通；anthropic/custom 由 protocols 翻译）
+          noteLivePackage(chatId, payload.messages, payload.tools);
           const req = protocols.buildChatRequest(row, payload);
           const dispatcher = directOnly ? undefined : makeDispatcher(row);
           try {
@@ -4626,11 +4754,15 @@ router.post('/chat', (req, res) => {
             await sleep(rlRetry * 2000);
             continue;
           }
-          // 524/504：代理/网关超时（Cloudflare 等），等待后按原参数重试
-          if ((resp.status === 524 || resp.status === 504) && gwRetry < 2) {
+          // 网关/服务不可用：524/504（Cloudflare 那一类）加上 500/502/503（他自己撞的
+          // `503 no_available_workers` 就是这种）。以前只有 524/504 重试、502/503 一撞就断；
+          // 按他定的口径改成和 429 一样「先重试再中断」：独立计数、退避 3s/6s/9s（封顶 15s）。
+          if ((resp.status === 500 || resp.status === 502 || resp.status === 503
+               || resp.status === 504 || resp.status === 524) && gwRetry < gwMax) {
             gwRetry++;
-            send({ t: 'note', message: `[${row.display_name}] 上游网关超时(${resp.status})，3 秒后重试（${gwRetry}/2）…` });
-            await sleep(3000);
+            const waitMs = Math.min(gwRetry * 3000, 15000);
+            send({ t: 'note', message: `[${row.display_name}] 上游不可用(HTTP ${resp.status})，${Math.round(waitMs / 1000)} 秒后自动重试（${gwRetry}/${gwMax}）…` });
+            await sleep(waitMs);
             continue;
           }
           if (resp.status === 400) {
@@ -4675,6 +4807,12 @@ router.post('/chat', (req, res) => {
             try { db.prepare('UPDATE ai_models SET thinking_style = ? WHERE id = ?').run(label, row.id); } catch (e) { /* 旧库无列时忽略 */ }
           }
         }
+        // 重试打光了才把响应交回调用方：调用方要在报错里说清「不是没试，是试完了」，
+        // 前端也据此决定留「重试」按钮（他点名的口径：像 429 一样先重试，耗尽再中断）。
+        resp._exhaustNote = '';
+        if (resp.status === 429 && rlRetry >= rlMax) resp._exhaustNote = `（429 已自动重试 ${rlRetry} 次仍限流）`;
+        else if (resp.status >= 500 && gwRetry >= gwMax) resp._exhaustNote = `（HTTP ${resp.status} 已自动重试 ${gwRetry} 次仍不可用）`;
+        resp._exhausted = !!resp._exhaustNote;
         return resp;
       };
 
@@ -4793,12 +4931,14 @@ router.post('/chat', (req, res) => {
                 throw upErr;
               }
               const delta = json.choices?.[0]?.delta;
-              // 正文：经思考拆分器（内联 think 标签 / 原生 token 会被切到思考通道）
-              if (delta && typeof delta.content === 'string' && delta.content) emitContentDelta(delta.content);
-              // 独立思考字段：reasoning_content（DeepSeek/Qwen/vLLM 系）或 reasoning（OpenRouter 系）
+              // 独立思考字段先走：reasoning_content（DeepSeek/Qwen/vLLM 系）或 reasoning（OpenRouter 系）。
+              // 以前是「正文先、思考后」，模型在同一帧里既给一点正文又给一点思考时，那段正文会被
+              // 夹在前后的两段思考之间 —— 界面上就成了「一段正常思考被劈开，中间突然插进一句回复」。
               const rField = typeof delta?.reasoning_content === 'string' ? delta.reasoning_content
                 : (typeof delta?.reasoning === 'string' ? delta.reasoning : '');
               if (rField) emitPiece(rField, true);
+              // 正文：经思考拆分器（内联 think 标签 / 原生 token 会被切到思考通道）
+              if (delta && typeof delta.content === 'string' && delta.content) emitContentDelta(delta.content);
               if (delta && Array.isArray(delta.tool_calls)) {
                 for (const tc of delta.tool_calls) {
                   const idx = tc.index ?? 0;
@@ -4871,6 +5011,7 @@ router.post('/chat', (req, res) => {
         let lastUsage = null;
         let genMsSum = 0;
         let curRow = null;   // catch 里要说清楚是哪个模型断的（row 是 for 里的 const，外面拿不到）
+        let plainSheds = 0;  // 超长自救次数（见下面 !resp.ok 分支）
         const block = await plainAgentsBlock().catch(() => '');
         const outMsgs = block ? [{ role: 'system', content: block }, ...msgs] : msgs;
         try {
@@ -4878,15 +5019,34 @@ router.post('/chat', (req, res) => {
             const row = rows[mi];
             curRow = row;
             if (mi > 0) send({ t: 'model', id: row.id, name: row.display_name });
+            noteLivePackage(chatId, outMsgs, null);
             lastReqSentAt = Date.now();
             const resp = await fetchUpstream(row, { model: row.model_id, messages: outMsgs });
             if (!resp.ok) {
               const detail = (resp._errBody || await resp.text().catch(() => '')).substring(0, ERROR_MAX_LEN);
+              // 上游判输入超长（各家免费层的单请求 prompt 上限也算，比如 orcarouter 那句
+              // "prompt is longer than the free tier allows"）：普通对话以前一撞就直接罢工，
+              // 现在按 Agent 那套口径自救 —— 就地裁尾巴、压一次、按新摘要重建基底，最多三次。
+              if (isContextLengthError(resp.status, detail) && plainSheds < 3) {
+                plainSheds++;
+                const ratio = [0.2, 0.4, 0.6][plainSheds - 1];
+                let s = shedTailForOverflow(outMsgs, null, ratio);
+                await maybeAutoCompress(row, { msgs: outMsgs, tools: null });
+                const keepHead = outMsgs.length - msgs.length;   // 开头那段 system（AGENTS.md）原地留着
+                outMsgs.length = keepHead;
+                outMsgs.push(...buildBaseMsgs());
+                s = shedTailForOverflow(outMsgs, null, ratio);
+                send({ t: 'note', message: `[${row.display_name}] 输入超长，已裁切重试（第 ${plainSheds} 次，省略 ${s.touched} 段约 ${s.shed} tok，本地记录未删）…` });
+                // 这里的 continue 走的是「模型池」那个 for：不退一格就会跳到下一个模型，
+                // 单模型池直接跑出循环 —— 表现为「说了要重试却一发也没重发」。退一格才是同一个模型重发。
+                mi--;
+                continue;
+              }
               if (mi < rows.length - 1) {
                 send({ t: 'note', message: `[${row.display_name}] 请求失败(HTTP ${resp.status}${oneLine(detail, 200) ? '：' + oneLine(detail, 200) : ''})，切换下一个模型…` });
                 continue;
               }
-              noteTurnError(`HTTP ${resp.status}: ${detail || resp.statusText}`);
+              noteTurnError(`${resp._exhaustNote ? resp._exhaustNote + ' ' : ''}HTTP ${resp.status}: ${detail || resp.statusText}`, resp._exhausted);
               errSent = true;
               return { text: lastText, used: null, usage: lastUsage, genMs: genMsSum };
             }
@@ -4984,6 +5144,8 @@ const runAgent = async (msgs, rows) => {
         // 上游消息里「上文基底」占 1..baseLen（0 是 system），其后才是本轮新增的问答与工具往返。
         // 回合中间压缩时要按这个区间整段替换，所以长度得跟着变。
         let baseLen = msgs.length;
+        // 基底刚从库里建好，先前那枚「手动压缩」的脏标记对这一轮没有意义（它已经反映在 msgs 里）
+        consumeBaseDirty(chatId);
         let usedModel = null;
         const step = (st) => steps.push(st);
         // 多轮 usage 汇总：completion/reasoning 累加；prompt/cached 取最大轮（代表最终上下文）
@@ -5008,8 +5170,9 @@ const runAgent = async (msgs, rows) => {
         let nudgedOnce = false;
         // 上游因非法 tool_call 参数拒包时，自愈重试只做一次
         let toolArgsHealedOnce = false;
-        // 上游判输入超长时只自救一次（裁尾巴 + 压一次）：反复裁会把上下文裁空，不如直接把错误抛给用户
-        let overflowShedOnce = false;
+        // 上游判输入超长时的自救次数（最多 3 次，每次裁得更狠：20% → 40% → 60%）。
+        // 以前只裁一次，第二次还是超长就直接把错误丢给用户 —— 他的口径是「宁多不少，别因为超长罢工」。
+        let overflowSheds = 0;
         // 无进展保护：同一 (工具+参数) 连续重复次数，达到阈值即打断循环。
         // 阈值在 设置 → 常规 调（repeat_break_threshold，默认 3）；一轮开始时应一次，
         // 免得每个工具调用都查一次库、也防止中途改值让这一轮的计数口径前后不一。
@@ -5111,7 +5274,7 @@ const runAgent = async (msgs, rows) => {
             const qid = crypto.randomBytes(8).toString('hex');
             send({ t: 'question', id: qid, question, options: options || [], chat_id: chatId, timeout_ms: timeoutMs || QUESTION_DEFAULT_TIMEOUT });
             step({ type: 'question', question, options: options || [] });
-            return waitQuestion(qid, chatId, timeoutMs, onAbort.deniedList);
+            return waitQuestion(qid, chatId, timeoutMs, onAbort.deniedList, () => send({ t: 'question_expired', id: qid }));
           }
         };
         if (chatId) {
@@ -5143,6 +5306,15 @@ const runAgent = async (msgs, rows) => {
             // 安全边界：本轮不是第一次请求模型（说明上一轮的工具有结果要回喂），先交付用户预埋提示词
             if (iter > 0) {
               injectAtBoundary();
+              // 用户在这轮跑到一半按了 /press / 改了窗口：库里已经压好，但这个循环手里还攥着压缩前
+              // 那份整包。不换基底就是「界面显示 3%、发出去的还是全文」——他报的那条正是这个。
+              if (consumeBaseDirty(chatId)) {
+                const rebuilt = buildBaseMsgs();
+                upstreamMsgs.splice(1, baseLen, ...rebuilt);
+                baseLen = rebuilt.length;
+                send({ t: 'note', message: `手动压缩已生效：本轮上文按新摘要重建（基底 ${rebuilt.length} 条，压缩前那份整包不再发出去）` });
+                step({ type: 'note', message: `手动压缩生效：重建上游基底（${rebuilt.length} 条）` });
+              }
               // 一轮里连开几十个工具时，上下文是在回合中间爆掉的，这里补一道
               if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
                 const rebuilt = buildBaseMsgs();
@@ -5153,27 +5325,31 @@ const runAgent = async (msgs, rows) => {
             } else await remindUncommitted();   // 实验室：回合开头提醒一次未提交变更
             const body = { model: row.model_id, messages: upstreamMsgs };
             if (!textMode) body.tools = activeAgentTools();
+            // 每次真的发请求前记一次整包（含这一轮新读进来的工具结果），右侧用量与 80% 判定才跟得上
+            noteLivePackage(chatId, body.messages, body.tools);
             lastReqSentAt = Date.now();
             const resp = await fetchUpstream(row, body);
             if (!resp.ok) {
               const errBody = resp._errBody || await resp.text().catch(() => '');
-              // 上游判「输入太长」：先按他定的口径自救一次 —— 裁掉本次请求尾巴里约 20% 的肥内容，
+              // 上游判「输入太长」：先按他定的口径自救 —— 裁掉本次请求尾巴里的肥内容（第一次 20%），
               // 再触发一次压缩（压缩会把基底换成摘要 + 保留消息）。库里一条消息都没删。
+              // 还超长就接着裁（40%、60%），最多三次；三次救不回来才把错误抛给用户。
               // 放在其它 400 分支**之前**：这类错误正文里常带 "tools"/"tokens" 字样，
               // 晚判一步就会被下面那条「不接受 tools 参数 → 降级文本协议」误当成协议问题去治。
-              if (isContextLengthError(resp.status, errBody) && !overflowShedOnce) {
-                overflowShedOnce = true;
-                let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools());
+              if (isContextLengthError(resp.status, errBody) && overflowSheds < 3) {
+                overflowSheds++;
+                const ratio = [0.2, 0.4, 0.6][overflowSheds - 1];
+                let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(), ratio);
                 if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
                   // 重建基底会把基底里裁掉的占位换回原文（基底来自库），所以重建后再裁一次尾巴
                   const rebuilt = buildBaseMsgs();
                   upstreamMsgs.splice(1, baseLen, ...rebuilt);
                   baseLen = rebuilt.length;
-                  s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools());
+                  s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(), ratio);
                   step({ type: 'note', message: `超长自救：已压缩并按新摘要重建基底（${rebuilt.length} 条）` });
                 }
-                send({ t: 'note', message: `[${row.display_name}] 上游判定输入过长（${oneLine(errBody, 140)}）：已临时省略 ${s.touched} 段旧内容约 ${s.shed} tok（本地记录未删），重试本请求…` });
-                step({ type: 'note', message: `上游输入超长：省略 ${s.touched} 段约 ${s.shed} tok 后重试` });
+                send({ t: 'note', message: `[${row.display_name}] 输入超长，已裁切重试（省略 ${s.touched} 段约 ${s.shed} tok，本地记录未删；上游原话：${oneLine(errBody, 100)}）` });
+                step({ type: 'note', message: `输入超长，已裁切重试（第 ${overflowSheds} 次，省略约 ${s.shed} tok）` });
                 continue;
               }
               // 上游因为「assistant 的 tool_call 参数不是合法 JSON」拒绝整包：
@@ -5208,7 +5384,7 @@ const runAgent = async (msgs, rows) => {
                 failed = true;
                 break;
               }
-              noteTurnError(`HTTP ${resp.status}: ${oneLine(errBody, ERROR_MAX_LEN) || resp.statusText}`);
+              noteTurnError(`${resp._exhaustNote ? resp._exhaustNote + ' ' : ''}HTTP ${resp.status}: ${oneLine(errBody, ERROR_MAX_LEN) || resp.statusText}`, resp._exhausted);
               errSent = true;
               return { reply: allText, steps, used: row, usage: usageAcc.rounds ? usageAcc : null, genMs: genMsSum, errorSent: true };
             }
@@ -5234,6 +5410,15 @@ const runAgent = async (msgs, rows) => {
             }
             logUsage(row, r0.usage);
             accUsage(r0.usage);
+            // 每完成一次上游请求就报一次用量：此刻的整包（含刚读进来的这批工具结果）就是真实大小，
+            // 右侧百分比与 80% 判定都要靠它往上走。以前只在**回合结束**才校准锚点，于是连读几十个文件的
+            // 长回合里界面一动不动 —— 他报的「个位数占用却撞上下文超长」就是这一段。
+            if (chatId) {
+              try {
+                const u = chatContextUsage(chatId);
+                send({ t: 'usage', used: u.used, limit: u.limit, basis: u.basis });
+              } catch (e) { /* 报用量失败不能拖垮回合 */ }
+            }
             genMsSum += r0.genMs || 0;
             if (r0.aborted) {
               // 用户手动停止：把本轮已生成的部分内容累积后返回，由上层入库（保留在完整上下文中）
@@ -5265,7 +5450,14 @@ const runAgent = async (msgs, rows) => {
             }
             if (r0.content) {
               const { text: cleaned, changed } = parseTaskTags(r0.content, chatId);
-              allText += (allText ? '\n' : '') + cleaned;
+              // 段间空一行：单换行会被 marked 当成同一段的续行，重进会话整段一起渲染时才会粘连。
+              // （流式时每一段是独立渲染的 —— timeline 里一条 text 条目一次 marked，所以以前看不出问题。）
+              allText += (allText ? '\n\n' : '') + cleaned;
+              // 把「这段正文出现在哪些工具调用之间」也存进 steps：库里原来只有 content/reasoning/steps
+              // 三份，交错顺序全丢了 → 重进会话只能「全部工具卡 + 尾部整段正文」，看着就是
+              // 工具堆在顶上、尾部的 markdown 还因为粘连而渲染不出来。所有读 steps 的地方都按
+              // type 过滤（tool/result/undo_id），多一种 type:'text' 不会影响它们。
+              step({ type: 'text', text: cleaned });
               if (changed) send({ t: 'tasks', tasks: getTasks(chatId) });
             }
 
@@ -5437,7 +5629,7 @@ const runAgent = async (msgs, rows) => {
                 let preview = null;
                 try { preview = await buildApprovalPreview(name, args, cwd); } catch (e) { preview = null; }
                 send({ t: 'approval', id: approvalId, level: dec.level, tool: name, args, reason: dec.reason, target: approvalTarget, chat_id: chatId, is_high: dec.isHigh, mode: effectiveApprovalMode(chatId), preview });
-                const decision = await waitApproval(approvalId, onAbort.deniedList);
+                const decision = await waitApproval(approvalId, onAbort.deniedList, () => send({ t: 'approval_expired', id: approvalId }));
                 if (!decision.allow) {
                   const msgText = decision.timeout ? '审批超时,用户未响应,操作被拒绝' : '用户拒绝执行该操作。请尊重用户决定,不要重复尝试。';
                   const deniedPath = (name === 'write_file' || name === 'edit_file') ? path.resolve(cwd, String(args.path || '')) : null;
@@ -5584,6 +5776,10 @@ const runAgent = async (msgs, rows) => {
         if (pr.aborted || pr.interrupted) turnUnfinished = true;
       }
 
+      // 上游错误导致的中断（不是用户自己按停止）也算「本轮未完成」：入库标 unfinished，
+      // 消息流里就留得住那颗按钮 —— 他要的是 429/5xx 重试打光之后还能一键接着跑。
+      if (errSent && !turnAbortedByUser) turnUnfinished = true;
+
       // 本轮用户消息仍存在才入库：撤回会删除本轮用户消息（含其后的停止消息），避免孤儿回复残留进上下文
       const userMsgExists = !!(userMsgId && db.prepare('SELECT 1 FROM ai_chat_messages WHERE id = ? AND chat_id = ?').get(userMsgId, chatId));
       if (fullReply.trim() && userMsgExists) {
@@ -5623,7 +5819,8 @@ const runAgent = async (msgs, rows) => {
       const userMsgExists2 = !!(userMsgId && db.prepare('SELECT 1 FROM ai_chat_messages WHERE id = ? AND chat_id = ?').get(userMsgId, chatId));
       if (fullReply.trim() && userMsgExists2) {
         try {
-          insertAssistantMsg.run(chatId, 'assistant', stripLegacyToolLog(fullReply).substring(0, 50000), poolRows[0].id, (fullReasoning || '').substring(0, 20000) || null, null);
+          // 走到这里就是「这轮被异常打断」，半截回复入库时一律标未完成 → 消息流里留得住那颗按钮
+          insertAssistantMsg.run(chatId, 'assistant', stripLegacyToolLog(fullReply).substring(0, 50000), poolRows[0].id, (fullReasoning || '').substring(0, 20000) || null, null, 1);
           touchChatStmt.run(chatId);
         } catch (e2) { /* 忽略 */ }
       }
@@ -5709,8 +5906,8 @@ router.patch('/chats/:id/settings', wrap((req, res) => {
     const lim = parseInt(req.body.context_limit, 10);
     // 非法值以前是「静默跳过」：界面写着自己填的那个数、库里还是旧的，看着就是「改了没生效，
     // 刷新一下才显示真值」。现在直接 400 说清楚，别让用户对着一个没写进去的输入框猜。
-    if (!Number.isInteger(lim) || lim < 0 || lim > 1000000) {
-      return fail(res, 400, '上下文窗口要 0（不限）到 1000000 之间的整数；0 表示不限制');
+    if (!Number.isInteger(lim) || lim < 0 || lim > 2147483647) {
+      return fail(res, 400, '上下文窗口要 0（不限）到 2147483647 之间的整数；0 表示不限制');
     }
     updates.push('context_limit = ?');
     params.push(lim);

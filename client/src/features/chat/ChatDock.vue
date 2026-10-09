@@ -203,7 +203,10 @@
           <div class="row"><span class="muted">思考</span><span>{{ fmt(usage.reasoning_tokens) }} tok</span></div>
           <div class="row"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
           <div class="actions">
-            <button class="btn" type="button" @click="$emit('press')">压缩上下文</button>
+            <button class="btn" type="button" :disabled="pressing" :title="pressing ? '摘要生成中，消息流里那张卡片会跟着阶段变' : '把较早的历史压成一段摘要'" @click="$emit('press')">
+              <i v-if="pressing" class="fas fa-circle-notch fa-spin"></i>
+              {{ pressing ? '正在压缩…' : '压缩上下文' }}
+            </button>
             <button class="btn" type="button" @click="ctxOpen = true">设定窗口</button>
           </div>
         </div>
@@ -229,9 +232,13 @@
         <h4>待注入提示词</h4>
         <div class="card">
           <div v-if="!insertItems.length" class="muted">无。可用 <code>/insert</code> 预埋。</div>
-          <div v-for="(it, i) in insertItems" :key="i" class="insert-item">{{ it }}</div>
+          <!-- 每条一颗删除键：写错一条不该把整堆清掉（他要的「单条删除」） -->
+          <div v-for="(it, i) in insertItems" :key="`${i}-${it}`" class="insert-item">
+            <span class="insert-text">{{ it }}</span>
+            <button class="insert-x" type="button" title="只删这一条" @click="$emit('remove-insert', i)">×</button>
+          </div>
           <button v-if="insertItems.length" class="btn" type="button" @click="$emit('clear-insert')">
-            清空
+            全部清空
           </button>
         </div>
       </section>
@@ -417,13 +424,15 @@ const props = defineProps({
   insertItems: { type: Array, default: () => [] },
   contextUsed: { type: Number, default: 0 },
   contextLimit: { type: Number, default: 0 },
+  /** 手动压缩在跑：那颗按钮要禁用 + 转圈（一次摘要要等上游几十秒，没反馈就像点死了） */
+  pressing: { type: Boolean, default: false },
   /** 实验室「Git 版本预览」开关（来自 localStorage，随请求一起发给后端） */
   labGit: { type: Boolean, default: false },
   /** 展开态的栏宽（父组件拖分栏那个值）：贴边临时展开时按它判断指针是否已离开栏体 */
   dockW: { type: Number, default: 300 },
 });
 
-const emit = defineEmits(['undo', 'update-task', 'press', 'set-context', 'clear-insert', 'git-action']);
+const emit = defineEmits(['undo', 'update-task', 'press', 'set-context', 'clear-insert', 'remove-insert', 'git-action']);
 
 /* ---- 工作区变更预览 ---- */
 const chg = ref({ is_repo: false, branch: '', files: [], stat: '' });
@@ -1038,11 +1047,35 @@ section h4 .refresh { margin-left: auto; }
   font-size: 11px;
 }
 .insert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-2);
   padding: 4px 0;
   border-bottom: 1px solid var(--border-soft);
+}
+.insert-item .insert-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.insert-item .insert-x {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.insert-item .insert-x:hover {
+  color: var(--danger);
+  background: var(--bg-2);
 }
 .actions {
   display: flex;
