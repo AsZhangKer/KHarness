@@ -8,8 +8,7 @@
         class="pd-input"
         :placeholder="s.placeholder"
         spellcheck="false"
-        @keydown.enter.prevent="ok()"
-        @keydown.esc.prevent="on(null)"
+        @keydown="onKey"
       />
     </label>
     <template #footer>
@@ -27,6 +26,7 @@
 import { nextTick, ref, watch } from 'vue';
 import KModal from './KModal.vue';
 import { promptState, promptAnswer } from '../stores/prompt';
+import { isImeComposing } from '../utils/ime';
 
 const s = promptState();
 const inp = ref(null);
@@ -49,6 +49,14 @@ function ok() {
 }
 function on(v) {
   promptAnswer(v);
+}
+
+// 合成中的 Enter/Esc 是给输入法用的（选词/取消候选），一律不许抢 ——
+// 抢了会把 compositionend 弄丢，v-model 从此对这个框失聪（详见 utils/ime.js 顶部那段）。
+function onKey(e) {
+  if (isImeComposing(e)) return;
+  if (e.key === 'Enter') { e.preventDefault(); ok(); }
+  else if (e.key === 'Escape') { e.preventDefault(); on(null); }
 }
 </script>
 

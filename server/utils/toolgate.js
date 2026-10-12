@@ -156,8 +156,15 @@ function definitions() {
     const properties = {};
     const required = [];
     for (const [k, v] of Object.entries(t.params || {})) {
-      // 上游对 number/boolean 的支持参差，统一按字符串收（内部再转型），并在描述里写清取值
-      properties[k] = { type: 'string', description: v.desc + (v.type === 'number' ? '（数字，按字符串传即可）' : v.type === 'boolean' ? '（"true"/"false"）' : '') };
+      // 个别参数天生就是数组/对象（ask_user 的 options / questions）：这种摊平成字符串就得靠服务端
+      // 猜着切（逗号一切就把一句话切成两个选项）。声明了 jsonSchema 的原样交出去，
+      // 原生 function calling 直接给结构，文本协议模型也能按描述里的形状写。
+      if (v.jsonSchema) {
+        properties[k] = Object.assign({}, v.jsonSchema, { description: v.desc });
+      } else {
+        // 上游对 number/boolean 的支持参差，统一按字符串收（内部再转型），并在描述里写清取值
+        properties[k] = { type: 'string', description: v.desc + (v.type === 'number' ? '（数字，按字符串传即可）' : v.type === 'boolean' ? '（"true"/"false"）' : '') };
+      }
       if (v.required) required.push(k);
     }
     return { type: 'function', function: { name: n, description: t.description, parameters: { type: 'object', properties, required } } };
@@ -180,7 +187,8 @@ function schemas() {
     }
     out[n] = {};
     for (const [k, v] of Object.entries(registry.get(n).params || {})) {
-      out[n][k] = { type: 'string', required: !!v.required, desc: v.desc };
+      // 声明了 jsonSchema 的参数按 'json' 记：validateToolArgs 只卡 string，数组/对象原样透传给 run
+      out[n][k] = { type: v.jsonSchema ? 'json' : 'string', required: !!v.required, desc: v.desc };
     }
   }
   return out;

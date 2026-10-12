@@ -65,6 +65,9 @@ export const aiApi = {
   getChats: () => http.get('/ai/chats').then(pick),
   createChat: (b) => http.post('/ai/chats', b).then(pick),
   getChat: (id) => http.get(`/ai/chats/${id}`).then(pick),
+  // 只要会话那一小份配置（模型/开关/审批/思考/工作目录）：切回一条正在生成的会话时用，
+  // 别把整段消息拖过来。silent：老后端没这条路由，404 不该弹红条。
+  getChatSettings: (id) => http.get(`/ai/chats/${id}/settings`, { silent: true }).then(pick),
   deleteChat: (id) => http.delete(`/ai/chats/${id}`).then(pick),
   // 回收站（会话 / 项目快照）
   trashList: () => http.get('/ai/trash').then(pick),
@@ -172,7 +175,10 @@ export const aiApi = {
   cancelDatabaseImport: () => http.post('/ai/database/import/cancel').then(pick),
 
   // 内置浏览器：动作由服务端排队、桌面窗口长轮询取走执行
-  browserPoll: () => http.get('/ai/browser/poll', { timeout: 40000 }).then(pick),
+  // silent + 90s：服务端只挂 25s 就回 null，正常永远撞不到超时；撞到的时候基本都是
+  // 主进程忙到事件循环转不动（截图、大 JSON），这属于「窗口下一轮还会再来取」，
+  // 不该刷一条红色报错弹窗（他真机就被这条假报错弹过一次）。
+  browserPoll: () => http.get('/ai/browser/poll', { timeout: 90000, silent: true }).then(pick),
   browserReport: (b) => http.post('/ai/browser/report', b).then(pick),
   browserStatus: () => http.get('/ai/browser/status').then(pick),
 
@@ -232,16 +238,18 @@ export const aiApi = {
   gitPush: (b) => http.post('/ai/git/push', b, { timeout: 60000 }).then(pick),
   gitChanges: (b) => http.post('/ai/git/changes', b || {}, { timeout: 25000 }).then(pick),
   revealPath: (path) => http.post('/ai/reveal', { path }, { timeout: 10000 }).then(pick),
-  // 后台任务（右栏「后台」页）
-  getBackground: () => http.get('/ai/background', { timeout: 10000 }).then(pick),
-  killBackground: (id) => http.post('/ai/background/kill', { id }, { timeout: 15000 }).then(pick),
+  // 后台任务（右栏「后台」页）：带 chat_id 才只列本会话自己起的（别的会话起的任务看不见也杀不掉）
+  getBackground: (chat_id) => http.get('/ai/background', { params: chat_id ? { chat_id } : {}, timeout: 10000 }).then(pick),
+  killBackground: (id, chat_id) => http.post('/ai/background/kill', { id, chat_id }, { timeout: 15000 }).then(pick),
 
   // 子智能体
   getSubagents: (chat_id) => http.get('/ai/subagents', { params: chat_id ? { chat_id } : {}, timeout: 10000 }).then(pick),
   getSubagent: (id) => http.get(`/ai/subagents/${encodeURIComponent(id)}`, { timeout: 10000 }).then(pick),
-  spawnSubagent: (b) => http.post('/ai/subagents/spawn', b, { timeout: 20000 }),
-  killSubagent: (agent_id) => http.post('/ai/subagents/kill', { agent_id }, { timeout: 15000 }),
-  deleteSubagent: (agent_id) => http.post('/ai/subagents/delete', { agent_id }, { timeout: 15000 }),
+  // 没有「人工派发」那一颗：侧栏的手动下发已撤掉（第七十六轮），派活是 AI 的 agent_run 工具的事。
+  // chat_id 决定归属：别的会话派出去的分身停不了、也删不了（与后台任务同一口径）
+  killSubagent: (agent_id, chat_id) => http.post('/ai/subagents/kill', { agent_id, chat_id }, { timeout: 15000 }),
+  killSubagentsByChat: (chat_id) => http.post('/ai/subagents/kill-chat', { chat_id }, { timeout: 15000, silent: true }),
+  deleteSubagent: (agent_id, chat_id) => http.post('/ai/subagents/delete', { agent_id, chat_id }, { timeout: 15000 }),
 
   /* Computer Use（设置 → 实验室功能 → Computer Use）：总开关只在这里，工具页那组已被后端隐藏。
      响应统一 { code, message, data }，pick 之后就是 data。
@@ -263,6 +271,10 @@ export const aiApi = {
   computerProbe: (cmd) => http.post('/ai/computer/probe', { cmd }, { timeout: 20000 }).then(pick),
   // 长轮询（服务端最多挂 20 秒）：快捷键急停在别处按的，也靠这一条立刻反映到界面
   computerEvents: (since, signal) => http.get('/ai/computer/events', { params: { since: since || 0 }, timeout: 30000, signal, silent: true }).then(pick),
+
+  // 调试（仅开发版，正式版这两条回 404）：日志快照与清空；实时流走 EventSource，不经这里
+  debugLogs: (n = 500) => http.get('/debug/logs', { params: { n }, timeout: 10000, silent: true }).then(pick),
+  debugLogsClear: () => http.delete('/debug/logs', { silent: true }).then(pick),
 };
 
 export const settingsApi = {

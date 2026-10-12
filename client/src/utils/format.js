@@ -111,6 +111,9 @@ marked.use({
 
 export function renderMarkdown(md) {
   if (typeof md !== 'string' || !md) return '';
+  // 开发版性能采样读的就是这个计数器（stores/perfwatch.js）：一轮流式里到底重排了多少次 markdown
+  const st = window.__khRenderStats || (window.__khRenderStats = { md: 0, hit: 0, miss: 0 });
+  st.md++;
   const picked = extractMath(md);
   const html = marked.parse(restoreCodes(picked.md, picked.codes));
   const clean = DOMPurify.sanitize(html, {

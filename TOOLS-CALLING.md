@@ -53,7 +53,7 @@
 |---|---|---|
 | 后台任务 | `run_background` / `background_status` / `background_list` / `background_kill` | 异步起长任务（不阻塞对话），输出落临时文件；status 查单个、list 查全部、kill 按 handle 终止整棵树。任务不跨服务重启 |
 | 长期记忆 | `memory_write` / `memory_read` / `memory_list` | 跨会话跨项目；name 用 kebab-case，单条 ≤4000 字，同名覆盖 |
-| 交互 | `ask_user` | 需要用户拍板时正式提问，前端覆盖发送框给选项 + 自由输入 + 取消；10 分钟未答按未回答返回 |
+| 交互 | `ask_user` | 需要用户拍板时正式提问，前端覆盖发送框给选项 + 自由输入 + 取消；**没有超时**，用户没答就一直挂着（点「取消」或这一轮结束才放行） |
 | 外部接口 | `web_search`、`github_repo`、`whois_query`、`weather_city`、`image_ocr`、B站三件套… | 见第五轮记录；按次计费，本地有结果缓存 |
 
 > 以上 6 个修改类工具（`write_file` / `edit_file` / `delete_file` / `delete_dir` / `create_dir` / `rename_file`）

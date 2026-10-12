@@ -13,9 +13,7 @@
       <section v-show="tab === 'plan'">
         <h4>计划任务</h4>
         <div class="card">
-          <div v-if="!tasks.length" class="muted">
-            {{ planMode ? '计划模式，使用任务栏可检阅Agent下发的计划任务;' : '计划模式未开启，使用任务栏可检阅Agent下发的计划任务;' }}
-          </div>
+          <div v-if="!tasks.length" class="muted">{{ txt('chat.dock.planEmpty') }}</div>
           <div v-for="t in tasks" :key="t.id" class="task" :class="'is-' + t.status">
             <i :class="taskIcon(t.status)"></i>
             <div class="t" :title="t.error_summary || ''">{{ t.content }}</div>
@@ -40,7 +38,7 @@
         <div class="card">
           <div v-if="bgErr" class="muted">{{ bgErr }}</div>
           <div v-else-if="!bgTasks.length" class="muted">
-            暂无后台任务。模型可调用<code>run_background</code>启动后台异步构建。
+            {{ txt('chat.dock.bgEmpty') }}
           </div>
           <div v-for="t in bgTasks" :key="t.id" class="bg-item">
             <div class="row">
@@ -59,6 +57,7 @@
             </div>
             <pre v-if="t.tail" class="bg-tail">{{ t.tail }}</pre>
           </div>
+          <div v-if="bgHidden" class="muted small">{{ txt('chat.dock.bgHidden', { n: bgHidden }) }}</div>
         </div>
       </section>
 
@@ -74,36 +73,26 @@
         <h4>
           子智能体
           <button class="k-btn sm ghost refresh" type="button" @click="loadAgents">刷新</button>
+          <button v-if="runningAgents" class="k-btn sm danger" type="button" @click="killAllAgents">
+            {{ txt('chat.agent.stopAll') }}
+          </button>
         </h4>
         <div class="card">
-          <div v-if="!agents.length" class="muted">
-            还没有子智能体。模型使用 <code>agent_run</code> 和 <code>agent_spawn</code> 派出的只读子智能体将列出于此；
-            你也可以直接手动派遣一个子智能体。要使用该功能，请在「设置 → 工具 → 子智能体」勾选启用。
+          <div v-if="!agents.length" class="muted">{{ txt('chat.dock.agentEmpty') }}</div>
+          <!-- 一行一路，只留名称 + 一颗红绿点（第七十六轮他定的形状）：
+               名称不换行、超出用省略号；点一下开执行步骤弹窗；右键出「停止 / 删除」。
+               状态文字与任务全文都在 title 里，不占版面。 -->
+          <div
+            v-for="a in agents"
+            :key="a.id"
+            class="ag-row"
+            :title="`${a.name || a.id} · ${agentState(a.status)}\n${a.task || ''}`"
+            @click="emit('open-agent', a.id)"
+            @contextmenu.prevent="openAgMenu(a, $event)"
+          >
+            <i class="ag-dot" :class="a.running ? 'run' : 'stop'"></i>
+            <span class="ag-name">{{ a.name || a.id }}</span>
           </div>
-          <div v-for="a in agents" :key="a.id" class="bg-item">
-            <div class="row">
-              <span class="badge" :class="a.status === 'running' || a.status === 'queued' ? 'on' : (a.status === 'done' ? '' : 'err')">{{ agentState(a.status) }}</span>
-              <span class="grow" :title="a.task">{{ a.name }}</span>
-              <button v-if="a.running" class="k-btn sm danger" type="button" @click="killAgent(a.id)">停止</button>
-              <button class="k-btn sm ghost" type="button" @click="toggleAgent(a.id)">{{ openAgent[a.id] ? '收起' : '详情' }}</button>
-              <button class="k-btn sm ghost" type="button" title="删除记录" @click="delAgent(a.id)"><i class="fas fa-trash"></i></button>
-            </div>
-            <div class="row muted small">
-              <span>{{ a.id }}</span>
-              <span v-if="a.model">{{ a.model }}</span>
-              <span>{{ a.iter }} 轮 / {{ a.steps }} 步</span>
-            </div>
-            <template v-if="openAgent[a.id]">
-              <div class="ag-task">{{ a.task_full || a.task }}</div>
-              <pre v-if="a.status === 'done' || a.result_preview" class="bg-tail">{{ a.result_full || a.result_preview }}</pre>
-              <pre v-if="a.error" class="bg-tail err-text">{{ a.error }}</pre>
-            </template>
-          </div>
-        </div>
-        <div class="card ag-new">
-          <input v-model="agName" class="k-input" placeholder="短名（可空），如 survey-auth" />
-          <textarea v-model="agTask" class="k-input nu-textarea" rows="3" placeholder="要它去查什么？子智能体只读、看不到本会话历史，背景要写清楚"></textarea>
-          <button class="k-btn primary sm" type="button" :disabled="!agTask.trim() || agBusy" @click="spawnAgent">下发任务</button>
         </div>
       </section>
 
@@ -112,32 +101,15 @@
         <h4>修改历史</h4>
         <div class="card">
           <div v-if="!history.length" class="muted">本会话尚无文件修改/撤销记录。</div>
+          <!-- 标题只显文件名（路径行单独放不下），第二行是它所在路径：都不换行，长了省略号。
+               「展开」改成「审阅」：点开弹窗看彩色 diff（新增绿/删除红 + 语法高亮），撤销那颗红键在弹窗里。 -->
           <div v-for="(h, i) in history" :key="i" class="row hist">
             <div class="grow">
-              <div>{{ h.tool }}</div>
-              <div class="mono muted">{{ h.path || h.undo_id }}</div>
-              <div v-if="openHist[i]" class="hist-body">
-                <div v-if="h.diff?.length" class="mini-diff">
-                  <div
-                    v-for="(ln, li) in histLines(h)"
-                    :key="li"
-                    class="dline"
-                    :class="ln.kind"
-                  >{{ ln.text }}</div>
-                </div>
-                <div v-else class="muted">{{ h.output || '（无详情）' }}</div>
-              </div>
+              <div class="hist-name" :title="h.path || h.tool">{{ baseName(h.path) || h.tool }}</div>
+              <div class="mono muted hist-path" :title="h.path">{{ h.path || h.undo_id }}</div>
             </div>
             <div class="col">
-              <button class="k-btn sm ghost" type="button" @click="openHist[i] = !openHist[i]">
-                {{ openHist[i] ? '收起' : '展开' }}
-              </button>
-              <button
-                class="k-btn sm"
-                type="button"
-                :disabled="histUndone(h)"
-                @click="$emit('undo', h.ref || h)"
-              >{{ histUndone(h) ? '已撤销' : '撤销' }}</button>
+              <button class="k-btn sm ghost" type="button" @click="$emit('review', h)">{{ txt('chat.hist.review') }}</button>
             </div>
           </div>
         </div>
@@ -197,11 +169,13 @@
       <section v-show="tab === 'usage'">
         <h4>用量信息</h4>
         <div class="card">
-          <div class="row"><span class="muted">本轮输入</span><span>{{ fmt(usage.prompt_tokens) }} tok</span></div>
-          <div class="row"><span class="muted">本轮输出</span><span>{{ fmt(usage.completion_tokens) }} tok</span></div>
-          <div class="row"><span class="muted">缓存</span><span>{{ fmt(usage.cached_tokens) }} tok</span></div>
-          <div class="row"><span class="muted">思考</span><span>{{ fmt(usage.reasoning_tokens) }} tok</span></div>
-          <div class="row"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
+          <!-- 这四格是**单个回合**的 token 明细（第七十四轮起随消息落库，所以刷新、切回来都还在）：
+               没在跑的时候显示的是上一轮的数字，标错成「本轮」就是假话，所以跟着 busy 换词。 -->
+          <div class="row" :title="turnNote"><span class="muted">{{ turnWord }}输入</span><span>{{ fmt(usage.prompt_tokens) }} tok</span></div>
+          <div class="row" :title="turnNote"><span class="muted">{{ turnWord }}输出</span><span>{{ fmt(usage.completion_tokens) }} tok</span></div>
+          <div class="row" :title="turnNote"><span class="muted">缓存</span><span>{{ fmt(usage.cached_tokens) }} tok</span></div>
+          <div class="row" :title="turnNote"><span class="muted">思考</span><span>{{ fmt(usage.reasoning_tokens) }} tok</span></div>
+          <div class="row" title="当前上下文占用 / 窗口上限（以上游实测为锚点，和上面四格不是一把尺）"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
           <div class="actions">
             <button class="btn" type="button" :disabled="pressing" :title="pressing ? '摘要生成中，消息流里那张卡片会跟着阶段变' : '把较早的历史压成一段摘要'" @click="$emit('press')">
               <i v-if="pressing" class="fas fa-circle-notch fa-spin"></i>
@@ -220,7 +194,7 @@
           <div class="row"><span class="muted">Agent</span><span>{{ agentMode ? '开' : '关' }}</span></div>
           <div class="row"><span class="muted">Plan</span><span>{{ planMode ? '开' : '关' }}</span></div>
           <div class="row"><span class="muted">只读</span><span>{{ readonlyMode ? '开' : '关' }}</span></div>
-          <div class="row"><span class="muted">模型池</span><span>{{ autoMode ? '自动' : '单模型' }}</span></div>
+          <div v-if="uiPrefs.state.poolOn" class="row"><span class="muted">模型池</span><span>{{ autoMode ? '自动' : '单模型' }}</span></div>
           <div class="row"><span class="muted">审批</span><span>{{ approvalLabel }}</span></div>
           <div class="row"><span class="muted">目录</span><span class="mono">{{ cwd || '—' }}</span></div>
         </div>
@@ -231,7 +205,7 @@
         </div>
         <h4>待注入提示词</h4>
         <div class="card">
-          <div v-if="!insertItems.length" class="muted">无。可用 <code>/insert</code> 预埋。</div>
+          <div v-if="!insertItems.length" class="muted">{{ txt('chat.dock.insertEmpty1') }}<code>/insert</code>{{ txt('chat.dock.insertEmpty2') }}</div>
           <!-- 每条一颗删除键：写错一条不该把整堆清掉（他要的「单条删除」） -->
           <div v-for="(it, i) in insertItems" :key="`${i}-${it}`" class="insert-item">
             <span class="insert-text">{{ it }}</span>
@@ -253,7 +227,7 @@
             class="sup-row sup-input"
             rows="3"
             placeholder="把任务交给监工：它拆计划、给主智能体下命令、自己验收，直到宣布完工"
-            @keydown.enter.exact.prevent="svSay"
+            @keydown="imeSendEnter"
           ></textarea>
           <div class="sup-row sup-acts">
             <button class="btn sm" type="button" :disabled="svSup.running || svSup.waiting || !svSup.draft.trim()" @click="svSay">
@@ -380,17 +354,40 @@
         <button type="button" @click="resetTabsShown"><i class="fas fa-rotate-left"></i> 恢复默认</button>
       </div>
     </Teleport>
+
+    <!-- 子智能体卡片的右键菜单：一行一路，卡片上不放按钮（几路并排时太挤），停止/删除收在这里 -->
+    <Teleport to="body">
+      <div v-if="agMenu" class="ctx-mask" @mousedown="agMenu = null" @contextmenu.prevent="agMenu = null"></div>
+      <div
+        v-if="agMenu"
+        class="ctx-menu ag-menu"
+        :style="{ left: agPos.x + 'px', top: agPos.y + 'px' }"
+        @contextmenu.prevent="agMenu = null"
+      >
+        <div class="dtm-hint ellip">{{ agMenu.name || agMenu.id }}</div>
+        <button v-if="agMenu.running" type="button" @click="stopFromMenu">
+          <i class="fas fa-stop"></i> <span class="grow">{{ txt('chat.agent.stop') }}</span>
+        </button>
+        <button type="button" @click="removeFromMenu">
+          <i class="fas fa-trash"></i> <span class="grow">{{ txt('chat.agent.remove') }}</span>
+        </button>
+      </div>
+    </Teleport>
+
+    <!-- 修改历史的「审阅」弹窗由 ChatPage 挂那一份（消息流里的编辑卡也开同一个），这里只把要审阅的那条递上去 -->
   </aside>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { txt } from '../../copy';
 import KTabs from '../../ui/KTabs.vue';
 import KModal from '../../ui/KModal.vue';
 import KInput from '../../ui/KInput.vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import ComputerUsePanel from './ComputerUsePanel.vue';
 import { useEdgePeek } from '../../ui/useEdgePeek';
+import { baseName } from '../../utils/diffview';
 import { formatTokens } from '../../utils/format';
 import { aiApi } from '../../api';
 import { uiPrefs } from '../../stores/prefs';
@@ -398,6 +395,7 @@ import { useChatStore } from './chatStore';
 import { superviseStore } from './superviseStore';
 import { toast } from '../../stores/toast';
 import { confirmDialog } from '../../stores/confirm';
+import { isImeComposing } from '../../utils/ime';
 
 const store = useChatStore();
 
@@ -432,7 +430,7 @@ const props = defineProps({
   dockW: { type: Number, default: 300 },
 });
 
-const emit = defineEmits(['undo', 'update-task', 'press', 'set-context', 'clear-insert', 'remove-insert', 'git-action']);
+const emit = defineEmits(['undo', 'update-task', 'press', 'set-context', 'clear-insert', 'remove-insert', 'git-action', 'open-agent', 'review']);
 
 /* ---- 工作区变更预览 ---- */
 const chg = ref({ is_repo: false, branch: '', files: [], stat: '' });
@@ -633,14 +631,22 @@ watch(() => [store.state.chatId, props.cwd], () => {
   if (tab.value === 'watch') svLoad(store.state.chatId);
   superviseStore.loadTurns(store.state.chatId);
 });
-const openHist = reactive({});
 const ctxOpen = ref(false);
 const ctxLimit = ref(0);
 
-/* 后台任务：切到该页才拉，页内每 5s 自动刷新 */
+/* 后台任务：切到该页才拉，页内每 5s 自动刷新。
+   按会话取（他第七十四轮报的「后台任务串会话」）：整张表所有会话共用时，
+   A 起的 dev server 会列进 B 的面板、B 还能一颗键杀掉它。 */
 const bgTasks = ref([]);
+const bgHidden = ref(0);
 const bgErr = ref('');
 let bgTimer = null;
+
+/* 用量那四格的说法：跑动中才是「本轮」，静止时展示的是上一轮落库的那份（数字来源不同，别糊弄） */
+const turnWord = computed(() => (store.state.busy ? '本轮' : '上轮'));
+const turnNote = computed(() => (store.state.busy
+  ? '这一回合的 token 明细（跑完随消息落库）'
+  : '上一回合的 token 明细（从这条会话最近一条回复的落库记录读，刷新与切回来都还在）'));
 
 function bgState(s) {
   return { running: '运行中', exited: '已退出', 'exited-error': '异常退出', killed: '已终止', failed: '启动失败' }[s] || s;
@@ -654,18 +660,23 @@ function fmtDur(ms) {
 }
 
 async function loadBg() {
+  const chatId = store.state.chatId;
   try {
-    const res = await aiApi.getBackground();
+    const res = await aiApi.getBackground(chatId || undefined);
+    // 等回来时人可能已经切走了：别把上一条会话的清单写进这一条的页面
+    if (store.state.chatId !== chatId) return;
     bgTasks.value = res?.tasks || [];
+    bgHidden.value = res?.hidden || 0;
     bgErr.value = '';
   } catch (e) {
+    if (store.state.chatId !== chatId) return;
     bgErr.value = e?.response?.data?.message || '后台任务列表读取失败';
   }
 }
 
 async function killBg(id) {
   try {
-    await aiApi.killBackground(id);
+    await aiApi.killBackground(id, store.state.chatId || undefined);
     await loadBg();
   } catch (e) {
     bgErr.value = e?.response?.data?.message || '终止失败';
@@ -676,6 +687,12 @@ watch(tab, (t) => {
   if (t === 'bg') loadBg();
   if (t === 'agents') loadAgents();
 });
+// 切会话：清单立刻换成空（等 loadBg 回来），不然会有几秒挂着上一条会话的任务
+watch(() => store.state.chatId, () => {
+  bgTasks.value = [];
+  bgHidden.value = 0;
+  if (tab.value === 'bg') loadBg();
+});
 // 切到「文件」页或换工作目录时刷新变更预览
 watch(
   () => [tab.value, props.cwd, props.labGit],
@@ -684,13 +701,13 @@ watch(
   }
 );
 
-/* 子智能体：列表 + 详情 + 人工下发。SSE 推来的实时进度合并进列表，
-   所以主 Agent 正在派活时不用刷新也能看到步数在涨。 */
+/* 子智能体：一行一路的紧凑清单。SSE 推来的实时进度合并进列表，
+   所以主 Agent 正在派活时不用刷新也能看到步数在涨。
+   卡片本身只承担两件事：点 = 看执行步骤弹窗，右键 = 停止/删除。人工下发已经撤掉
+   （第七十六轮他定的：派发是 AI 的活，侧栏不再替人派）。 */
 const agents = ref([]);
-const openAgent = reactive({});
-const agName = ref('');
-const agTask = ref('');
-const agBusy = ref(false);
+const agMenu = ref(null);
+const agPos = ref({ x: 0, y: 0 });
 let agTimer = null;
 
 function agentState(s) {
@@ -721,49 +738,52 @@ async function loadAgents() {
   }
 }
 
-async function toggleAgent(id) {
-  openAgent[id] = !openAgent[id];
-  if (!openAgent[id]) return;
-  try {
-    const d = await aiApi.getSubagent(id);
-    const row = agents.value.find((a) => a.id === id);
-    if (row && d) {
-      row.task_full = d.task;
-      row.result_full = d.result;
-      row.error = d.error || row.error;
-    }
-  } catch (e) { /* 详情拉不到就退回列表里的摘要 */ }
+async function killAgent(id) {
+  // chat_id 带上：归属在服务端判，别的会话的分身这颗键停不动（与后台任务同一口径）
+  const r = await aiApi.killSubagent(id, store.state.chatId || undefined);
+  toast(r?.message || '已请求停止', 'info');
+  await loadAgents();
 }
 
-async function killAgent(id) {
-  const r = await aiApi.killSubagent(id);
-  toast(r?.message || '已请求停止', 'info');
+const runningAgents = computed(() => agents.value.filter((a) => a.running).length);
+
+async function killAllAgents() {
+  const n = runningAgents.value;
+  if (!n) return;
+  if (!(await confirmDialog(txt('chat.agent.stopAllConfirm', { n }), { okText: txt('chat.agent.stop'), danger: true }))) return;
+  try {
+    const r = await aiApi.killSubagentsByChat(store.state.chatId);
+    toast(r?.message || `已请求停止 ${n} 个`, 'info');
+  } catch (e) {
+    /* 拦截器已提示 */
+  }
   await loadAgents();
 }
 
 async function delAgent(id) {
   if (!(await confirmDialog('删除这个子智能体的记录？正在跑的会被停掉。'))) return;
-  const r = await aiApi.deleteSubagent(id);
+  const r = await aiApi.deleteSubagent(id, store.state.chatId || undefined);
   toast(r?.message || '已删除', 'success');
-  delete openAgent[id];
   await loadAgents();
 }
 
-async function spawnAgent() {
-  const task = agTask.value.trim();
-  if (!task) return;
-  agBusy.value = true;
-  try {
-    const r = await aiApi.spawnSubagent({ name: agName.value.trim(), task, chat_id: store.state.chatId || undefined, cwd: props.cwd || undefined });
-    toast(r?.message || '已派出', 'success');
-    agTask.value = '';
-    agName.value = '';
-    await loadAgents();
-  } catch (e) {
-    /* 拦截器已提示 */
-  } finally {
-    agBusy.value = false;
-  }
+/** 右键菜单：贴着光标往下长，底部放不下就往上收（和标签条那份菜单同一算法） */
+function openAgMenu(a, e) {
+  agMenu.value = a;
+  agPos.value = {
+    x: Math.max(6, Math.min(e.clientX, window.innerWidth - 200)),
+    y: Math.max(6, Math.min(e.clientY, window.innerHeight - 108)),
+  };
+}
+async function stopFromMenu() {
+  const a = agMenu.value;
+  agMenu.value = null;
+  if (a) await killAgent(a.id);
+}
+async function removeFromMenu() {
+  const a = agMenu.value;
+  agMenu.value = null;
+  if (a) await delAgent(a.id);
 }
 
 // 主 Agent 派了新分身时立刻同步一次，避免等 5s 轮询
@@ -781,8 +801,16 @@ onUnmounted(() => {
   if (agTimer) clearInterval(agTimer);
 });
 
+// 监工输入框：Enter 发送、Shift+Enter 换行；输入法候选词还没上屏时这一下属于输入法，别抢
+function imeSendEnter(e) {
+  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (isImeComposing(e)) return;
+  e.preventDefault();
+  svSay();
+}
+
 const approvalLabel = computed(
-  () => ({ strict: '严格', default: '默认', exempt: '免除' }[props.approvalMode] || props.approvalMode)
+  () => ({ strict: '严格', default: '默认', exempt: '免除', fullsend: 'FULL-SEND' }[props.approvalMode] || props.approvalMode)
 );
 
 function taskStatusLabel(s) {
@@ -810,28 +838,6 @@ watch(ctxOpen, (v) => {
 function saveCtx() {
   emit('set-context', Number(ctxLimit.value) || 0);
   ctxOpen.value = false;
-}
-
-/** 历史卡里的 diff：服务端给的是 {t:'add'|'del'|'ctx', text}，也兼容 +/- 开头的字符串 */
-function histLines(h) {
-  return (h.diff || []).slice(0, 80).map((l) => {
-    if (typeof l === 'string') {
-      if (l.startsWith('+++') || l.startsWith('---')) return { kind: '', text: l };
-      if (l.startsWith('+')) return { kind: 'add', text: l };
-      if (l.startsWith('-')) return { kind: 'del', text: l };
-      return { kind: '', text: l };
-    }
-    const k = String(l?.t || l?.kind || l?.type || '').toLowerCase();
-    const text = String(l?.text ?? l?.line ?? '');
-    if (k === 'add' || k === 'insert') return { kind: 'add', text: `+${text}` };
-    if (k === 'del' || k === 'delete' || k === 'remove') return { kind: 'del', text: `-${text}` };
-    return { kind: '', text };
-  });
-}
-
-/** 撤销状态以 steps 里的活对象为准 */
-function histUndone(h) {
-  return !!(h.ref && h.ref.undone) || !!h.undone;
 }
 </script>
 
@@ -941,26 +947,26 @@ section h4 .refresh { margin-left: auto; }
   color: var(--text-3);
   white-space: pre-wrap;
 }
-/* 子智能体面板 */
-.ag-task {
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: var(--bg-elev);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--text-2);
-  white-space: pre-wrap;
-  max-height: 120px;
-  overflow: auto;
-}
-.ag-new {
-  margin-top: 10px;
+/* 子智能体：一行一路。名称不换行、超出省略号；状态只留一颗红/绿点（红=还在跑，绿=已停下）。
+   整行可点（开执行步骤弹窗），右键出停止/删除，所以这里不放按钮 —— 几路并排时一排键比名字还长。 */
+.ag-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
 }
-.ag-new .k-btn.primary { align-self: flex-start; }
+.ag-row + .ag-row { margin-top: 2px; }
+.ag-row:hover { background: var(--bg-elev); }
+.ag-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.ag-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ag-dot.run { background: var(--danger); }
+.ag-dot.stop { background: var(--success, var(--diff-add)); }
+/* 修改历史：标题是文件名，下面那行才是路径，两行都不换行 */
+.hist-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bg-tail.err-text { color: var(--danger); }
 .badge.err {
   color: var(--danger);

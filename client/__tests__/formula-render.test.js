@@ -42,6 +42,8 @@ describe('公式渲染', () => {
     unmount();
   });
 
+  // 单独跑这一步要 2s（mermaid 是整个库的第一次动态 import，磁盘 + 解析），
+  // 全套并发跑时这个开销会被挤到 5s 默认超时以外 —— 给它自己的预算，别让它做偶发失败
   it('mermaid 块在画不出来时仍然显示源码，而不是一块空白', async () => {
     const { host, unmount } = await mountMsg('```mermaid\ngraph TD; A[开始]-->B[结束];\n```\n');
     const box = host.querySelector('.md-mermaid');
@@ -49,7 +51,7 @@ describe('公式渲染', () => {
     expect(box.querySelector('pre.md-mermaid-src').textContent).toContain('graph TD');
     expect(box.textContent.trim().length).toBeGreaterThan(0);
     unmount();
-  });
+  }, 20000);
 
   it('代码块里的 $ 不会被当公式（渲染后代码原样）', async () => {
     const { host, unmount } = await mountMsg('```bash\necho "$HOME/dist"\n```\n');

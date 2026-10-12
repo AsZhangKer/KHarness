@@ -235,6 +235,30 @@ select:focus-visible {
   text-align: left;
 }
 
+/* 流式光标那枚小圆点。
+   必须在**全局**样式里（和上面整组 .md 子元素同理）：它是 withCaret() 拼进 HTML 字符串、
+   由 v-html 注进去的，Vue 的作用域样式不会给这类节点打 data-v 属性，
+   写在 <style scoped> 里会编译成 .caret-dot[data-v-xxx] —— 一个也匹配不上，
+   那枚点插得再对也没有宽高和背景，屏幕上就是一个不存在的元素（他报的「圆形光标没了」真正的根因）。 */
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.caret-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 0.12em;
+  /* 渐变呼吸：亮 → 淡 → 亮 连续过渡（旧的是 step-end 硬切，看着像开关不像光标） */
+  animation: caret-blink 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret-dot { animation: none; }
+}
+
 /* 按钮体系：尺寸克制、圆角中等、黑白为主 */
 .k-btn {
   display: inline-flex;

@@ -42,7 +42,7 @@
       <button class="icon-btn sm" type="button" @click="reload()"><i class="fas fa-rotate-right"></i></button>
       <!-- 关闭 = 回到默认空白页。「收起」只是藏起这一栏、网页还活着，之前没有真正的关闭入口 -->
       <button class="icon-btn sm" type="button" title="关闭页面（回到空白页）" @click="closePage"><i class="fas fa-file-circle-xmark"></i></button>
-      <input class="k-input mono addr" v-model="addrInput" placeholder="输入域名、IP地址……" @keydown.enter.prevent="navFromBox()" />
+      <input class="k-input mono addr" v-model="addrInput" placeholder="输入域名、IP地址……" @keydown="imeEnter" />
       <!-- UA：一颗键管两种形态，图标就是当前形态（AI 的 browser_useragent 工具改的是同一个值） -->
       <button
         class="icon-btn sm ua-btn"
@@ -120,10 +120,13 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { txt } from '../../copy';
 import { aiApi } from '../../api';
 import { browserStore as store } from '../../stores/browser';
 import { toast } from '../../stores/toast';
 import { uiPrefs as prefs } from '../../stores/prefs';
+import { imeKey } from '../../utils/ime';
+import { logErr } from '../../utils/errlog';
 
 const st = store.state;
 const props = defineProps({ mode: { type: String, default: 'sidebar' } });
@@ -140,6 +143,7 @@ const online = ref(false);
 const queued = ref(0);
 const viewportOk = ref(true);
 const settleWhy = ref('');   // 没能就位时给模型看的原因
+const actionHold = ref(false);   // 模型正在用这一栏：空白页也不许把视图藏成 0×0（见 syncBounds）
 const ctx = ref(null);
 
 let stopped = false;
@@ -186,6 +190,12 @@ async function setUaMode(mode, { reload = true, silent = false } = {}) {
   return next;
 }
 
+/** 洞的原始尺寸（不做 40px 门槛）—— 报错时要说「量到的是多大」，0 也得如实报 */
+function holeRaw() {
+  const r = holeEl.value?.getBoundingClientRect?.();
+  return { w: Math.round(r?.width || 0), h: Math.round(r?.height || 0) };
+}
+
 /** 洞在窗口里的位置（CSS px = Electron 的 DIP，主进程那边直接用） */
 function holeBounds() {
   const el = holeEl.value;
@@ -193,6 +203,21 @@ function holeBounds() {
   const r = el.getBoundingClientRect();
   if (r.width < 40 || r.height < 40) return null;
   return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+}
+
+/**
+ * 等这一栏真的撑开。
+ * 收起时 `.browser-col:not(.open)` 是 width:0，展开有 **0.18s 宽度过渡**（tokens.css 的 --dur），
+ * 而老代码是 `store.expand()` + 一个 `nextTick` 就去量洞 —— 那一瞬量到的还是 0，
+ * 于是首次建视图直接抛「浏览器栏无法正确渲染」（他第七十四轮报的那条）。
+ */
+async function waitForHole(ms = 1500) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (holeBounds()) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 60));
+  }
 }
 
 /** 第一次用到才建视图；之后每次用到都把窗口带回前台（挡住时点击与截图都会失效） */
@@ -203,12 +228,18 @@ async function ensureView() {
     // 洞量不到尺寸也照样要 create —— 主进程那边可能已经有一个视图活在独立窗口里，
     // 这一步真正的目的是把它认领回来（create 对已存在的视图就是返回现状）
     applyState(await bv({ op: 'create', bounds: bounds || undefined, ua: uaText() }));
+    // 量不到洞就先别宣布「已就绪」：以前这里先置 viewReady 再抛错，
+    // 于是第二个动作改走下面那条 `bounds: null` 的分支 → 真把视图设成 0×0，用户正看着的页面被抹掉
+    if (!bounds && !isWin) {
+      const r = holeRaw();
+      throw new Error(txt('chat.browser.noHole', { w: r.w, h: r.h }));
+    }
     viewReady = true;
-    if (!bounds && !isWin) throw new Error('浏览器栏无法正确渲染');
-  } else {
+  } else if (bounds) {
+    // 没有 bounds 就什么都别发：bv({op:'bounds', bounds:null}) 在主进程那边等于 setBounds(0,0,0,0)
     await bv({ op: 'bounds', bounds });
-    await bv({ op: 'focus' }).catch(() => {});
   }
+  await bv({ op: 'focus' }).catch(() => {});
   return bounds;
 }
 
@@ -246,7 +277,10 @@ async function syncBounds() {
   if (!viewReady) return;
   // 空白页：把原生视图藏起来，让那块 DOM 空状态露出来。视图本体留着（下次导航直接show回来），
   // 否则用户点「关闭」之后看到的还是一整块白，和「网页挂死」长得一模一样。
-  if (blankPage.value) { await bv({ op: 'hide' }).catch(() => {}); return; }
+  // 但模型正要用这一栏时不能藏（actionHold）：藏起来视图就是 0×0，
+  // 而就位检查量不到 0×0 会判定「没准备好」而把动作拦下 —— 于是第一个动作（导航）永远执行不了，
+  // 每 150ms 重来一次直到 5 秒超时（他 2026-10-11 撞的就是这条死循环）。
+  if (blankPage.value && !actionHold.value) { await bv({ op: 'hide' }).catch(() => {}); return; }
   const bounds = holeBounds();
   if (!bounds) return;
   await bv({ op: 'bounds', bounds }).catch(() => {});
@@ -292,18 +326,43 @@ async function execJsSafe(expr, tries = 3) {
   throw lastErr || new Error('页面内脚本执行失败');
 }
 
-/** 页面实际拿到的视口（和洞的尺寸比对用） */
+/**
+ * 界面缩放倍数（视图 → 放大/缩小，或 视图 → 还原）。
+ *
+ * 为什么在这儿算而不是问外壳：主窗口被缩放过之后，`getBoundingClientRect()` 给的是页面 CSS px，
+ * 而视图那边的 `innerWidth` 是 DIP（外壳放置时已经乘过 zoomFactor），
+ * 直接拿这两个数比永远差一个倍数 —— 他撞的「视口错误（页面 1296×702，栏位 1176×626）」就是这么来的
+ * （1176×1.1≈1294）。Chromium 的 devicePixelRatio 含缩放（实测 +1 档 ×1.100、+2 档 ×1.200），
+ * 而视图那一扇从没被缩放、dPR 只剩显示器缩放，两个一除就是 zoomFactor：
+ * 前端自己就能对齐单位，不用改外壳、他也不用重启。
+ */
+function mainZoom(guestDpr) {
+  const g = Number(guestDpr);
+  const z = g > 0 ? (window.devicePixelRatio || 1) / g : 1;
+  // 读出乱七八糟的 dPR（0、负数、离谱倍数）就当没缩放，退回原来的绝对比法
+  return Number.isFinite(z) && z > 0.2 && z < 6 ? z : 1;
+}
+
+/** 页面实际拿到的视口（和洞的尺寸比对用；dpr 用来反推界面缩放倍数） */
 async function guestBox() {
-  let inner = { iw: 0, ih: 0 };
+  let inner = { iw: 0, ih: 0, dpr: 0 };
   let err = '';
   try {
-    inner = JSON.parse(await execJsSafe('JSON.stringify({iw:innerWidth,ih:innerHeight})'));
+    inner = JSON.parse(await execJsSafe('JSON.stringify({iw:innerWidth,ih:innerHeight,dpr:devicePixelRatio})'));
   } catch (e) {
     err = String((e && e.message) || e);   // 读不到视口时，把原因留给上层说
   }
+  // 外壳那侧的实际边界也要问一遍：视图被收成 0×0（隐藏）之后，页面里的 innerWidth **仍留着上一次提交的尺寸**
+  // （实测：边界 0×0 时页面照样报 419×700）。只看页面那一路就会回一个「视口正好、动作成功」，
+  // 而屏幕上其实什么都没有。
+  let real = { w: 0, h: 0 };
+  try {
+    const s = await bv({ op: 'state' });
+    if (s && s.bounds) real = { w: Number(s.bounds.width) || 0, h: Number(s.bounds.height) || 0 };
+  } catch (e) { /* 问不到就当没尺寸，让上层报出来 */ }
   // 独立窗口里页面尺寸由那一扇说了算，洞照样量得到（就是它自己那块让出 10px 的洞）
   const b = holeBounds();
-  return { hw: b ? b.width : 0, hh: b ? b.height : 0, iw: inner.iw || 0, ih: inner.ih || 0, err };
+  return { hw: b ? b.width : 0, hh: b ? b.height : 0, iw: inner.iw || 0, ih: inner.ih || 0, dpr: inner.dpr || 0, realW: real.w, realH: real.h, err };
 }
 
 /**
@@ -312,9 +371,11 @@ async function guestBox() {
  * 所以宁可多等几秒，也不要回给模型一个「成功但什么也没发生」的结果。
  */
 async function settleForAction() {
-  // 独立窗口那一扇没有「收起」状态，不用为它撑开侧栏
+  // 独立窗口那一扇没有「收起」状态，不用为它撑开侧栏（也绝不许把视图搬回侧边）
   if (!shown.value) store.expand();
   await nextTick();
+  // 展开是有 0.18s 宽度过渡的，等洞量得到再动视图 —— 不等就有第一次动作必抛错
+  await waitForHole();
   try {
     if (!viewReady) await ensureView();
     else await syncBounds();
@@ -326,18 +387,35 @@ async function settleForAction() {
   const deadline = Date.now() + 5000;
   for (;;) {
     const b = await guestBox();
-    if (b.iw > 40 && b.ih > 40 && Math.abs(b.ih - b.hh) <= 8 && Math.abs(b.iw - b.hw) <= 8) {
+    const z = mainZoom(b.dpr);
+    // 洞是 CSS px、视图是 DIP，乘上缩放倍数才是同一个东西；
+    // 容差按尺寸给（两边各自取整 + 缩放读数的浮点误差），但搬歪一格仍然过不了
+    const wantW = Math.round(b.hw * z);
+    const wantH = Math.round(b.hh * z);
+    const tolW = Math.max(10, Math.round(wantW * 0.03));
+    const tolH = Math.max(10, Math.round(wantH * 0.03));
+    if (b.iw > 40 && b.ih > 40 && b.realW >= 40 && b.realH >= 40 && Math.abs(b.iw - wantW) <= tolW && Math.abs(b.ih - wantH) <= tolH) {
       viewportOk.value = true;
       settleWhy.value = '';
       return true;
     }
     if (Date.now() > deadline) {
       viewportOk.value = false;
-      settleWhy.value = `视口错误（页面 ${b.iw}×${b.ih}，栏位 ${b.hw}×${b.hh}）${b.err ? '：' + b.err : ''}`;
+      // 洞自己都量不到（这一栏根本没撑开）时说「面板 0×0」没人看得懂，直接报这一栏的尺寸
+      settleWhy.value = b.hw < 40 || b.hh < 40
+        ? txt('chat.browser.noHole', { w: b.hw, h: b.hh })
+        : (b.realW < 40 || b.realH < 40
+        ? txt('chat.browser.hidden', { w: b.realW, h: b.realH, pw: b.hw, ph: b.hh })
+        : txt('chat.browser.viewportBad', {
+          iw: b.iw, ih: b.ih, w: wantW, h: wantH,
+          zoom: z !== 1 ? txt('chat.browser.zoom', { z: z.toFixed(2) }) : '',
+        }) + (b.err ? '：' + b.err : ''));
       flash(settleWhy.value);
       return false;
     }
-    await syncBounds();
+    // 视图还没建起来（第一轮就量不到洞）时得在这里重试建，不能只 syncBounds ——
+    // syncBounds 在 !viewReady 时是直接 return 的，那样五秒里其实什么都没做，最后必然超时
+    if (!viewReady) { await ensureView().catch(() => {}); } else { await syncBounds(); }
     await new Promise((r) => setTimeout(r, 150));
   }
 }
@@ -412,6 +490,9 @@ async function reload(hard) {
 function navFromBox() {
   nav(addrInput.value).catch((e) => flash(e.message));
 }
+
+// 地址栏的 Enter：输入法候选词还没上屏时不许抢（抢了会把 v-model 弄失聪，见 utils/ime.js）
+const imeEnter = imeKey('enter', () => navFromBox());
 
 function openExternal() {
   if (st.url && st.url !== 'about:blank') window.open(st.url, '_blank');
@@ -821,13 +902,28 @@ Object.assign(ACTIONS, {
 });
 
 /** 长轮询取动作 → 执行 → 回填。失败也要回填，否则服务端白等 90 秒超时 */
+// 连续失败只往台账记第一条：恢复在线之前再记就是每 2 秒刷一条，把真原因淹掉
+let pollErrLogged = false;
+
 async function runLoop() {
   while (!stopped) {
     let action = null;
     try {
       action = await aiApi.browserPoll();
       online.value = true;
+      pollErrLogged = false;
     } catch (e) {
+      // api 层把这条标成 silent（后台长轮询不该刷红色报错弹窗），失败原因在这里进台账，
+      // 「点击复制报错」照样看得见，面板也照常显示离线并 2 秒后重试
+      if (!pollErrLogged) {
+        logErr({
+          kind: 'net',
+          where: 'GET /ai/browser/poll',
+          summary: '浏览器动作长轮询失败，2 秒后重试',
+          detail: String((e && e.message) || e),
+        });
+        pollErrLogged = true;
+      }
       online.value = false;
       await new Promise((r) => setTimeout(r, 2000));
       continue;
@@ -836,6 +932,8 @@ async function runLoop() {
     const fn = ACTIONS[action.name];
     // 这一枪跟浏览器视图无关（拍的是整块屏幕）：既不为了它展开侧栏，也不为它把视图弄到前台
     const offColumn = action.name === 'screen_capture';
+    // 动作期间不许空白页那条分支把视图收成 0×0，否则就位检查量到的永远是 0×0（syncBounds 里有账）
+    actionHold.value = true;
     store.markWorking(true);
     store.noteAction(action.name, JSON.stringify(action.args || {}), offColumn);
     let payload;
@@ -843,7 +941,7 @@ async function runLoop() {
       // 先保证这一栏展开、视图就位。视口不对时坐标全是 0，
       // 与其回一个「成功但什么都没发生」，不如直说没执行
       if (!offColumn && !(await settleForAction())) {
-        payload = bad(`浏览器栏没能就位：${settleWhy.value || '视图或视口没准备好'}，这个动作没有执行`);
+        payload = bad(txt('chat.browser.initFail', { why: settleWhy.value || txt('chat.browser.notReady') }));
       } else {
         const run = fn ? fn(action.args || {}) : Promise.resolve(bad(`窗口不认识这个动作：${action.name}`));
         // 万一 guest 卡死（executeJavaScript 永不返回），也不能把整个轮询循环拖住
@@ -855,6 +953,10 @@ async function runLoop() {
     } catch (e) {
       payload = bad(String((e && e.message) || e));
     }
+    // 「空白页时不许藏视图」只是动作期间借用的规矩，跑完要还回去：
+    // 这一枪可能根本没导航（只截图、只读文本），那块 DOM 空状态得重新露出来，不能留一整块白。
+    actionHold.value = false;
+    if (!offColumn) await syncBounds().catch(() => {});
     store.markWorking(false);
     try { await aiApi.browserReport({ id: action.id, result: payload }); } catch (e) { /* 回填不上就让服务端超时 */ }
   }

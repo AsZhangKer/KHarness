@@ -9,16 +9,45 @@ const remote = require('./remote');
 const memory = require('./memory');
 const subagent = require('./subagent');
 const toolgate = require('./toolgate');
+const optlist = require('./optlist');
 
-function parseOptions(raw) {
-  if (Array.isArray(raw)) return raw.map(x => String(x).trim()).filter(Boolean);
-  const s = String(raw ?? '').trim();
-  if (!s) return [];
-  if (s.startsWith('[')) {
-    try { const j = JSON.parse(s); if (Array.isArray(j)) return j.map(x => String(x).trim()).filter(Boolean); } catch (e) { /* 按普通文本继续 */ }
+function parseOptions(raw) { return optlist.parseOptions(raw); }
+function splitQuestions(raw) { return optlist.splitQuestions(raw); }
+
+/**
+ * ask_user 的入参整形：统一成「一题一条 {question, options[]}」。
+ * 三种来源按优先级：questions 数组（原生 function calling 直接给结构）→ 它的 JSON 串
+ * （文本协议模型只会写字符串）→ 单个 question。单题那条还得防一种老毛病：模型把三行问句
+ * 塞进一个 question —— 拆得开就按顺序问，拆不开就整条当一题，绝不硬切正文。
+ */
+function normalizeQuestions(args) {
+  const out = [];
+  let raw = args?.questions;
+  if (typeof raw === 'string' && raw.trim()) {
+    try { raw = JSON.parse(raw); } catch (e) { raw = null; }
   }
-  // 分隔符含半角逗号：模型最常写成 "A, B, C"，不拆就会渲染成一个按钮
-  return s.split(/[\n；;，,、|]+/).map(x => x.replace(/^\s*[-*\d.、)\]]+\s*/, '').trim()).filter(Boolean).slice(0, 8);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (out.length >= 6) break;
+      if (typeof item === 'string') {
+        const q = item.trim();
+        if (q) out.push({ question: q, options: [] });
+        continue;
+      }
+      const q = String(item?.question || '').trim();
+      if (!q) continue;
+      out.push({ question: q, options: parseOptions(item?.options) });
+    }
+  }
+  if (out.length) return out;
+  const single = String(args?.question || '').trim();
+  if (!single) return [];
+  return splitQuestions(single).map((q, i) => ({
+    // 只在单题写法上才拆：拆出来的话，那份 options 属于第一题（模型就是顺着第一题写的），
+    // 后面的题留成开放问答，比配错选项好
+    question: q,
+    options: i === 0 ? parseOptions(args?.options) : [],
+  }));
 }
 
 /**
@@ -73,7 +102,7 @@ const TOOLS = {
             '注意：远端没有本机的进程树回收器，kill 只对这个 PID 发 TERM/KILL，它 fork 出来的子进程可能要另外收尾。'
         };
       }
-      const r = bg.start(String(args?.command || ''), args?.cwd ? String(args.cwd) : undefined);
+      const r = bg.start(String(args?.command || ''), args?.cwd ? String(args.cwd) : undefined, Number(ctx.chatId) || null);
       if (r.error) return { error: r.error };
       return {
         output: `后台任务已启动。\nhandle：${r.id}\nPID：${r.pid}\nShell：${r.shell}\n日志：${r.log}\n` +
@@ -103,7 +132,7 @@ const TOOLS = {
         if (!host) return { error: 'background_status:这个远端任务所属的连接已被删除，查不了了。' };
         return bgremote.status(host, args?.handle, args?.tail || cfg.tail_lines);
       }
-      return bg.status(args?.handle, args?.tail || cfg.tail_lines);
+      return bg.status(args?.handle, args?.tail || cfg.tail_lines, Number(ctx.chatId) || null);
     }
   },
 
@@ -123,10 +152,10 @@ const TOOLS = {
       if (target.error) return { error: target.error };
       if (target.host) {
         const r = await bgremote.list(target.host);
-        const localN = bg.tasks.size;
+        const localN = bg.visibleFor(Number(ctx.chatId) || null).length;
         return localN ? { output: `${r.output}\n\n（另有 ${localN} 个本机后台任务，与本会话所在的远端机器无关；要管它们在本机会话里查）` } : r;
       }
-      return bg.list()
+      return bg.list(Number(ctx.chatId) || null)
     }
   },
 
@@ -147,7 +176,7 @@ const TOOLS = {
         if (!host) return { error: 'background_kill:这个远端任务所属的连接已被删除，杀不了了。' };
         return bgremote.kill(host, args?.handle);
       }
-      return bg.kill(args?.handle)
+      return bg.kill(args?.handle, Number(ctx.chatId) || null)
     }
   },
 
@@ -161,29 +190,69 @@ const TOOLS = {
     testHint: '你想先做哪一件：A 修 bug / B 加功能',
     description: [
       '遇到必须由用户决定、且不同选择会导致完全不同实现的问题时，用这个工具正式提问（会弹横幅让用户点选或自己输入）。',
+      'options 一定给成数组（["A","B"]），不要把几个候选拼成一个字符串；有几个待拍板的问题就一次用 questions 传进来，我会按顺序一题一题问，别把它们塞进一句 question。',
       '不要用它问"你确定吗"这种确认句，也不要拿它代替在正文里说明；一轮里尽量少问，能合理默认就默认并写明假设。',
       '用户也可以取消不回答；取消或超时后你要自己选一条合理路径继续，并说明理由。'
     ].join(' '),
     params: {
-      question: { type: 'string', required: true, desc: '要问用户的问题，一句话问清（含必要背景）' },
-      options: { type: 'string', required: false, desc: '候选项，2~8 个，用换行或逗号分隔（用户界面会渲染成可点按钮，并始终额外提供自由输入框）' }
+      question: { type: 'string', required: false, desc: '只问一件事时用它：一句话问清（含必要背景）。有多个问题请改用 questions，别把它们拼进这一句。' },
+      options: {
+        type: 'array', required: false,
+        jsonSchema: { type: 'array', items: { type: 'string' } },
+        desc: '这一题的候选项，2~8 个，必须给成数组，如 ["先修 bug","先加功能"]；不要把多项拼成一个长字符串（那样界面只会渲染成一个按钮）。用户始终还能自己输入。'
+      },
+      questions: {
+        type: 'array', required: false,
+        jsonSchema: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } },
+            required: ['question'],
+          },
+        },
+        desc: '一次要问多题时用：[{"question":"…","options":["A","B"]}, …]（最多 6 题）。界面会按顺序一题一题问（标着第 i/N 题），全部答完一次性回喂给你。'
+      }
     },
-    configFields: [{ key: 'timeout_minutes', label: '等待用户回答超时（分钟）', type: 'number', def: 10, min: 1, max: 30 }],
+    // 没有「等待超时」这一说：用户没回答就一直挂着（他 2026-10-10 点名要去掉超时机制）。
+    // 放行只剩两种：用户自己点取消，或这一轮结束（切会话/按停止）时被 releaseQuestionsForChat 收走。
+    configFields: [],
     run: async (args, ctx = {}) => {
-      const question = String(args?.question || '').trim();
-      if (!question) return { error: 'ask_user:question 不能为空' };
-      const options = parseOptions(args?.options);
       if (typeof ctx.ask !== 'function') {
         return { error: 'ask_user:当前调用通道不可用（该工具只在 Agent 会话流里有效）。请直接把问题写在回复正文里问用户。' };
       }
-      const cfg = toolgate.configOf('ask_user');
-      const minutes = Math.min(Math.max(Number(cfg.timeout_minutes) || 10, 1), 30);
-      const r = await ctx.ask({ question, options, timeoutMs: minutes * 60000 });
-      if (!r || !r.answered) {
-        const why = r && r.cancelled ? '用户点击了「取消」，明确表示不回答' : `用户在 ${minutes} 分钟内未回答`;
-        return { output: `${why}。请基于现有信息选择最合理的一种做法继续，并在回复里说明你替他做了哪个假设。` };
+      const items = normalizeQuestions(args);
+      if (!items.length) return { error: 'ask_user:question 不能为空（单题传 question，多题传 questions 数组）' };
+      const asked = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const r = await ctx.ask({
+          question: it.question,
+          options: it.options,
+          // 多题时给横幅报个序号，让人知道后面还有几题（单题不显示）
+          progress: items.length > 1 ? { index: i + 1, total: items.length } : null,
+        });
+        if (!r || !r.answered) {
+          const why = r && r.cancelled ? '用户点了「取消」，明确表示不回答'
+            : r && r.superseded ? '用户没回答，直接发起了新一轮对话' : '用户未回答';
+          asked.push({ question: it.question, answer: '', why, cancelled: !!(r && r.cancelled) });
+          // 取消 / 被新一轮顶掉 = 这一轮不想再被打扰，后面的题别追着问
+          if (r && (r.cancelled || r.superseded)) break;
+          continue;
+        }
+        asked.push({ question: it.question, answer: r.answer });
       }
-      return { output: `用户回答：${r.answer}` };
+      if (asked.length === 1 && items.length === 1) {
+        const only = asked[0];
+        if (only.answer) return { output: `用户回答：${only.answer}` };
+        return { output: `${only.why}。请基于现有信息选择最合理的一种做法继续，并在回复里说明你替他做了哪个假设。` };
+      }
+      const lines = asked.map((a, i) => `${i + 1}. 问：${a.question}\n   答：${a.answer || `（${a.why}）`}`);
+      const skipped = items.length - asked.length;
+      const tail = asked.some(a => !a.answer)
+        ? '没答上的题请基于现有信息选最合理的一种做法继续，并在回复里说明你替他做了哪个假设。'
+        : '以上答案都按用户原意执行。';
+      return { output: `用户回答（共问了 ${asked.length}${skipped ? `／${items.length}` : ''} 题）：\n${lines.join('\n')}\n\n${tail}` };
     }
   },
 
@@ -235,54 +304,34 @@ const TOOLS = {
   // ---------- 子智能体 ----------
   agent_run: {
     kind: 'builtin', provider: '内置增强', category: '子智能体',
-    label: '派子智能体并等结果',
+    label: '派子智能体（不等结果）',
     source: '同进程嵌套 Agent 循环',
     doc: '—',
     cost: '消耗一次完整子会话的 token',
     testArg: 'task',
     testHint: '统计 client/src 下 .vue 文件的行数排名前 5，只给结论',
     description: [
-      '把一个边界清楚的调查任务交给一个只读的子智能体去做，等它返回结论。适合：读大目录/多文件找东西、通读一份长文档、交叉复核你刚写的代码——这些活会把你的上下文和步数吃光，交给分身更划算。',
+      '把一个边界清楚的调查任务交给一个只读的子智能体去做，**派完立刻返回它的 id，你不用等它**。适合：读大目录/多文件找东西、通读一份长文档、交叉复核你刚写的代码——这些活会把你的上下文和步数吃光，交给分身更划算。',
+      '可以连着派好几路（同一条会话同时在跑的上限默认 5 个，可在「设置 → 常规 → 子智能体并发上限」改，0 = 不限），派完继续读文件、跑命令、说话都不受影响。',
+      '它结束时结论会自己回到本会话里（一条标了「子智能体」的消息），你下一轮自然看得见；急着要就用 agent_wait(id) 当场等。',
       '子智能体没有写文件、删文件、执行命令的能力；需要改动时它会把「改哪里、改成什么」写进结论，由你执行。',
-      'task 要写清：查什么、产出什么格式、结论给谁看。它看不到本会话的历史，必要背景要在 task 里交代。',
-      '要并行派多个用 agent_spawn + agent_wait；只想立刻收工不等结果用 agent_spawn。'
+      'task 要写清：查什么、产出什么格式、结论给谁看。它看不到本会话的历史，必要背景要在 task 里交代。'
     ].join('\n'),
     params: {
       task: { type: 'string', required: true, desc: '交给子智能体的任务描述（自包含，含必要背景与期望产出格式）' },
-      name: { type: 'string', required: false, desc: '给这个子智能体起的短名，便于之后引用（如 survey-auth）' },
+      // 必填：右栏卡片只显示名称（第七十六轮改版），没有它一路就只剩一串 id，几路并排时认不出谁是谁。
+      // 服务端还有一层兜底（utils/subagent.js 的 deriveName：空名时从 task 第一行摘），库里的 name 永不为空。
+      name: { type: 'string', required: true, desc: '给这个子智能体起的短名（如 survey-auth、摸认证流程），侧栏卡片就显示它' },
       model: { type: 'string', required: false, desc: '指定模型的 model_id；不填沿用本会话当前模型' },
       cwd: { type: 'string', required: false, desc: '子智能体的工作目录，默认本会话目录' }
     },
     configFields: [],
     run: async (args, ctx) => {
-      const r = await subagent.runSync({
+      const r = subagent.spawn({
         name: args?.name, task: args?.task, model: args?.model, cwd: args?.cwd, chatId: ctx?.chatId,
       });
       if (r.error) return { error: r.error };
-      return { output: subagent.report(r) };
-    }
-  },
-
-  agent_spawn: {
-    kind: 'builtin', provider: '内置增强', category: '子智能体',
-    label: '异步派发子智能体',
-    source: '同进程嵌套 Agent 循环',
-    doc: '—',
-    cost: '消耗一次完整子会话的 token',
-    testArg: 'task',
-    testHint: '列出 server/utils 下每个模块的职责，一句话一个',
-    description: '派一个只读子智能体但不等结果，立刻返回它的 id。你可以继续干活，之后用 agent_wait(id) 收结论。适合同时铺开两三路调查。',
-    params: {
-      task: { type: 'string', required: true, desc: '任务描述（自包含）' },
-      name: { type: 'string', required: false, desc: '短名，便于引用' },
-      model: { type: 'string', required: false, desc: '指定 model_id' },
-      cwd: { type: 'string', required: false, desc: '工作目录' }
-    },
-    configFields: [],
-    run: async (args, ctx) => {
-      const r = subagent.spawn({ name: args?.name, task: args?.task, model: args?.model, cwd: args?.cwd, chatId: ctx?.chatId });
-      if (r.error) return { error: r.error };
-      return { output: `子智能体已派出。\nid：${r.id}\n名称：${r.name}\n继续做别的事，需要结果时用 agent_wait("${r.id}")，中途要停用 agent_kill("${r.id}")。` };
+      return { output: `子智能体已派出，现在不占你这一轮。\nid：${r.id}\n名称：${r.name}\n它跑完后结论会以一条「子智能体」消息回到本会话，你下一轮读得到；急着要用 agent_wait("${r.id}") 当场等，中途要停用 agent_kill("${r.id}")。` };
     }
   },
 
@@ -293,10 +342,10 @@ const TOOLS = {
     doc: '—',
     cost: '不额外消耗',
     testArg: 'agent_id',
-    testHint: '（先 agent_spawn 一个，把返回的 id 填进来）',
-    description: '等一个已派出的子智能体结束并拿回它的结论。超时不会杀掉它，只返回「还在跑、已跑几步」。',
+    testHint: '（先 agent_run 一个，把返回的 id 填进来）',
+    description: '当场等一个已派出的子智能体结束并拿回它的结论。超时不会杀掉它，只返回「还在跑、已跑几步」。不急着要就别等：它结束时结论会自己回到本会话（一条「子智能体」消息），你派完继续干活就行。',
     params: {
-      agent_id: { type: 'string', required: true, desc: 'agent_spawn / agent_run 返回的 id（形如 sa-xxxx）' },
+      agent_id: { type: 'string', required: true, desc: 'agent_run 返回的 id（形如 sa-xxxx）' },
       timeout_seconds: { type: 'number', required: false, desc: '最多等多少秒，默认 120' }
     },
     configFields: [],
@@ -305,7 +354,8 @@ const TOOLS = {
       const r = await subagent.wait(args?.agent_id, Number.isFinite(sec) && sec > 0 ? sec * 1000 : undefined);
       if (r.error) return { error: r.error };
       if (r.pending) return { output: r.message };
-      return { output: subagent.report(r) };
+      if (r.status !== 'done') return { error: `子智能体 ${r.name || r.id} 以「${r.status}」结束：${r.error || '未给出原因'}` };
+      return { output: `【子智能体 ${r.name || r.id} · 已完成】\n${r.result || '(无结论)'}` };
     }
   },
 
@@ -322,8 +372,8 @@ const TOOLS = {
     configFields: [],
     run: async (args, ctx) => {
       const rows = subagent.list(ctx?.chatId || null);
-      if (!rows.length) return { output: '本会话还没有派过子智能体。要独立调查一段活时用 agent_run（等结果）或 agent_spawn（不等）。' };
-      const lines = rows.map(r => `- ${r.id}  ${r.name}  [${r.status}]  已 ${r.iter} 步 / ${r.steps} 条工具记录${r.result_preview ? `  → ${r.result_preview.slice(0, 60)}…` : ''}${r.error ? `  错误：${r.error.slice(0, 60)}` : ''}`);
+      if (!rows.length) return { output: '本会话还没有派过子智能体。要独立调查一段活就用 agent_run（派完不占这一轮）。' };
+      const lines = rows.map(r => `- ${r.id}  ${r.name}  [${r.status}]  已 ${r.iter} 步 / ${r.steps} 条轨迹${r.result_preview ? `  → ${r.result_preview.slice(0, 60)}…` : ''}${r.error ? `  错误：${r.error.slice(0, 60)}` : ''}`);
       return { output: `共 ${rows.length} 个子智能体：\n${lines.join('\n')}\n\n收结果用 agent_wait(id)，停用 agent_kill(id)，删记录用 agent_delete(id)。` };
     }
   },
@@ -339,8 +389,8 @@ const TOOLS = {
     description: '停掉一个还在跑的子智能体（中断它对模型的请求）。方向错了、任务发重了、或已经不需要这个结果时用。',
     params: { agent_id: { type: 'string', required: true, desc: '子智能体 id' } },
     configFields: [],
-    run: async (args) => {
-      const r = subagent.kill(args?.agent_id);
+    run: async (args, ctx) => {
+      const r = subagent.kill(args?.agent_id, ctx?.chatId);
       return r.error ? { error: r.error } : { output: r.message };
     }
   },
@@ -356,8 +406,8 @@ const TOOLS = {
     description: '删掉一个子智能体的记录（会先停掉在跑的）。清理用；已结束的条目不会自己消失。',
     params: { agent_id: { type: 'string', required: true, desc: '子智能体 id' } },
     configFields: [],
-    run: async (args) => {
-      const r = subagent.remove(args?.agent_id);
+    run: async (args, ctx) => {
+      const r = subagent.remove(args?.agent_id, ctx?.chatId);
       return r.error ? { error: r.error } : { output: r.message };
     }
   }
@@ -367,7 +417,7 @@ const NAMES = Object.keys(TOOLS);
 
 // 内置增强工具：后台任务 / 长期记忆 / ask_user —— 默认开启（可在设置关闭）
 for (const k of Object.keys(TOOLS)) TOOLS[k].defaultOn = true;
-// 子智能体 6 个例外：每一次派发都是一整轮独立会话，会真金白银吃额度，默认关
+// 子智能体那几个例外：每一次派发都是一整轮独立会话，会真金白银吃额度，默认关
 for (const k of Object.keys(TOOLS)) if (k.startsWith('agent_')) TOOLS[k].defaultOn = false;
 toolgate.register(TOOLS);
 

@@ -93,7 +93,7 @@
         class="k-input sb-input"
         rows="2"
         :placeholder="st.busy ? '侧栏正在回答…' : '问点什么，Enter 发送，Shift+Enter 换行'"
-        @keydown.enter.exact.prevent="send"
+        @keydown="imeSendEnter"
       ></textarea>
       <button v-if="!st.busy" class="icon-btn send" type="button" title="发送" :disabled="!draft.trim()" @click="send">
         <i class="fas fa-arrow-up"></i>
@@ -111,6 +111,7 @@ import KDropdown from '../../ui/KDropdown.vue';
 import { renderMarkdown } from '../../utils/format';
 import { toast } from '../../stores/toast';
 import { sidebarStore as store } from './sidebarStore';
+import { isImeComposing } from '../../utils/ime';
 
 const props = defineProps({
   /** [{ value, label }] —— 由 ChatPage 从模型列表里挑出来（可用且非异常的） */
@@ -156,6 +157,15 @@ function send() {
   if (!q) return;
   draft.value = '';
   store.ask(q);
+}
+
+// Enter 发送、Shift+Enter 换行；输入法候选词还没上屏时那一下属于输入法，不许抢
+// （抢了会把 compositionend 弄丢，v-model 从此对这个框失聪 —— 详见 utils/ime.js）
+function imeSendEnter(e) {
+  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (isImeComposing(e)) return;
+  e.preventDefault();
+  send();
 }
 
 // 有新内容就贴到底

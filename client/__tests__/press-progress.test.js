@@ -138,11 +138,16 @@ describe('手动压缩：按下就有进度', () => {
     expect(pressBodies.length).toBe(1);
   });
 
-  it('自动压缩那张卡的 80% 措辞没被顺手改坏', () => {
-    const host = mountSteps([{ type: 'compress', name: '压缩上下文', phase: 'start', used: 170000, limit: 200000, percent: 85, from: '模型上限' }]);
+  it('自动压缩那张卡的百分比跟着当时的阈值走，不再写死 80%', () => {
+    const host = mountSteps([{ type: 'compress', name: '压缩上下文', phase: 'start', used: 170000, limit: 200000, percent: 85, from: '模型上限', threshold: 60 }]);
     const txt = noteText(host);
-    expect(txt).toContain('已达 80% → 先压缩再回答');
+    expect(txt).toContain('已达 60% → 先压缩再回答');
     expect(txt).toContain('窗口来自模型上限');
     expect(txt).not.toContain('正在压缩上下文');
+
+    // 缺字段（老落库数据）时报不出数就说「已达压缩线」，不许退回一个 80
+    const old = noteText(mountSteps([{ type: 'compress', name: '压缩上下文', phase: 'start', used: 170000, limit: 200000, percent: 85, from: '模型上限' }]));
+    expect(old).toContain('已达压缩线');
+    expect(old).not.toMatch(/已达 \d+%/);
   });
 });

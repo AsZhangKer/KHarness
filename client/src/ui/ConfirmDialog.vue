@@ -16,7 +16,8 @@ import KModal from './KModal.vue';
 import { confirmState, confirmAnswer } from '../stores/confirm';
 
 const s = confirmState();
-const okText = computed(() => (s.danger ? '删除' : '确定'));
+// 红按钮不等于「删除」：文案由调用点给，没给就是中性的「确定」
+const okText = computed(() => s.okText || '确定');
 
 function on(v) {
   confirmAnswer(v);

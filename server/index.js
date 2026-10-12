@@ -4,8 +4,12 @@ const compression = require('compression');
 const path = require('path');
 
 const { PORT, HOST, isProduction, STATIC_DIR } = require('./config');
-const { initDatabase, dataHome } = require('./database');
 const { errDetail, errMessage } = require('./utils/respond');
+
+// 越早钩越好：建表、迁移、数据目录那些启动日志也要进「调试」那扇悬浮窗
+require('./utils/logbus').hookConsole();
+
+const { initDatabase, dataHome } = require('./database');
 
 initDatabase();
 
@@ -54,6 +58,32 @@ app.use((req, res, next) => {
 // 整库导入是原始字节上传（库文件几 MB 到几十 MB），不能让 json 解析器先吞一遍；
 // 只挂在这一条路径上，其它请求照常走上面的 json/urlencoded。
 app.use('/api/ai/database/import', express.raw({ type: '*/*', limit: '500mb' }));
+
+/**
+ * 进来的请求一律记一行（「调试」悬浮窗里的 http 那类）。
+ * 这里全记、不做过滤：过滤放在界面上（默认就不看心跳），
+ * 因为出问题时最想查的恰恰是「那条轮询到底几点几分开始不回来的」。
+ */
+const logbus = require('./utils/logbus');
+app.use('/api', (req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - started;
+    const status = res.statusCode || 0;
+    // 轮询与 SSE 这几条是心跳，一秒一趟会把 2000 行的环形缓冲冲满，把真操作全挤掉
+    const hb = /\/(browser\/poll|computer\/events|term\/\d+\/stream|logs\/stream)$/.test(req.path);
+    logbus.push({
+      level: status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info',
+      tag: hb ? 'hb' : 'http',
+      ms,
+      text: `${req.method} ${req.originalUrl} → ${status}`,
+    });
+  });
+  next();
+});
+
+// 调试通道（日志快照 / SSE / 清空）：正式版里这条路由自己会 404
+app.use('/api/debug', require('./routes/debug'));
 
 // 远程主机（SSH/SFTP）挂在更具体的前缀上，必须先于 /api/ai 注册，否则会被主路由吃掉
 app.use('/api/ai/remote', require('./routes/remote'));

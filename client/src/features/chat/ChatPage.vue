@@ -48,7 +48,6 @@
             <button type="button" @click="menuRenameCurrent"><i class="fas fa-pen"></i> 重命名对话</button>
             <button type="button" @click="menuExportChat('md')"><i class="fas fa-file-export"></i> 导出 Markdown</button>
             <button type="button" @click="ctxDialog = true"><i class="fas fa-arrows-rotate"></i> 上下文导入 / 导出…</button>
-            <button type="button" @click="menuArchiveCurrent"><i class="fas fa-box-archive"></i> 归档对话</button>
             <button type="button" class="danger" @click="menuDeleteCurrent"><i class="fas fa-trash"></i> 删除对话</button>
           </div>
           <span v-if="store.state.cwd" class="cwd muted" :title="store.state.cwd"> · {{ store.state.cwd }}</span>
@@ -61,16 +60,16 @@
           <button class="icon-btn narrow-only" type="button" title="会话栏" @click.stop="toggleDrawer('rail')">
             <i class="fas fa-bars-staggered"></i>
           </button>
-          <button class="toggle-btn" :class="{ on: store.state.agentMode }" type="button" title="Agent" @click="store.state.agentMode = !store.state.agentMode">
+          <button class="toggle-btn" :class="{ on: store.state.agentMode }" type="button" title="Agent" @click="store.setModeFlag('agentMode', !store.state.agentMode)">
             <i class="fas fa-screwdriver-wrench"></i><span>Agent</span>
           </button>
           <!-- 除 Agent 外其余开关平时折在这里：只有把鼠标送到最右那颗 ">" 上方那一小圈才展开 -->
           <div class="ta-fold">
             <div class="ta-fold-in">
-              <button class="toggle-btn" :class="{ on: store.state.planMode }" type="button" title="Plan" @click="store.state.planMode = !store.state.planMode">
+              <button class="toggle-btn" :class="{ on: store.state.planMode }" type="button" title="Plan" @click="store.setModeFlag('planMode', !store.state.planMode)">
                 <i class="fas fa-list-check"></i><span>Plan</span>
               </button>
-              <button class="toggle-btn" :class="{ on: store.state.readonlyMode }" type="button" title="只读" @click="store.state.readonlyMode = !store.state.readonlyMode">
+              <button class="toggle-btn" :class="{ on: store.state.readonlyMode }" type="button" title="只读" @click="store.setModeFlag('readonlyMode', !store.state.readonlyMode)">
                 <i class="fas fa-eye"></i><span>只读</span>
               </button>
               <button
@@ -153,6 +152,8 @@
             @undo="onUndo"
             @retract="onRetract"
             @revert-from="onRevertFrom"
+            @open-subagent="openAgentSteps"
+            @review="(s) => { reviewStep = s; }"
           />
         </TransitionGroup>
         </div>
@@ -226,8 +227,8 @@
         :approval-explicit="store.state.approvalExplicit"
         :skills="skillList"
         :approvals="store.currentApprovals.value"
-        :question="store.state.question"
-        :queue-length="store.state.queue.length"
+        :question="store.currentQuestion.value"
+        :queue-length="store.queued.value.length"
         :context-used="store.state.contextUsed"
         :context-limit="store.state.contextLimit"
         :first-token-ms="store.state.firstTokenMs"
@@ -283,6 +284,23 @@
       @clear-insert="store.clearInserts"
       @remove-insert="store.removeInsert"
       @git-action="onGitAction"
+      @open-agent="openAgentSteps"
+      @review="(h) => { reviewStep = h; }"
+    />
+
+    <!-- 修改历史的「审阅」弹窗：消息流里的编辑卡和右栏那一行都开这一扇 -->
+    <HistoryReviewModal
+      :hist="reviewStep"
+      @close="reviewStep = null"
+      @undo="(h) => { reviewStep = null; onUndo(h.ref || h); }"
+    />
+
+    <!-- 子智能体的执行步骤：点消息流里那张卡或右栏那行都会开这一扇（只能看，没有输入框） -->
+    <SubagentStepsModal
+      :id="agentModal.id"
+      :name="agentModal.name"
+      :chat-id="store.state.chatId || null"
+      @close="agentModal.id = ''"
     />
 
     <!-- 最右侧一栏：本机会话是内置浏览器；远程会话换成那台机器的文件快捷操作区（同一列二选一）。
@@ -326,7 +344,7 @@
           <span>言论审查(每行一条)</span>
           <textarea v-model="modelForm.censoredWords" class="nu-textarea" rows="3"></textarea>
         </label>
-        <p class="muted">默认用量达上下文窗口 80% 时自动压缩。若有误将退回「设置 → 常规」的默认窗口；</p>
+        <p class="muted">{{ txt('chat.ctx.compressHint') }}</p>
       </div>
       <template #footer>
         <button class="k-btn ghost sm" type="button" @click="modelSettingsOpen = false">取消</button>
@@ -396,7 +414,7 @@
     </KModal>
 
     <!-- 新建项目（remote_id 非空时是「新建远端项目」，路径填远端绝对路径） -->
-    <KModal :open="projModal" :title="projForm.remote_id ? '新建远端项目' : '新建项目'" width="480px" @close="projModal = false">
+    <KModal :open="projModal" :title="projTitle" width="480px" @close="projModal = false">
       <div class="form">
         <KInput v-model="projForm.name" label="项目名称" block placeholder="例如：my-project" />
         <div class="path-row">
@@ -421,10 +439,46 @@
           建在 {{ projHost ? `${projHost.name}（${projHost.username}@${projHost.host}）` : '所选连接' }} 上；
           该目录及之后的读写、命令都通过 SSH/SFTP 在这台机器上执行，创建时后端会真的去远端确认它存在。
         </div>
+        <!-- 编辑态要把话说在前面：这里改的只是库里的两个字段，磁盘上一个文件都不会被动 -->
+        <div v-else-if="projForm.editingId" class="muted hint-line">
+          <i class="fas fa-hard-drive"></i>
+          改名与改目录都只改记录，<b>不会重命名、移动或创建任何文件/目录</b>；
+          换目录后，落在新目录之外的会话工作目录会被重置为新目录（保存后会说明条数）。
+        </div>
       </div>
       <template #footer>
         <button class="k-btn ghost sm" type="button" @click="projModal = false">取消</button>
-        <button class="k-btn primary sm" type="button" @click="submitProject">创建</button>
+        <button class="k-btn primary sm" type="button" @click="submitProject">{{ projForm.editingId ? '保存' : '创建' }}</button>
+      </template>
+    </KModal>
+
+    <!-- 会话右键「设置工作目录」：自由会话的目录出口（以前只有 /dir 一条命令） -->
+    <KModal :open="cwdModal" title="设置工作目录" width="480px" @close="cwdModal = false">
+      <div class="form">
+        <div class="muted hint-line">会话：{{ cwdForm.title }}</div>
+        <div class="path-row">
+          <KInput
+            v-model="cwdForm.path"
+            :label="cwdForm.remote_id ? '远端目录（绝对路径）' : '工作目录（绝对路径）'"
+            block
+            :placeholder="cwdForm.remote_id ? '/srv/app' : 'D:\\work\\foo'"
+          />
+          <button
+            v-if="canPickDir && !cwdForm.remote_id"
+            class="k-btn ghost sm pick-dir"
+            type="button"
+            title="在窗口里选一个文件夹"
+            @click="pickCwdDir"
+          ><i class="fas fa-folder-open"></i> 浏览…</button>
+        </div>
+        <div class="muted hint-line">
+          <i class="fas fa-info-circle"></i>
+          这一条会话之后所有工具执行都以此为准，改了不会被发消息或重启改回去。
+        </div>
+      </div>
+      <template #footer>
+        <button class="k-btn ghost sm" type="button" @click="cwdModal = false">取消</button>
+        <button class="k-btn primary sm" type="button" @click="submitCwd">确认</button>
       </template>
     </KModal>
 
@@ -513,8 +567,11 @@
       @contextmenu.prevent="menu = null"
     >
       <template v-if="menu.kind === 'chat'">
-        <button type="button" @click="menuPin"><i class="fas fa-thumbtack"></i> {{ menu.item.pinned ? '取消固定' : '固定会话' }}</button>
+        <!-- 固定会话只对自由会话开：项目下的会话本来就钉在项目里，那颗键在他看来越多越乱（第七十七轮） -->
+        <button v-if="!menu.item.project_id" type="button" @click="menuPin"><i class="fas fa-thumbtack"></i> {{ menu.item.pinned ? '取消固定' : '固定会话' }}</button>
         <button type="button" @click="menuRename">重命名</button>
+        <!-- 自由会话才有独立的目录出口；项目会话的目录锁在项目根内，那条走 /dir -->
+        <button v-if="!menu.item.project_id" type="button" @click="menuSetCwd"><i class="fas fa-folder-open"></i> 设置工作目录</button>
         <button type="button" @click="menuCopyName">复制会话名</button>
         <button type="button" class="danger" @click="onRemoveChat(menu.item); menu = null">删除会话</button>
       </template>
@@ -528,6 +585,7 @@
       </template>
       <template v-else>
         <button type="button" @click="menuNewChatIn">在项目中新建会话</button>
+        <button type="button" @click="menuEditProject"><i class="fas fa-pen"></i> 编辑项目</button>
         <button type="button" @click="menuEditPrompt"><i class="fas fa-file-lines"></i> 编辑系统提示词</button>
         <button v-if="!menu.item.remote_id" type="button" @click="menuOpenDir">在资源管理器中打开</button>
         <button type="button" @click="menuCopyPath">复制项目路径</button>
@@ -551,6 +609,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from './chatStore';
 import { aiApi } from '../../api';
 import { toast } from '../../stores/toast';
+import { txt } from '../../copy';
 import { toastErr, errReport, copyText } from '../../utils/errText';
 import { confirmDialog } from '../../stores/confirm';
 import { promptDialog } from '../../stores/prompt';
@@ -566,6 +625,19 @@ import ChatMessage from './ChatMessage.vue';
 import ChatComposer from './ChatComposer.vue';
 import ChatDock from './ChatDock.vue';
 import BrowserPanel from './BrowserPanel.vue';
+import SubagentStepsModal from './SubagentStepsModal.vue';
+import HistoryReviewModal from './HistoryReviewModal.vue';
+
+// 审阅弹窗要的那条改动：消息流里的编辑卡和右栏「修改历史」那一行都往这里交
+const reviewStep = ref(null);
+
+// 子智能体步骤弹窗：消息流里那张卡和右栏那行都开同一扇（只有一个开着的）
+const agentModal = ref({ id: '', name: '' });
+function openAgentSteps(id) {
+  if (!id) return;
+  const known = store.state.subagents?.[id];
+  agentModal.value = { id: String(id), name: known?.name || String(id) };
+}
 import { browserStore } from '../../stores/browser';
 import SidebarAI from './SidebarAI.vue';
 import RemoteHostModal from './RemoteHostModal.vue';
@@ -705,9 +777,15 @@ function closeDrawers() {
   dockOpen.value = false;
 }
 const revealed = ref(0);
+// 上一版子智能体的结论是落成一条 user 气泡的（speaker='subagent'）。现在改成像工具返回那样直接交回 AI，
+// 气泡不画了；老库里那些历史行也一并藏掉，别让他看到几条凭空冒出来的「子智能体」消息。
+const renderedMessages = computed(() => {
+  const list = store.state.messages;
+  return list.some((m) => m.speaker === 'subagent') ? list.filter((m) => m.speaker !== 'subagent') : list;
+});
 // 默认只展开「当前这一轮 + 上一轮」：从倒数第二条用户消息起渲染，更早的折起来
 const foldAnchor = computed(() => {
-  const list = store.state.messages;
+  const list = renderedMessages.value;
   let seenUser = 0;
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].role === 'user') {
@@ -721,7 +799,7 @@ const foldAnchor = computed(() => {
 const HISTORY_STEP = 20;
 const shownFrom = computed(() => Math.max(0, foldAnchor.value - revealed.value));
 
-const visibleMessages = computed(() => store.state.messages.slice(shownFrom.value));
+const visibleMessages = computed(() => renderedMessages.value.slice(shownFrom.value));
 const hiddenCount = computed(() => shownFrom.value);
 const lastUnfinished = computed(() => {
   const list = store.state.messages;
@@ -906,10 +984,14 @@ watch(
   }
 );
 
+/* 跟着流式滚到底：只看两个标量 —— 消息条数 + store 每落一批 +1 的 streamTick。
+   以前这里是对整个 messages 数组开 `{ deep: true }`：每 30ms 一批就要把每条消息的 steps/timeline
+   全遍历一遍去建依赖，实测（_tmp_kh77/perf_probe.js 场景 A）一条会话流式 6.5 秒里
+   样式重算 1641 次、主线程任务合计 3.0 秒 —— 屏幕上的字一共才 120 个节点。
+   消息内容变长一定伴随着这两者之一变化，所以少了 deep 遍历也不会漏滚。 */
 watch(
-  () => store.state.messages,
-  () => scrollBottom(),
-  { deep: true }
+  () => [store.state.messages.length, store.state.streamTick],
+  () => scrollBottom()
 );
 
 function gotoMsg(id) {
@@ -950,12 +1032,18 @@ const showDown = ref(false);
 // 是否跟随到底部（用户上翻即关闭，点「回到底部」或切会话重新打开）
 const pinnedToBottom = ref(true);
 let scrollAnimActive = false;   // 惯性滚到底正在进行（这段时间不认 scroll 事件的用户意图）
+let programmaticScrollUntil = 0;  // 这一瞬间内的 scroll 事件可能是我们自己滚出来的（见 onStreamScroll）
+let programmaticTop = -1;         // 那一下写下去的 scrollTop 原值：位置一离开它就不是我们干的了
 
 function onStreamScroll() {
   const el = streamEl.value;
   if (!el) return;
   // 惯性滚到底的过程中：这时 gap 还大，若照常判定会把「跟随底部」关掉、动画当场撒手
   if (scrollAnimActive) return;
+  // 这批 scrollTop 可能是自己写的（流式每落一批都滚一次）：还在我们写的那个位置上就连 scrollHeight 都不必读，
+  // 读了就是「写→滚动事件→强制布局→再写」每批两趟来回。只认「位置还等于我们写下去的那个数」，
+  // 用户这中间滚轮一拨 scrollTop 就离开它了 → 照常判，不吞他「往上翻」的意图。
+  if (Date.now() < programmaticScrollUntil && Math.abs(el.scrollTop - programmaticTop) <= 1) return;
   const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
   showDown.value = gap > 80;
   // 动画刚收尾那一瞬：内容在这 0.5 秒里还在长，我们写下去的 scrollTop 已经落后于新的底部，
@@ -971,7 +1059,9 @@ function scrollBottom(force = false) {
   nextTick(() => {
     const el = streamEl.value;
     if (el) {
+      programmaticScrollUntil = Date.now() + 120;
       el.scrollTop = el.scrollHeight;
+      programmaticTop = el.scrollTop;
       showDown.value = false;
       pinnedToBottom.value = true;
     }
@@ -1114,9 +1204,13 @@ async function openChat(id) {
 const projModal = ref(false);
 const chatModal = ref(false);
 /** remote_id 非空表示「新建远端项目」：root_path 填的是远端绝对路径，后端用 SFTP 校验 */
-const projForm = reactive({ name: '', root_path: '', remote_id: 0 });
+const projForm = reactive({ name: '', root_path: '', remote_id: 0, editingId: 0 });
+/** 会话右键「设置工作目录」：自由会话唯一的图形入口（以前只有 /dir 一条命令） */
+const cwdModal = ref(false);
+const cwdForm = reactive({ id: 0, title: '', path: '', remote_id: 0 });
 const chatForm = reactive({ title: '', project_id: null });
 const projHost = computed(() => remoteStore.state.hosts.find((h) => h.id === projForm.remote_id) || null);
+const projTitle = computed(() => (projForm.editingId ? '编辑项目' : projForm.remote_id ? '新建远端项目' : '新建项目'));
 
 /** 桌面端才有系统目录选择框（主进程弹）；网页模式不摆死键 */
 const canPickDir = typeof window !== 'undefined' && !!(window.khDesktop && window.khDesktop.pickDir);
@@ -1170,6 +1264,7 @@ function pickChatProject(v) {
 
 /** 从连接上右键进来时带 host = 建远端项目；不带就是本机项目 */
 async function onNewProject(host) {
+  projForm.editingId = 0;
   projForm.name = '';
   projForm.root_path = '';
   projForm.remote_id = host && host.id ? host.id : 0;
@@ -1186,9 +1281,41 @@ async function submitProject() {
     toast('请填写项目名称与根目录', 'warn');
     return;
   }
+  if (projForm.editingId) {
+    const r = await store.editProject(projForm.editingId, { name: projForm.name.trim(), root_path: projForm.root_path.trim() });
+    projModal.value = false;
+    // 改目录会把它下面「不在新根内」的会话工作目录一起重置，条数得报出来 —— 不然左栏看着没变、
+    // 而某条会话悄悄换了地方
+    toast(r?.chats_reset ? `项目已更新，${r.chats_reset} 条会话的目录不在新根内，已重置为新目录` : '项目已更新', 'success');
+    if (store.state.chatId && store.activeChat.value?.project_id === projForm.editingId) {
+      const row = store.state.chats.find((c) => c.id === store.state.chatId);
+      if (row && row.cwd !== store.state.cwd) store.state.cwd = row.cwd || '';
+    }
+    projForm.editingId = 0;
+    return;
+  }
   await store.newProject(projForm.name.trim(), projForm.root_path.trim(), projForm.remote_id || undefined);
   projModal.value = false;
   toast(projForm.remote_id ? '远端项目已创建' : '项目已创建', 'success');
+}
+
+async function pickCwdDir() {
+  try {
+    const r = await window.khDesktop.pickDir({ title: '选择工作目录', defaultPath: cwdForm.path || undefined });
+    if (r && r.ok && r.path) cwdForm.path = r.path;
+    else if (r && !r.ok) toast(r.error || '没拿到目录', 'warn');
+  } catch (e) { toastErr(e, '打开目录选择框失败'); }
+}
+
+async function submitCwd() {
+  const p = String(cwdForm.path || '').trim();
+  if (!p) return toast('请填写工作目录', 'warn');
+  const r = await aiApi.setCwd(p, cwdForm.id);
+  cwdModal.value = false;
+  await store.refreshTree();
+  const got = r?.cwd || p;
+  if (store.state.chatId === cwdForm.id) store.state.cwd = got;
+  toast(`工作目录已设为 ${got}`, 'success');
 }
 
 async function onNewChat(projectId) {
@@ -1249,8 +1376,8 @@ async function preflightAgentsMd(project) {
 }
 
 function onToggleProject(id) {
-  const p = store.state.projects.find((x) => x.id === id);
-  if (p) p.open = !p.open;
+  // 走 store：除了翻内存那个 open，还要记进折叠清单，否则下一次 refreshTree 就给人翻回来
+  store.toggleProjectOpen(id);
 }
 
 const recycle = recycleBin();
@@ -1318,7 +1445,7 @@ async function restoreRow(row) {
 
 async function removeRow(row) {
   // 「永久」是真的永久：回收站里这条就是最后一份，删了没有任何地方能找回
-  if (!(await confirmDialog(`永久删除「${row.kind || ''} ${row.name || '该条目'}」？这是最后一份，删掉后无法再恢复。`, { title: '永久删除', danger: true }))) return;
+  if (!(await confirmDialog(`永久删除「${row.kind || ''} ${row.name || '该条目'}」？这是最后一份，删掉后无法再恢复。`, { title: '永久删除', danger: true, okText: '删除' }))) return;
   if (row.source === 'trash') await recycle.removeTrash(row.raw);
   else recycle.remove(row.raw.id);
 }
@@ -1376,16 +1503,6 @@ async function menuRenameCurrent() {
   const t = await promptDialog({ title: '会话名称', value: c.title || '', confirmText: '改名' });
   if (t == null) return;
   store.renameChat(c.id, t || c.title);
-}
-
-async function menuArchiveCurrent() {
-  titleMenu.value = false;
-  const c = store.activeChat.value;
-  if (!c) return;
-  try {
-    localStorage.setItem('nu_archived_' + c.id, '1');
-  } catch { /* ignore */ }
-  toast('已归档，该会话将变为只读', 'info');
 }
 
 /** 拖拽排序：ChatRail 给出同一列表内的新 id 顺序 */
@@ -1584,6 +1701,28 @@ function menuNewChatIn() {
   menu.value = null;
   onNewChat(p?.id);
 }
+/** 右键「编辑项目」：同一个弹窗换成编辑态，预填这一行的名字与目录 */
+function menuEditProject() {
+  const p = menu.value?.item;
+  menu.value = null;
+  if (!p?.id) return;
+  projForm.editingId = p.id;
+  projForm.name = p.name || '';
+  projForm.root_path = p.root_path || '';
+  projForm.remote_id = p.remote_id || 0;
+  projModal.value = true;
+}
+/** 右键「设置工作目录」：只给自由会话（项目会话的目录被锁在项目根内，那条用 /dir） */
+function menuSetCwd() {
+  const c = menu.value?.item;
+  menu.value = null;
+  if (!c?.id) return;
+  cwdForm.id = c.id;
+  cwdForm.title = c.title || '未命名会话';
+  cwdForm.path = c.cwd || '';
+  cwdForm.remote_id = c.remote_id || 0;
+  cwdModal.value = true;
+}
 /** 右键「编辑系统提示词」→ 打开该项目根上的 AGENTS.md（远程项目由后端走 SFTP） */
 function menuEditPrompt() {
   const p = menu.value?.item;
@@ -1706,7 +1845,7 @@ async function onUndo(step) {
   // 撤销是拿快照去覆盖现在的文件 —— 你在撤销之后手改的内容会被冲掉，且这一步没有二次反悔，
   // 所以必须确认（同名文件被后续再改过时尤其危险）
   const target = step.path || step.args?.path || '该文件';
-  if (!(await confirmDialog(`撤销这一步？${target} 会回到操作前的样子，这期间你手动改进去的内容会被覆盖。`, { title: '撤销确认', danger: true }))) return;
+  if (!(await confirmDialog(`撤销这一步？${target} 会回到操作前的样子，这期间你手动改进去的内容会被覆盖。`, { title: '撤销确认', danger: true, okText: '撤销' }))) return;
   try {
     const res = await store.undo(step);
     if (!res) return toast('这条操作没有可恢复的快照', 'warn');
@@ -1727,7 +1866,10 @@ async function onRetract(payload) {
     const idx = store.state.messages.findIndex((m) => m.role === 'user' && m.id === messageId);
     if (idx >= 0) store.state.messages.splice(idx);
     delete store.state.msgBuf[store.state.chatId];
-    await aiApi.retractChat({ chat_id: store.state.chatId, message_id: messageId });
+    const r = await aiApi.retractChat({ chat_id: store.state.chatId, message_id: messageId });
+    // 服务端按「实测开销 + 剩余正文」把用量绝对落回去并随响应带回来，这里立刻写上：
+    // 以前只减正文估数，扣完还剩一大坨 system + 工具 schema，右侧百分比看着像一点没动（第七十六轮他报的那条）
+    if (r?.usage && Number.isFinite(Number(r.usage.used))) store.state.contextUsed = Number(r.usage.used);
     await store.openChat(store.state.chatId);
     store.state.draft = text;
     toast('已撤回，内容已回到输入框', 'success');
@@ -1760,10 +1902,11 @@ async function onRevertFrom(payload) {
 
 /** 队列里的消息是用户已经打好的字，一清就没地方找了，所以必须确认（并报数量） */
 async function onClearQueue() {
-  const n = (store.state.queue || []).length;
+  const mine = store.queued.value;   // 只清这一条会话的：横幅数的是当前会话，按钮也不能顺手清掉别条会话攒的话
+  const n = mine.length;
   if (!n) return;
   if (!(await confirmDialog(`清空队列里剩下的 ${n} 条消息？这些内容会被丢弃，输入框里正在写的不动。`))) return;
-  store.state.queue = [];
+  store.state.queue = store.state.queue.filter((q) => !mine.includes(q));
   toast('已清空队列', 'info');
 }
 
@@ -1844,7 +1987,10 @@ const thinkingLevels = computed(() => {
 });
 
 function cycleApproval() {
+  // FULL-SEND 不进这个循环：顶栏连点是「快速切换」，不该让人一不留神点到越级档上；
+  // 但当前已经是 fullsend 时必须能靠它出来（否则只能去下拉里翻）。
   const order = ['default', 'strict', 'exempt'];
+  if (store.state.approvalMode === 'fullsend') return store.setApprovalMode('default');
   const next = order[(order.indexOf(store.state.approvalMode) + 1) % order.length];
   store.setApprovalMode(next);
 }

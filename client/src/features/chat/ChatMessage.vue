@@ -36,9 +36,11 @@
              外面这层 template 带着下标 i 走，里面的 v-else-if 链仍然按整条时间线判，位置不会串。 -->
         <template v-if="!hiddenByFold(i)">
         <!-- 思考卡在流式期间也不再自动摊开：以前 :open 里挂着 busy，所以「思考默认展开」没勾也照样展开。
-             折叠只是不显示，内容仍在收、仍入库、仍进上下文；卡片只留一个标题（跑的时候带转圈 +「思考中…」）。 -->
+             折叠只是不显示，内容仍在收、仍入库、仍进上下文；卡片只留一个标题（跑的时候带转圈 +「思考中…」）。
+             「思考中」只给**还在输出的那一段**：以前用的是整条消息级别的 busy，一轮里交错出的好几段思考
+             全都显示「思考中…」，直到整个回合结束才一起变「思考过程」（他第七十四轮报的那条）。 -->
         <details v-if="item.kind === 'reason' && item.text" class="reason" :open="!!(item.open || prefs.reasonOpen)">
-          <summary><i :class="busy ? 'fas fa-circle-notch fa-spin' : 'fas fa-brain'"></i> {{ busy ? '思考中…' : '思考过程' }}</summary>
+          <summary><i :class="reasonLive(i) ? 'fas fa-circle-notch fa-spin' : 'fas fa-brain'"></i> {{ reasonLive(i) ? '思考中…' : '思考过程' }}</summary>
           <pre>{{ item.text }}</pre>
         </details>
 
@@ -48,12 +50,12 @@
           class="step fold"
           role="button"
           tabindex="0"
-          @click="unfoldGroup(i)"
-          @keydown.enter.prevent="unfoldGroup(i)"
+          @click="toggleGroup(i)"
+          @keydown.enter.prevent="toggleGroup(i)"
         >
           <i class="fas fa-screwdriver-wrench"></i>
           <span>{{ isFoldHead(i).len }} 步工具调用</span>
-          <button class="link-btn" type="button" @click.stop="unfoldGroup(i)">展开</button>
+          <button class="link-btn" type="button" @click.stop="toggleGroup(i)">展开</button>
         </div>
 
         <div
@@ -67,6 +69,8 @@
             <span v-if="isEdit(item) && item.type === 'result'" class="verb">{{ verbOf(item) }}</span>
             <code v-else>{{ item.name || (item.type === 'note' ? 'note' : item.type === 'compress' ? '压缩上下文' : 'step') }}</code>
             <span v-if="pathOf(item)" class="path" :title="pathOf(item)">{{ pathOf(item) }}</span>
+            <!-- 实际请求内容：命令原文 / 网址 / 短参数（结果卡已经从调用行并进了 args，见 timeline 那段配对） -->
+            <code v-if="argsLine(item)" class="args" :title="argsLine(item)">{{ argsLine(item) }}</code>
             <span v-if="item.type === 'result' && item.new_file" class="badge">新建</span>
             <span v-if="item.diff?.length" class="nums">
               <span class="num-pos">+{{ countSign(item, '+') }}</span>
@@ -83,10 +87,30 @@
               v-if="isEdit(item) && item.diff?.length"
               class="link-btn review"
               type="button"
-              @click.stop="toggleDiff(i)"
-            >{{ diffOpen(i) ? '收起' : '审阅' }}</button>
+              @click.stop="$emit('review', item.ref || item)"
+            >{{ txt('chat.hist.review') }}</button>
+            <!-- 子智能体那张卡：点它是为了看它到底跑了哪些步（第七十五轮他点名的缺口） -->
+            <button
+              v-if="item.subagentId"
+              class="link-btn"
+              type="button"
+              @click.stop="$emit('open-subagent', item.subagentId)"
+            >{{ txt('chat.agent.steps') }}</button>
+            <!-- 展开之后要能收回去：以前那行「N 步工具调用」点开了就回不来，只能重进会话 -->
+            <button
+              v-if="isFoldTail(i)"
+              class="link-btn"
+              type="button"
+              title="把这一组工具调用重新收起"
+              @click.stop="toggleGroup(i)"
+            >收起</button>
           </div>
-          <div v-if="item.type === 'note'" class="step-note">{{ item.message }}</div>
+          <div
+            v-if="item.type === 'note'"
+            class="step-note"
+            :class="{ clickable: !!item.subagentId }"
+            @click="item.subagentId ? $emit('open-subagent', item.subagentId) : null"
+          >{{ item.message }}</div>
           <!-- 压缩上下文：一条卡看完「为什么压、压掉多少、压完剩多少」，摘要原文折叠在里面可展开 -->
           <div v-else-if="item.type === 'compress'" class="step-note">
             {{ compressLine(item) }}
@@ -144,7 +168,7 @@
             class="body md"
             :class="{ clamped: prefs.longCollapse && !textOpen[i] && isLongText(item.text) }"
             @click="onMdClick"
-            v-html="withCaret(renderMarkdownCached(item.text), busy && i === timeline.length - 1)"
+            v-html="caret(renderMarkdownCached(item.text), busy && i === lastTextIdx)"
           ></div>
           <button
             v-if="prefs.longCollapse && isLongText(item.text)"
@@ -177,8 +201,11 @@
 
 <script setup>
 import { computed, reactive, ref, watch, nextTick, onMounted } from 'vue';
-import { highlightCode, highlightToLines, langFromPath, escapeHtml } from '../../utils/format';
+import { highlightCode, langFromPath } from '../../utils/format';
+import { diffView, normDiffLine } from '../../utils/diffview';
+import { txt } from '../../copy';
 import { renderMarkdownCached } from '../../utils/mdcache';
+import { withCaret } from '../../utils/caret';
 import { renderMermaid } from '../../utils/mermaid';
 import { renderMath } from '../../utils/math';
 import { toast } from '../../stores/toast';
@@ -195,12 +222,9 @@ const phaseLabel = computed(() => {
   return '~ Thinking…';
 });
 
-function withCaret(html, on) {
-  if (!on) return html;
-  // 插到最后一个块级闭合前，光标贴住最后一行文字
-  const m = /^(.*)(<\/(?:p|li|pre|h[1-6]|blockquote)>)([\s\S]*)$/i.exec(html);
-  if (m) return `${m[1]}<span class="caret-dot"></span>${m[2]}${m[3]}`;
-  return `${html}<span class="caret-dot"></span>`;
+/** 光标只有一个来源：utils/caret 那一份，插到最后一个实义字符之后（详见该文件注释） */
+function caret(html, on) {
+  return on ? withCaret(html) : html;
 }
 
 const props = defineProps({
@@ -221,9 +245,12 @@ const props = defineProps({
   msgId: { type: Number, default: null },
   canRetract: { type: Boolean, default: false },
   busy: { type: Boolean, default: false },
+  /** 子智能体步骤弹窗那一路：每一步都摊开。那个窗口存在的意义就是「它到底做了什么」，
+   *  把工具组折成一行「N 步工具调用」等于把这扇窗要答的问题又藏回去了。 */
+  flat: { type: Boolean, default: false },
 });
 
-defineEmits(['undo', 'retract', 'revert-from']);
+defineEmits(['undo', 'retract', 'revert-from', 'open-subagent']);
 
 /* mermaid 出图的接线在 timeline 之后（见该 computed 下面）：签名要读它，写在它前面会在 setup 里踩 TDZ。 */
 
@@ -335,7 +362,9 @@ const timeline = computed(() => {
     if (!hasSeg && props.content) out.push({ kind: 'text', text: props.content });
     items = out;
   }
-  // 工具调用行与它的结果行成对出现时，只留结果行（编辑卡一张就够）
+  // 工具调用行与它的结果行成对出现时，只留结果行（编辑卡一张就够）——
+  // 但**调用参数不能跟着一起消失**：run_command 的卡片以前只剩「run_command + 输出」，
+  // 命令原文（ls）压根没地方看，刷新后也一样（他第七十四轮报的那条）。这里把 args 并进结果卡。
   for (let i = 0; i < items.length; i++) {
     const cur = items[i];
     const next = items[i + 1];
@@ -343,11 +372,69 @@ const timeline = computed(() => {
       cur.kind === 'step' && cur.type === 'tool' &&
       next?.kind === 'step' && next.type === 'result' && next.name === cur.name
     ) {
+      if (next.args == null) next.args = cur.args;
       items[i] = { ...cur, hide: true };
     }
   }
   return items;
 });
+
+/**
+ * 该给哪一段正文挂光标：**时间线里最后一条「正文」**，不是「最后一个条目」。
+ * 差别的形状就是他天天看的那个：Agent 说完一段话去调工具，条目尾部变成工具卡 ——
+ * 按「最后一个条目」判，整段工具执行期间一个光标都没有（他报的「圆形光标没了」），
+ * 而那段时间里屏幕上最后一个他看得懂的字，正是上面那段正文的末尾。
+ * 一条正文都还没有（只在思考 / 上来就调工具）时不放光标，由那行 `.phase` 表示在跑。
+ */
+const lastTextIdx = computed(() => {
+  for (let i = timeline.value.length - 1; i >= 0; i--) {
+    const it = timeline.value[i];
+    if (it.kind === 'text' && it.text) return i;
+  }
+  return -1;
+});
+
+/**
+ * 「这一段思考还在输出吗」。
+ * busy 是整条消息级别的（这条会话有流在跑），一轮里可以交错出好几段思考，
+ * 所以还得问一句：它是时间线尾部那一段吗？后面一旦落了工具卡或正文，这段就已经过去了。
+ * note（限流/重试那类过程提示）不算交棒 —— 与 chatStore 里 tailReason 同一套走法。
+ *
+ * 还有一个必要条件：只有**正在流式输出**的那条消息才带 timeline（chatStore 实时往里 push，
+ * 落库后重进会话走的是 content / reasoning / steps 那份重建路径，timeline 是 null）。
+ * 不问这一句会漏两种真的错：重建出来的那段思考天然坐在时间线尾部（后面没有 type:'text' 的
+ * 正文条目，整段正文只在老消息没分段时才补在末尾），于是历史消息被标成「思考中…」一直转圈；
+ * 切回正在生成的会话时那一瞬也是这条路（openChat 先从库里重建，timeline 还没长出来）。
+ */
+function reasonLive(i) {
+  if (!props.busy) return false;
+  if (!Array.isArray(props.timeline) || !props.timeline.length) return false;
+  const tl = timeline.value || [];
+  for (let k = tl.length - 1; k >= 0; k--) {
+    const it = tl[k];
+    if (it.kind === 'reason' && it.text) return k === i;
+    if (it.kind === 'text' && String(it.text || '').trim()) return false;
+    if (it.kind === 'step' && it.type !== 'note' && !it.hide) return false;
+  }
+  return false;
+}
+
+/**
+ * 卡片上那行「实际请求内容」。命令/网址类给原文（那就是他要看的 ls），
+ * 其余把短参数摊成 k=v；正文、diff、路径这类已经有自己的位置（编辑卡/路径位），不在这儿重复。
+ */
+const ARGS_QUIET_KEYS = new Set(['path', 'new_path', 'content', 'text', 'diff', 'old_string', 'new_string', 'questions', 'options']);
+function argsLine(item) {
+  const a = item && item.args;
+  if (!a || typeof a !== 'object') return '';
+  if (typeof a.command === 'string' && a.command) return a.command;
+  if (typeof a.url === 'string' && a.url) return a.url;
+  if (typeof a.query === 'string' && a.query) return a.query;
+  const kv = Object.entries(a)
+    .filter(([k, v]) => !ARGS_QUIET_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+    .map(([k, v]) => `${k}=${v}`);
+  return kv.join('  ');
+}
 
 /* mermaid 出图：markdown 那边只留了带源码的容器，图要等 DOM 挂上再补。
    签名用「正文 + 各段时间线文本的长度」，流式增长时自然触发；同一容器由 utils/mermaid 内部去过重，
@@ -374,17 +461,18 @@ const ROUND_KEEP = 14;
 const roundOpen = ref(false);
 const foldFrom = computed(() => (roundOpen.value ? 0 : Math.max(0, timeline.value.length - ROUND_KEEP)));
 const hiddenByFold = (i) => {
-  if (roundOpen.value || i >= foldFrom.value) return false;
+  if (props.flat || roundOpen.value || i >= foldFrom.value) return false;
   // 折叠组跨过界线时不能只藏头：藏了头、成员又因为「在组里」不渲染，整组就凭空消失了
+  // 判的是组**实际占到的那一段**（end），不是可见步数 len —— 中间夹了思考段时两者不等长
   const g = foldedGroup(i);
-  if (g && g.start + g.len > foldFrom.value) return false;
+  if (g && g.end + 1 > foldFrom.value) return false;
   return true;
 };
 
 /* ── 连续的工具调用归成一组 ────────────────────────────────────────────
    开了「工具调用自动折叠」（设置 → 常规）且这一轮已经跑完时，整组收成一行
-   「N 步工具调用 · 展开」；正在流式输出时永远不折，否则用户看不见 AI 在干嘛。
-   只有一步不成组 —— 收成一行反而更难看。 */
+   「N 步工具调用 · 展开」；正在流式输出时永远不折（他这轮拍的：流式不折，只折历史），
+   否则用户看不见 AI 在干嘛。只有一步不成组 —— 收成一行反而更难看。 */
 const foldOpen = reactive({});
 /* 只有真的工具调用才算「一步」。note（429 限流重试、越界说明、注入提示这些过程消息）、
    question、insert、compress 都不是模型在动手 —— 以前只排了 compress，
@@ -394,29 +482,46 @@ const isToolStep = (it) => !!it && it.kind === 'step' && !it.hide && (it.type ==
    连排判断必须把它算进同一段，否则 [调用,结果,调用,结果] 这种最常见的形状会被拆成一堆长度 1 的段，
    「N 步工具调用」这个折叠永远出不来。步数只数可见的那几张卡（一次调用一张结果）。 */
 const isGluedToolLine = (it) => !!it && it.kind === 'step' && it.hide;
+/**
+ * 「不打断组」的条目：思考段与 note。
+ * 这一条才是他报「勾选看不出区别」的主因：流式时 chatStore 每换一次产物就 push 一条新 reason
+ * （见 chatStore 的 tailReason 走法），于是时间线长这样 —— 思考, 调用, 结果, 思考, 调用, 结果…
+ * 按「必须严格连排」判组，每一段都只有 1 步，`len < 2` 永远不成立；
+ * 而重进会话那条路是从 steps 重建的（思考不插在中间），组反倒成立。
+ * 结果就是「刚跑完那会儿不折，重开这个会话才折」，看着像这个勾没接线。
+ * 它们只是不把组切断，自己照常显示，也不算进步数。
+ */
+const isGroupGapLine = (it) => !!it && (it.kind === 'reason' || (it.kind === 'step' && it.type === 'note'));
 const stepGroup = computed(() => {
   const map = new Map();
   const tl = timeline.value || [];
-  let start = -1;
+  let members = [];
   let count = 0;
-  for (let i = 0; i <= tl.length; i++) {
+  const flush = () => {
+    if (count > 0) {
+      // tail = 组里最后一张**看得见**的卡：「收起」那颗键挂它身上（挂隐藏行上就点不着）
+      const tail = members.filter((j) => isToolStep(tl[j])).pop();
+      for (const j of members) map.set(j, { start: members[0], end: members[members.length - 1], len: count, tail });
+    }
+    members = [];
+    count = 0;
+  };
+  for (let i = 0; i < tl.length; i++) {
     const it = tl[i];
     if (isToolStep(it) || isGluedToolLine(it)) {
-      if (start < 0) start = i;
+      members.push(i);
       if (isToolStep(it)) count += 1;
       continue;
     }
-    if (start >= 0) {
-      for (let j = start; j < i; j++) map.set(j, { start, len: count });
-      start = -1;
-      count = 0;
-    }
+    if (isGroupGapLine(it)) continue;
+    flush();
   }
+  flush();
   return map;
 });
 function foldedGroup(i) {
   const g = stepGroup.value.get(i);
-  if (!g || g.len < 2 || !prefs.toolCollapse || props.busy) return null;
+  if (!g || g.len < 2 || props.flat || !prefs.toolCollapse || props.busy) return null;
   return foldOpen[g.start] ? null : g;
 }
 function isFoldHead(i) {
@@ -427,9 +532,17 @@ function stepsHidden(i) {
   const g = foldedGroup(i);
   return !!g && g.start !== i;
 }
-function unfoldGroup(i) {
+/** 展开状态下组尾那张卡上的「收起」键（收回去就又是那一行「N 步工具调用」） */
+function isFoldTail(i) {
   const g = stepGroup.value.get(i);
-  if (g) foldOpen[g.start] = true;
+  if (!g || g.len < 2 || props.flat || !prefs.toolCollapse || props.busy) return null;
+  return foldOpen[g.start] && g.tail === i ? g : null;
+}
+function toggleGroup(i) {
+  const g = stepGroup.value.get(i);
+  if (!g) return;
+  if (foldOpen[g.start]) delete foldOpen[g.start];
+  else foldOpen[g.start] = true;
 }
 
 function isEdit(s) {
@@ -462,26 +575,8 @@ function isLongText(t) {
   return s.length > 1400;
 }
 
-function normDiffLine(l) {
-  if (typeof l === 'string') {
-    if (l.startsWith('+++') || l.startsWith('---')) return { kind: 'meta', mark: ' ', text: l };
-    if (l.startsWith('+')) return { kind: 'add', mark: '+', text: l.slice(1) };
-    if (l.startsWith('-')) return { kind: 'del', mark: '-', text: l.slice(1) };
-    return { kind: 'ctx', mark: ' ', text: l };
-  }
-  if (l && typeof l === 'object') {
-    const text = String(l.text ?? l.line ?? '');
-    // 服务端 diff 行是 {t:'add'|'del'|'ctx', text, new, old}；也兼容 {kind}/{type} 两种写法
-    const k = String(l.t || l.kind || l.type || '').toLowerCase();
-    if (k === 'add' || k === 'insert') return { kind: 'add', mark: '+', text };
-    if (k === 'del' || k === 'delete' || k === 'remove') return { kind: 'del', mark: '-', text };
-    if (l.mark === '+') return { kind: 'add', mark: '+', text };
-    if (l.mark === '-') return { kind: 'del', mark: '-', text };
-    return { kind: k === 'meta' ? 'meta' : 'ctx', mark: ' ', text };
-  }
-  return { kind: 'ctx', mark: ' ', text: String(l ?? '') };
-}
-
+/* diff 行的形状归一与整段高亮搬到 utils/diffview —— 侧栏「审阅」弹窗要用同一份规则，
+   两边各写一套时改一处漏一处（同一份改动在卡里是绿的、到弹窗里就没色了）。 */
 function countSign(s, sign) {
   return (s.diff || []).filter((l) => normDiffLine(l).mark === sign).length;
 }
@@ -512,14 +607,9 @@ function guessLang(s) {
   return langFromPath(s?.path || s?.args?.path || s?.args?.new_path || '');
 }
 
+/** diff 一列的高亮与形状归一在 utils/diffview（侧栏「审阅」弹窗用的是同一份） */
 function diffLines(s) {
-  const rows = (s.diff || []).map(normDiffLine);
-  const lang = guessLang(s);
-  const htmls = highlightToLines(rows.map((r) => r.text).join('\n'), lang);
-  rows.forEach((r, idx) => {
-    r.html = htmls[idx] || escapeHtml(r.text);
-  });
-  return rows;
+  return diffView(s.diff, guessLang(s));
 }
 
 function iconOf(s) {
@@ -537,8 +627,14 @@ function compressLine(s) {
   if (s.phase === 'start') {
     const src = s.from ? `，窗口来自${s.from}` : '';
     // 手动压缩没有「80% 这条线」，写成已达 80% 就是假话；自动压缩才用下面那句。
-    if (s.manual) return `正在压缩上下文… ${fmtTok(s.used)}/${fmtTok(s.limit)} tok（${pct}${src}）`;
-    return `上下文 ${fmtTok(s.used)}/${fmtTok(s.limit)} tok（${pct}${src}）已达 80% → 先压缩再回答`;
+    if (s.manual) return txt('chat.msg.compressManual', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src });
+    // 阈值由后端随卡片带过来（改了设置也不说假话）。缺字段就不报数 ——
+    // 以前在这里兜一个 80，于是把设置改成 60 之后流式期间仍显示「已达 80%」（刷新才变对）。
+    if (!s.threshold) return txt('chat.msg.compressAutoNoThr', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src });
+    return txt('chat.msg.compressAuto', {
+      used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src,
+      thr: s.threshold,
+    });
   }
   if (s.phase === 'done') {
     // 压完锚点作废、要等下一次上游回执才重新校准 → 这个「剩多少」在没锚点时只是正文口径，标清楚
@@ -668,25 +764,9 @@ function preview(s) {
   align-items: center;
   gap: 6px;
 }
-/* 光标的闪烁曲线：这条以前压根没定义过（.caret-dot 的 animation 指向一个不存在的 keyframes），
-   于是那枚点其实不闪 —— 看到「在闪」的是被我删掉的那两条 ::after。删完必须把它补上，不然光标变成死点。 */
-@keyframes caret-blink {
-  0%, 55% { opacity: 1; }
-  56%, 100% { opacity: 0; }
-}
-.caret-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-left: 3px;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: 0.12em;
-  animation: caret-blink 0.9s step-end infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .caret-dot { animation: none; }
-}
+/* 光标的样式和闪烁曲线在 styles/tokens.css（全局）。别挪回这里：
+   .caret-dot 是 v-html 注进正文的节点，作用域样式给它编出的选择器带 [data-v-xxx]，永远匹配不上，
+   结果是「HTML 里有点、屏幕上没有」—— 第七十七轮「圆形光标没了」的第二层原因。 */
 .reason {
   margin-bottom: 8px;
   border: 1px solid var(--border-soft);
@@ -779,6 +859,19 @@ function preview(s) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 工具卡那行「实际请求内容」：命令能很长，所以给到 460px 再省略，全文在 title 里 */
+.step-head .args {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--state-layer);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .badge {
   font-size: 10px;
   border: 1px solid var(--border-strong);
@@ -829,6 +922,9 @@ function preview(s) {
   color: var(--text-3);
   font-size: 12px;
 }
+/* 子智能体那张卡：整行都是入口（他说「点击 subagent 的 card」要看步骤），别只留那颗小键 */
+.step-note.clickable { cursor: pointer; }
+.step-note.clickable:hover { color: var(--text-2); text-decoration: underline; text-underline-offset: 3px; }
 /* 压缩上下文卡里的摘要原文：默认折起，点开才占地方 */
 .cp-detail { margin-top: 4px; }
 .cp-detail > summary { cursor: pointer; color: var(--text-3); }

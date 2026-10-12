@@ -1,5 +1,5 @@
 <template>
-  <div class="k-dropdown" :class="{ block }" ref="rootEl" @keydown.esc="close" @keydown="onKey">
+  <div class="k-dropdown" :class="{ block }" ref="rootEl" @keydown="onKey">
     <button
       class="k-dd-trigger"
       type="button"
@@ -28,7 +28,7 @@
           :key="String(item.value)"
           class="k-dd-item"
           :data-i="i"
-          :class="{ on: isOn(item), cursor: i === cursor }"
+          :class="{ on: isOn(item), cursor: i === cursor, danger: item.danger }"
           type="button"
           role="option"
           :aria-selected="isOn(item)"
@@ -46,6 +46,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { isImeComposing } from '../utils/ime';
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -106,6 +107,12 @@ function pick(item) {
 }
 
 function onKey(e) {
+  // 合成中（输入法候选词还没上屏）一个键都不接：这里 preventDefault 会把 compositionend 弄丢，
+  // 之后这个框的 v-model 就再也收不到 input 事件（详见 utils/ime.js）
+  if (isImeComposing(e)) return;
+  // Esc 收菜单（原来挂在模板的 @keydown.esc 上，和 onKey 同时绑在这个元素上；
+  // 合成中该交给输入法取消候选，所以并到这里统一判）
+  if (e.key === 'Escape') { close(); return; }
   if (!open.value) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -234,6 +241,11 @@ function scrollTo(i) {
   font-weight: 600;
 }
 .k-dd-item i { color: var(--text-3); font-size: 10px; }
+/* 危险档（如 FULL-SEND）：菜单里就该一眼红，不能和普通项长一个样 */
+.k-dd-item.danger,
+.k-dd-item.danger i { color: var(--danger, #e5484d); }
+.k-dd-item.danger:hover,
+.k-dd-item.danger.cursor { color: var(--danger, #e5484d); font-weight: 600; }
 .k-dd-empty {
   padding: 10px;
   color: var(--text-3);

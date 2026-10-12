@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h1><i class="fas fa-chart-column"></i> 用量统计</h1>
-        <p>按日 token / 按模型费用估算</p>
+        <p>估算不保证准确</p>
       </div>
       <div class="page-actions">
         <button class="k-pill" type="button" :title="compact ? '切换完整数字' : '切换 K/M 缩写'" @click="compact = !compact">

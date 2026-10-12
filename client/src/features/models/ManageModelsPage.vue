@@ -50,7 +50,7 @@
             </div>
             <div class="mono muted">{{ p.base_url }} · {{ p.model_count ?? 0 }} 个模型</div>
           </div>
-          <button class="btn sm" type="button" @click="pullRemote(p)">批量添加</button>
+          <button class="btn sm" type="button" @click="pullRemote(p)">管理模型</button>
           <button class="btn sm" type="button" @click="openProvider(p)">编辑</button>
           <button class="btn sm danger" type="button" @click="removeProvider(p)">删除</button>
         </div>
@@ -61,8 +61,8 @@
         <div class="ctx-mask" @mousedown="provCtx = null" @contextmenu.prevent="provCtx = null"></div>
         <div class="ctx-menu" :style="{ left: provCtx.x + 'px', top: provCtx.y + 'px' }" @contextmenu.prevent="provCtx = null">
           <button type="button" @click="duplicateProvider(provCtx.p)">复制提供商参数</button>
-          <button type="button" @click="openProvider(provCtx.p)">编辑</button>
-          <button type="button" @click="pullRemote(provCtx.p)">批量添加模型</button>
+          <button type="button" @click="openProvider(provCtx.p); provCtx = null">编辑</button>
+          <button type="button" @click="pullRemote(provCtx.p); provCtx = null">管理模型</button>
           <button type="button" class="danger" @click="removeProviderFromCtx">删除</button>
         </div>
       </template>
@@ -372,48 +372,60 @@
       </template>
     </KModal>
 
-    <!-- 远程模型批量导入 -->
-    <KModal :open="rOpen" :title="'批量添加 · ' + (rProvider?.name || '')" width="560px" @close="rOpen = false">
+    <!-- 管理这个提供商的模型：远程列表和库里已有的并排勾；取消勾掉一个「已有」的就是删它 -->
+    <KModal :open="rOpen" :title="'管理模型 · ' + (rProvider?.name || '')" width="620px" @close="rOpen = false">
       <div class="form">
         <div v-if="rLoading" class="muted">拉取中…</div>
         <template v-else>
           <div class="remote-head">
-            <button class="btn sm" type="button" @click="batchIds = remoteModels.map(remoteVal)">全选</button>
-            <button class="btn sm" type="button" @click="batchIds = []">清空</button>
-            <span class="muted">已选 {{ batchIds.length }} / {{ remoteModels.length }}（已存在的会跳过）</span>
+            <input v-model="mgFilter" class="nu-input prov-search" placeholder="筛选模型 ID（模糊）…" />
+            <button class="btn sm" type="button" @click="mgCheckAll(true)">全选</button>
+            <button class="btn sm" type="button" @click="mgCheckAll(false)">清空</button>
+            <button class="btn sm" type="button" @click="mgResetKeep()">只留已有</button>
           </div>
-          <p class="muted">右键某一项可为它单独设置详细参数（价格 / 工具风格 / 显示名 / 思考 / 上下文 / 备注）；设过的项会带「已设」标记。</p>
+          <p class="muted">
+            勾上 = 加进库；取消勾掉一个带「已有」标记的 = 把它从库里删掉（用到它的会话只会变成「未指定模型」，对话不会没）。
+            右键某一项可以先给它设详细参数（价格 / 工具风格 / 显示名 / 思考 / 上下文 / 备注），设过的带「已设」标记 —— 只对将要新增的项有效，已在库里的请用列表右键编辑。
+          </p>
           <div class="remote-list">
             <label
-              v-for="item in remoteModels"
-              :key="remoteVal(item)"
+              v-for="it in mgView"
+              :key="it.id"
               class="remote-item"
-              :class="{ 'has-detail': batchDetail[remoteVal(item)] }"
-              title="右键设置该模型的详细参数"
-              @contextmenu.prevent="openBatchDetail(remoteVal(item))"
+              :class="{ 'has-detail': batchDetail[it.id], dying: it.willDelete }"
+              :title="it.exists ? '这个模型已在库里；取消勾选即删除' : '右键可先设好详细参数'"
+              @contextmenu.prevent="openBatchDetail(it.id)"
             >
-              <input
-                class="k-check"
-                type="checkbox"
-                :checked="batchIds.includes(remoteVal(item))"
-                @change="toggleBatch(remoteVal(item))"
-              />
-              <span>{{ remoteLabel(item) }}</span>
-              <span v-if="batchDetail[remoteVal(item)]" class="detail-tag">已设</span>
+              <input class="k-check" type="checkbox" :checked="mgKeep.has(it.id)" @change="mgToggle(it.id)" />
+              <span class="ellip">{{ it.label }}</span>
+              <span v-if="it.label !== it.id" class="mono muted mg-id">{{ it.id }}</span>
+              <span v-if="it.exists" class="mg-tag exist">已有</span>
+              <span v-if="it.willAdd" class="mg-tag add">将新增</span>
+              <span v-if="it.willDelete" class="mg-tag del">将删除</span>
+              <span v-if="batchDetail[it.id]" class="detail-tag">已设</span>
             </label>
-            <div v-if="!remoteModels.length" class="muted">没拉到模型列表；可在下面手动粘贴模型 ID。</div>
+            <div v-if="!mgView.length" class="muted">{{ mgItems.length ? '没有匹配「' + mgFilter + '」的项。' : '没拉到模型列表；可在下面手动粘贴模型 ID。' }}</div>
           </div>
-          <p class="muted">也可手动粘贴模型 ID，逗号分隔</p>
+          <p class="muted">也可手动粘贴模型 ID，逗号或空格分隔（这是单行输入框，换行会被吃掉）</p>
           <KInput v-model="batchManual" label="手动模型 ID" block placeholder="gpt-4o, claude-x" />
+          <p v-if="mgManualNew.length" class="muted">手动这批解析出 {{ mgManualAll.length }} 个，其中 {{ mgManualNew.length }} 个库里还没有，点确定会一起加。</p>
+          <p v-else-if="mgManualAll.length" class="muted">手动这批 {{ mgManualAll.length }} 个库里都已经有了。</p>
+          <div v-if="mgErrors.length" class="mg-errors">
+            <p class="muted">服务端逐条回执（{{ mgErrors.length }} 条没进去）：</p>
+            <div v-for="(e, i) in mgErrors" :key="`${e}-${i}`" class="mono err-text">{{ e }}</div>
+          </div>
         </template>
       </div>
       <template #footer>
+        <span class="muted mg-sum">将新增 {{ mgAdds.length + mgManualNew.length }} / 将删除 {{ mgDeletes.length }}</span>
         <button class="btn" type="button" @click="rOpen = false">取消</button>
-        <button class="btn primary" type="button" @click="importBatch">添加</button>
+        <button class="btn primary" type="button" @click="applyManage" :disabled="mgBusy">
+          {{ mgBusy ? '提交中…' : '确定' }}
+        </button>
       </template>
     </KModal>
 
-    <!-- 批量添加时的单项详细参数：一次填完直接进库，省掉「先加进来再逐个编辑」 -->
+    <!-- 添加时的单项详细参数：一次填完直接进库，省掉「先加进来再逐个编辑」 -->
     <KModal :open="bdOpen" :title="'详细参数 · ' + (bdId || '')" width="560px" @close="bdOpen = false">
       <div class="form">
         <KInput v-model="bdForm.display_name" label="显示名" block :placeholder="bdId || '留空 = 用模型 ID'" />
@@ -436,11 +448,11 @@
           <span>备注</span>
           <textarea class="nu-textarea" rows="2" v-model="bdForm.remark"></textarea>
         </label>
-        <p v-if="batchIds.length > 1" class="muted">下面这个按钮会把这份参数套到当前已选的 {{ batchIds.length }} 个模型上。</p>
+        <p v-if="mgAdds.length > 1" class="muted">下面这个按钮会把这份参数套到当前将要新增的 {{ mgAdds.length }} 个模型上。</p>
       </div>
       <template #footer>
         <button class="btn" type="button" @click="bdOpen = false">取消</button>
-        <button v-if="batchIds.length > 1" class="btn" type="button" @click="applyBatchDetailToAll">应用到所有已选</button>
+        <button v-if="mgAdds.length > 1" class="btn" type="button" @click="applyBatchDetailToAll">应用到所有将新增的</button>
         <button class="btn primary" type="button" @click="saveBatchDetail">保存到这一项</button>
       </template>
     </KModal>
@@ -641,7 +653,7 @@ async function duplicateProvider(p) {
   try {
     const r = await aiApi.duplicateProvider(p.id);
     await loadAll();
-    toast(`已复制为「${r?.name || p.name + '_2'}」，参数与原提供商一致（模型未复制，用「批量添加」现拉）`, 'success', 5000);
+    toast(`已复制为「${r?.name || p.name + '_2'}」，参数与原提供商一致（模型未复制，用「管理模型」现拉）`, 'success', 5000);
   } catch (e) {
     toastErr(e, '复制提供商失败');
   }
@@ -667,7 +679,7 @@ const placeholderHint = ['model', 'messages', 'prompt', 'system', 'stream', 'tem
   .map(ph).join(' ');
 const CUSTOM_TEXT_FIELDS = [
   { key: 'chat_url', label: 'chat_url 对话端点', req: true, ph: `${ph('base')}/v2/chat 或 https://full.url/chat`, hint: '以 http(s):// 开头视为完整地址，否则相对 BaseURL' },
-  { key: 'list_url', label: 'list_url 模型列表端点', req: true, ph: `${ph('base')}/v2/models`, hint: '「批量添加」按钮用' },
+  { key: 'list_url', label: 'list_url 模型列表端点', req: true, ph: `${ph('base')}/v2/models`, hint: '「管理模型」按钮用' },
   { key: 'list_path', label: 'list_path 列表数组路径', req: true, ph: '$.data', hint: '指向模型数组的位置' },
   { key: 'content_path', label: 'content_path 正文路径（非流式）', req: true, ph: '$.data.answer', hint: '测速/压缩等一次性请求按此取值' },
   { key: 'stream_content_path', label: 'stream_content_path 正文路径（流式）', req: true, ph: '$.choices[0].delta.content', hint: '每个 SSE 帧里正文增量的位置' },
@@ -967,13 +979,16 @@ async function applyToolStyle() {
   }
 }
 
-/* ---------------- 远程拉取 ---------------- */
+/* ---------------- 管理该提供商的模型（远程列表 + 库里已有的） ---------------- */
 
 const rOpen = ref(false);
 const rLoading = ref(false);
 const rProvider = ref(null);
 const remoteModels = ref([]);
-const batchIds = ref([]);
+const mgKeep = ref(new Set());
+const mgFilter = ref('');
+const mgErrors = ref([]);
+const mgBusy = ref(false);
 const batchManual = ref('');
 
 function remoteVal(item) {
@@ -1006,7 +1021,9 @@ async function pullRemote(p) {
   rProvider.value = p;
   rOpen.value = true;
   rLoading.value = true;
-  batchIds.value = [];
+  mgFilter.value = '';
+  mgErrors.value = [];
+  batchManual.value = '';
   for (const k of Object.keys(batchDetail)) delete batchDetail[k];   // 换提供商就别带着上一份参数
   try {
     const res = await aiApi.getRemoteModels(p.id);
@@ -1017,15 +1034,79 @@ async function pullRemote(p) {
   } finally {
     rLoading.value = false;
   }
+  mgResetKeep();
 }
 
-function toggleBatch(id) {
-  const i = batchIds.value.indexOf(id);
-  if (i >= 0) batchIds.value.splice(i, 1);
-  else batchIds.value.push(id);
+/**
+ * 弹窗里管的项 = 远程列表 ∪ 库里这个提供商已有的。
+ * 后者必须露面：看不见就谈不上「取消勾选即删除」，而且不露面时它会被静默留着。
+ */
+const mgItems = computed(() => {
+  const pid = rProvider.value?.id;
+  const local = models.value.filter((m) => m.provider_id === pid);
+  const byId = new Map(local.map((m) => [String(m.model_id), m]));
+  const out = [];
+  const seen = new Set();
+  for (const item of remoteModels.value) {
+    const id = String(remoteVal(item) || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(mgItem(id, String(remoteLabel(item) || id), byId.get(id)));
+  }
+  for (const m of local) {
+    const id = String(m.model_id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(mgItem(id, m.display_name || id, m));
+  }
+  return out;
+});
+
+function mgItem(id, label, row) {
+  const exists = !!row;
+  const kept = mgKeep.value.has(id);
+  // 已在库里的一律用他设过的显示名打头（这弹窗是来管理它们的，认名字比认远程裸 id 快），
+  // 模型 ID 另外跟在后面，两者都进筛选
+  return { id, label: exists ? (row.display_name || id) : label, exists, rowId: row?.id ?? 0, willAdd: !exists && kept, willDelete: exists && !kept };
 }
 
-/* 批量添加时的逐项详细参数：键是远程模型 ID，值是待提交的字段。
+const mgView = computed(() => {
+  const parts = mgFilter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!parts.length) return mgItems.value;
+  return mgItems.value.filter((it) => {
+    const hay = `${it.id} ${it.label}`.toLowerCase();
+    return parts.every((p) => hay.includes(p));
+  });
+});
+
+const mgAdds = computed(() => mgItems.value.filter((it) => it.willAdd).map((it) => it.id));
+const mgDeletes = computed(() => mgItems.value.filter((it) => it.willDelete && it.rowId).map((it) => it.rowId));
+const mgManualAll = computed(() => [...new Set(batchManual.value.split(/[,，;；\s]+/).map((s) => s.trim()).filter(Boolean))]);
+const mgManualNew = computed(() => {
+  const known = new Set(mgItems.value.filter((it) => it.exists).map((it) => it.id));
+  return mgManualAll.value.filter((id) => !known.has(id));
+});
+
+// 打开时默认：库里已有的全勾上（不勾就等于要删它，默认必须站在「不动」那一侧），远程新项不勾
+function mgResetKeep() {
+  const pid = rProvider.value?.id;
+  mgKeep.value = new Set(models.value.filter((m) => m.provider_id === pid).map((m) => String(m.model_id)));
+}
+
+function mgToggle(id) {
+  const s = new Set(mgKeep.value);
+  if (s.has(id)) s.delete(id); else s.add(id);
+  mgKeep.value = s;
+}
+
+/** 全选/清空只作用在当前筛选出来的那批 —— 筛了 3 个却把 200 个都勾上是最难发现的事故 */
+function mgCheckAll(on) {
+  const s = new Set(mgKeep.value);
+  for (const it of mgView.value) { if (on) s.add(it.id); else s.delete(it.id); }
+  mgKeep.value = s;
+}
+
+/* 勾选时的逐项详细参数：键是模型 ID，值是待提交的字段。
    没设过的项走服务端默认（支持思考 + native），设过的项整份覆盖。 */
 const batchDetail = reactive({});
 const bdOpen = ref(false);
@@ -1034,7 +1115,10 @@ const bdForm = reactive(modelDefaults());
 
 function openBatchDetail(id) {
   if (!id) return;
-  if (!batchIds.value.includes(id)) batchIds.value = [...batchIds.value, id];
+  if (mgItems.value.some((it) => it.id === id && it.exists)) {
+    return toast(`${id} 已经在库里了，改参数请用模型列表上的右键编辑`, 'warn', 4500);
+  }
+  mgKeep.value = new Set(mgKeep.value).add(id);
   bdId.value = id;
   Object.assign(bdForm, modelDefaults(), batchDetail[id] || {}, {
     id: null, provider_id: rProvider.value?.id ?? null, model_id: id,
@@ -1063,38 +1147,62 @@ function saveBatchDetail() {
   bdOpen.value = false;
 }
 
-/** 一份参数套到所有已选：批量导入几十个模型时，这是「一次操作」而不是逐条点 */
+/** 一份参数套到所有将新增的项：批量导入几十个模型时，这是「一次操作」而不是逐条点 */
 function applyBatchDetailToAll() {
   const one = bdSnapshot();
-  for (const id of batchIds.value) {
+  for (const id of mgAdds.value) {
     batchDetail[id] = { ...one, model_id: id, display_name: one.model_id === id ? one.display_name : id };
   }
   bdOpen.value = false;
-  toast(`已把这套参数记到 ${batchIds.value.length} 个模型上，点「添加」后写入`, 'success', 5000);
+  toast(`已把这套参数记到 ${mgAdds.value.length} 个模型上，点「确定」后写入`, 'success', 5000);
 }
 
-async function importBatch() {
-  const manual = batchManual.value.split(',').map((s) => s.trim()).filter(Boolean);
-  const existed = new Set(models.value.filter((m) => m.provider_id === rProvider.value?.id).map((m) => m.model_id));
-  const ids = [...new Set([...batchIds.value.map((x) => String(x)).filter(Boolean), ...manual])].filter((id) => !existed.has(id));
-  if (!ids.length) return toast('没有可添加的模型（可能都已存在）', 'warn');
+const chunk = (arr, n) => {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+};
+
+/** 一次提交把「加」和「删」都办掉：服务端两个接口各自单次上限 100，所以按片走 */
+async function applyManage() {
+  const adds = [...new Set([...mgAdds.value, ...mgManualNew.value])];
+  const dels = mgDeletes.value;
+  if (!adds.length && !dels.length) return (rOpen.value = false);
   if (!rProvider.value?.id) return toast('缺少提供商', 'warn');
-  const payload = ids.map((id) => {
-    const d = batchDetail[id];
-    // 没单独设过的项也要显式给 defaults：批量接口不传 supports_thinking 时服务端按「支持」处理，
-    // 这里写清楚，免得过几天默认值又改了而这里静默跟着变
-    return d ? { model_id: id, ...d } : { model_id: id, display_name: id, supports_thinking: 1, tool_style: 'native' };
-  });
+  mgBusy.value = true;
+  mgErrors.value = [];
+  const errs = [];
   try {
-    await aiApi.batchCreateModels({ provider_id: rProvider.value.id, models: payload });
-    rOpen.value = false;
-    batchIds.value = [];
-    batchManual.value = '';
-    for (const k of Object.keys(batchDetail)) delete batchDetail[k];
+    for (const part of chunk(adds, 100)) {
+      const payload = part.map((id) => {
+        const d = batchDetail[id];
+        // 没单独设过的项也要显式给 defaults：批量接口不传 supports_thinking 时服务端按「支持」处理，
+        // 这里写清楚，免得过几天默认值又改了而这里静默跟着变
+        return d ? { model_id: id, ...d } : { model_id: id, display_name: id, supports_thinking: 1, tool_style: 'native' };
+      });
+      const res = await aiApi.batchCreateModels({ provider_id: rProvider.value.id, models: payload });
+      errs.push(...(res?.errors || []));
+    }
+    let deleted = 0, chats = 0;
+    for (const part of chunk(dels, 100)) {
+      const res = await aiApi.batchDeleteModels(part);
+      deleted += Number(res?.deleted) || 0;
+      chats += Number(res?.chats_affected) || 0;
+    }
     await loadAll();
-    toast(`已添加 ${ids.length} 个模型`, 'success');
+    if (errs.length) {
+      mgErrors.value = errs;
+      toast(`有 ${errs.length} 条服务端没收，逐条原因在弹窗里`, 'warn', 6000);
+    } else {
+      rOpen.value = false;
+      batchManual.value = '';
+      for (const k of Object.keys(batchDetail)) delete batchDetail[k];
+      toast(`已更新：新增 ${adds.length}、删除 ${deleted}${chats ? `（${chats} 条用到它们的会话改为「未指定模型」，对话还在）` : ''}`, 'success', 6000);
+    }
   } catch (e) {
-    toastErr(e, '添加失败');
+    toastErr(e, '保存失败', 6000);
+  } finally {
+    mgBusy.value = false;
   }
 }
 </script>
@@ -1203,6 +1311,16 @@ tr.picked { background: var(--state-layer); }
 .remote-item { display: flex; gap: 8px; align-items: center; padding: 6px 4px; }
 .remote-item.has-detail { background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 6px; }
 .detail-tag { font-size: 10px; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+/* 「管理模型」弹窗：已有 / 将新增 / 将删除 三种状态各一枚小牌，勾下去就看得到后果 */
+.mg-tag { font-size: 10px; border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+.mg-tag.exist { color: var(--text-3); }
+.mg-tag.add { color: var(--accent); }
+.mg-tag.del { color: var(--danger); font-weight: 600; }
+.remote-item.dying { text-decoration: line-through; color: var(--danger); }
+.remote-item.dying .mg-tag.del { text-decoration: none; }
+.mg-errors { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
+.mg-sum { margin-right: auto; }
+.mg-id { font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn {
   border: 1px solid var(--border);
   background: var(--bg-panel);

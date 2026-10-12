@@ -1,6 +1,6 @@
 {
   "name": "kharness",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "private": true,
   "description": "KHarness：本地 AI Harness（模型导入 / 延迟测试 / Playground），由个人网站 AI 模块导出的独立项目",
   "author": "KHarness",
@@ -15,6 +15,8 @@
     "desktop": "npm --prefix client run build && electron .",
     "desktop:raw": "electron .",
     "pack:prep": "node desktop/pack-prep.js",
+    "pack:prep:dev": "node desktop/pack-prep.js --dev",
+    "sync:dev": "npm run build && node desktop/pack-prep.js --dev && electron-builder --win dir -c.directories.output=release-new",
     "dist": "npm run build && node desktop/pack-prep.js && electron-builder --win nsis --x64",
     "dist:dir": "npm run build && node desktop/pack-prep.js && electron-builder --win dir",
     "dist:small": "npm run build && node desktop/pack-prep.js && set ELECTRON_BUILDER_COMPRESSION_LEVEL=9&& electron-builder --win nsis --x64",

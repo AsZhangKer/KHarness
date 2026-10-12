@@ -9,7 +9,8 @@
 //   1) 工具走白名单：只有查看类（read_file / list_dir / grep / glob / web_fetch / load_skill）
 //      和只读的扩展工具可用；写文件、跑命令、起后台任务一律不注册进子智能体的工具清单。
 //   2) 不可递归：agent_* 本身不在白名单里，子智能体没法再往下派。
-//   3) 有步数上限、超时和并发上限，防止一次派发把额度烧穿。
+//   3) 只有超时与「按会话」的并发上限；**不设步数上限、不截断文本**（第七十五轮他定的）——
+//      跑飞的兜底靠超时、主会话停止时的连带 kill，以及工具自身（read_file/grep）已有的分页上限。
 'use strict';
 
 const { db } = require('../database');
@@ -30,12 +31,21 @@ const GATE_DENY = new Set([
 const isGateDenied = (n) => GATE_DENY.has(n) || n.startsWith('agent_');
 
 const LIMITS = {
-  maxSteps: 24,        // 单个子智能体最多请求模型多少次
-  timeoutMs: 600000,   // 10 分钟
-  maxParallel: 2,      // 同时在跑的子智能体数
-  resultChars: 8000,   // 回喂给主 Agent 的结论长度上限
-  taskChars: 6000,
+  timeoutMs: 600000,       // 10 分钟：唯一的时间兜底，跑飞的子智能体不能永远烧额度
 };
+
+/* 并发上限挪到「选项 → 设置 → 常规 → 子智能体并发上限」（键 subagent_max_parallel）。
+   第七十五轮它是写死的 4，他要按机器情况调；0 = 不限。
+   每次派发现读一次（一条 SQLite 查询），改完不用重启，也和后台任务那些设置项一个口径。 */
+const DEFAULT_MAX_PARALLEL = 5;
+function maxParallelPerChat() {
+  try {
+    const v = db.prepare('SELECT value FROM settings WHERE key = ?').get('subagent_max_parallel')?.value;
+    if (v === undefined || v === null || v === '') return DEFAULT_MAX_PARALLEL;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_PARALLEL;
+  } catch (e) { return DEFAULT_MAX_PARALLEL; }   // 老库连这一行都还没种过
+}
 
 function ensureTable() {
   try {
@@ -54,13 +64,19 @@ function ensureTable() {
       usage_json TEXT NOT NULL DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      finished_at DATETIME
+      finished_at DATETIME,
+      delivered INTEGER NOT NULL DEFAULT 0
     )`).run();
+    // 老库补这一列：这张表由本文件的 ensureTable 管（不在 database.js 的迁移清单里），
+    // 所以新增列只能在这里补；duplicate column 就是「已经有了」，属于正常路径
+    try { db.prepare('ALTER TABLE ai_subagents ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { /* 已有 */ }
   } catch (e) { /* 建表失败时上层按空处理 */ }
 }
 
-// 运行中的句柄：id -> { controller, promise, deniedList }
+// 运行中的句柄：id -> { controller, promise, status, chatId }
 const live = new Map();
+// 当场等结果的消费者（agent_wait）：id -> 计数。有人等着拿结论时就不再往会话里补一条重复的汇报消息
+const waiting = new Map();
 
 function rowOf(id) {
   ensureTable();
@@ -86,9 +102,35 @@ function patch(id, fields) {
   } catch (e) { /* 单次写失败不影响主流程 */ }
 }
 
-function runningCount() {
-  return [...live.values()].filter(h => h.status === 'running').length;
+/**
+ * 轨迹全量落库（不再只留最后 200 条）：弹窗要看的就是这份，一步都不该少。
+ * 单条工具结果也不截断了 —— 主 Agent 那边本来就有 read_file/grep 自己的分页上限。
+ */
+function saveSteps(id, steps) {
+  patch(id, { steps_json: JSON.stringify(steps) });
 }
+
+/**
+ * 在跑的子智能体数量。传 chatId 就只数这条会话派出去的 —— 以前数的是全局，
+ * 于是 A 会话占满两颗就把 B 会话的派发也挡了（和后台任务那一族同一个形状）。
+ */
+function runningCount(chatId) {
+  const c = Number(chatId) || null;
+  // 按「还在 live 里」数，不按 status==='running'：连着派两颗时同一拍里都还是 queued，
+  // 只数 running 会让上限形同虚设
+  return [...live.values()].filter((h) => !c || Number(h.chatId) === c).length;
+}
+
+/** 当场等这份结果的人拿走了它：finish 时就不再往会话里补一条汇报消息 */
+function takeDelivery(id) {
+  const n = waiting.get(String(id)) || 0;
+  if (n <= 0) return false;
+  if (n === 1) waiting.delete(String(id));
+  else waiting.set(String(id), n - 1);
+  return true;
+}
+function noteWaiting(id) { waiting.set(String(id), (waiting.get(String(id)) || 0) + 1); }
+function undoWaiting(id) { const n = (waiting.get(String(id)) || 0) - 1; if (n <= 0) waiting.delete(String(id)); else waiting.set(String(id), n); }
 
 function slug(raw, fallback) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, '-').replace(/^-|-$/g, '');
@@ -97,6 +139,17 @@ function slug(raw, fallback) {
 
 function newId(name) {
   return 'sa-' + slug(name, 'agent').replace(/[^a-z0-9_-]/g, '').substring(0, 16) + '-' + crypto.randomBytes(3).toString('hex');
+}
+
+/**
+ * 名称不许为空（第七十六轮定的侧栏卡片只显名称）：模型没起名字就从任务第一行摘一段。
+ * 以前空名一律落成 "agent"，一个会话里派几路就全叫 agent，卡片上根本分不出是哪一路。
+ */
+function deriveName(name, task) {
+  const n = String(name || '').trim();
+  if (n) return slug(n, 'agent');
+  const first = String(task || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) || '';
+  return slug(first, 'agent');
 }
 
 // ---------- 模型与请求 ----------
@@ -201,11 +254,6 @@ async function callOnce({ modelRow, messages, tools, signal }) {
   return { content, toolCalls, usage: norm.usage || null };
 }
 
-function capText(s, n) {
-  const t = String(s ?? '');
-  return t.length > n ? t.substring(0, n) + `\n…(共 ${t.length} 字，已截断)` : t;
-}
-
 function mergeUsage(a, b) {
   if (!a) return b;
   if (!b) return a;
@@ -224,6 +272,51 @@ function emit(id, phase, payload) {
   try { host?.emitSubagent?.(Object.assign({ id, phase, chat_id }, payload)); } catch (e) { /* 进度丢了不影响执行 */ }
 }
 
+/**
+ * 子智能体跑完怎么把结论交回主 Agent（第七十七轮他改的口径）。
+ *
+ * 以前是往会话里插一条 `role:'user' + speaker:'subagent'` 的消息 —— 下一轮上文确实带得上，
+ * 但那等于「替用户说了一句模型没听过的话」，界面上还多出一个凭空的气泡。
+ * 现在按他说的做：像工具返回值一样直接交回，不占消息表。
+ * 落库只记状态与结论（`ai_subagents`），另用 `delivered` 标记「有没有已经交回过」；
+ * 由 routes/ai.js 在构建上文时把没交回的那些拼成一条回执给模型（界面不画）。
+ * 有人（agent_wait）正当场等这份结果，就算已交回，不再重复补。
+ */
+function notifyParent(id) {
+  const rec = rowOf(id);
+  // 当场被 agent_wait 取走、或这路根本没有归属（没有会话来消费这份交回）→ 直接标已交回，不进待交回队列
+  if (takeDelivery(id) || !Number(rec?.parent_chat_id)) markDelivered(id);
+}
+
+function markDelivered(id) {
+  try { db.prepare('UPDATE ai_subagents SET delivered = 1 WHERE id = ?').run(String(id)); } catch (e) { /* 旧库无列 */ }
+}
+
+/**
+ * 取出「这条会话已结束、但还没交回过」的子智能体结论，并把它们标成交回过（一次消费一次生效）。
+ * routes/ai.js 在两处用它：构建跨轮上文时、以及本轮工具结果回喂完的安全边界 ——
+ * 交回的形状是一条工具回执式的合成消息，不落 `ai_chat_messages`，所以界面上没有气泡。
+ */
+function takeDeliveries(chatId) {
+  const c = Number(chatId);
+  if (!Number.isInteger(c) || c < 1) return '';
+  ensureTable();
+  let rows = [];
+  try {
+    rows = db.prepare(
+      "SELECT id, name, status, result, error FROM ai_subagents WHERE parent_chat_id = ? AND delivered = 0 AND status IN ('done','failed','killed') ORDER BY id ASC"
+    ).all(c);
+  } catch (e) { return ''; }
+  if (!rows.length) return '';
+  for (const r of rows) markDelivered(r.id);
+  const one = (r) => {
+    const label = r.status === 'done' ? '已完成' : r.status === 'killed' ? '被停止' : '失败';
+    return `【子智能体 ${r.name || r.id} ${label}】(id=${r.id})\n${(r.status === 'done' ? (r.result || '(无结论)') : (r.error || '未产出结论'))}`;
+  };
+  return '[子智能体交回的返回]\n' + rows.map(one).join('\n\n').substring(0, 60000) +
+    '\n（以上是你在上一轮派出去的分身交回的返回，不是用户说的话。要继续用就把结论并进你接下来的动作，不要重复派发同一件事。）';
+}
+
 function finish(id, status, result, error) {
   patch(id, {
     status, result, error,
@@ -231,10 +324,12 @@ function finish(id, status, result, error) {
   });
   const h = live.get(id);
   if (h) h.status = status;
-  emit(id, status === 'done' ? 'done' : 'failed', { result: String(result || '').slice(0, 400), error });
+  notifyParent(id);
+  // result 原样带过去（不再截 400 字）：正把它显示在卡片上的那个人要看全文
+  emit(id, status === 'done' ? 'done' : status === 'killed' ? 'killed' : 'failed', { result, error });
 }
 
-/** 跑一个子智能体直到出结论（或被停 / 超时 / 到步数上限） */
+/** 跑一个子智能体直到出结论（或被停 / 超时）。没有步数上限：它想查几轮就查几轮 */
 async function drive(id) {
   const rec = rowOf(id);
   if (!rec) return { error: `子智能体 ${id} 不存在` };
@@ -255,20 +350,24 @@ async function drive(id) {
 
   patch(id, { status: 'running', model_id: modelRow.model_id });
   handle.status = 'running';
-  emit(id, 'start', { name: rec.name, model: modelRow.model_id, task: rec.task.slice(0, 160) });
+  emit(id, 'start', { name: rec.name, model: modelRow.model_id, task: rec.task });
   const timer = setTimeout(() => { try { handle.controller.abort(); } catch (e) {} }, LIMITS.timeoutMs);
 
   try {
-    for (let i = 0; i < LIMITS.maxSteps; i++) {
+    for (let i = 0; ; i++) {
       if (handle.status === 'killed') break;
       patch(id, { iter: i + 1 });
       const r = await callOnce({ modelRow, messages, tools, signal: handle.controller.signal });
       if (r.error) {
         const msg = `第 ${i + 1} 步请求失败：${r.error}`;
+        saveSteps(id, steps);
         finish(id, 'failed', final, msg);
         return { error: msg };
       }
       if (r.usage) usage = mergeUsage(usage, r.usage);
+      // 正文也要进轨迹：弹窗要看的就是「它这一轮说了什么、跑了哪些工具」，
+      // 只存工具名的话翻回去等于只看得到一串名字（他第七十五轮点名的缺口）
+      if (r.content) steps.push({ type: 'text', text: r.content });
       if (!r.toolCalls.length) { final = (r.content || '').trim(); break; }
 
       messages.push({
@@ -284,16 +383,16 @@ async function drive(id) {
         emit(id, 'tool', { tool: c.name, args: c.args });
         steps.push({ type: 'tool', name: c.name, args: c.args });
         const res = await runTool(c, rec);
-        const text = capText(toolText(res), 12000);
+        const text = toolText(res);
         steps.push({ type: 'result', name: c.name, output: res?.output ? text : undefined, error: res?.error || undefined });
-        patch(id, { steps_json: JSON.stringify(steps.slice(-200)) });
+        saveSteps(id, steps);
         messages.push({ role: 'tool', tool_call_id: c.id, content: text });
       }
-      if (i === LIMITS.maxSteps - 1) final = '（已达子智能体步数上限）\n' + (r.content || '');
     }
   } catch (e) {
     const killed = handle.status === 'killed' || String(e?.name || '') === 'AbortError';
     const msg = killed ? '被停止或超时' : String(e?.message || e).substring(0, 300);
+    saveSteps(id, steps);
     finish(id, killed ? 'killed' : 'failed', final, msg);
     return { error: msg, killed };
   } finally {
@@ -301,11 +400,21 @@ async function drive(id) {
     live.delete(id);
   }
 
+  // 循环是「被停止」主动 break 出来的：这条路必须落在 killed 上，不能顺着走到下面报成 done
+  // （以前 kill 写了 killed，循环自己退出来又把它改写成「已完成」，界面上就变成「停掉了但说它跑完了」）
+  if (handle.status === 'killed') {
+    saveSteps(id, steps);
+    finish(id, 'killed', final, '被停止或超时');
+    return { error: '被停止或超时', killed: true };
+  }
+
   if (!final) final = '（子智能体没有产出结论就被中断了）';
-  const capped = capText(final, LIMITS.resultChars);
+  // 最后那段正文后面不会再有工具调用，也就没人再写轨迹 —— 收尾必须补一次，
+  // 否则弹窗翻回去看不到「它最后说了什么」（测试里那 30 vs 31 段就是这么露出来的）
+  saveSteps(id, steps);
   patch(id, { usage_json: usage ? JSON.stringify(usage) : '' });
-  finish(id, 'done', capped, '');
-  return { result: capped, usage };
+  finish(id, 'done', final, '');
+  return { result: final, usage };
 }
 
 function toolText(res) {
@@ -353,14 +462,16 @@ function create({ name, task, model, cwd, chatId }) {
   ensureTable();
   const body = String(task ?? '').trim();
   if (!body) return { error: 'task 不能为空：说清楚要子智能体查什么、产出什么。' };
-  if (runningCount() >= LIMITS.maxParallel) {
-    return { error: `同时在跑的子智能体已达上限（${LIMITS.maxParallel} 个）。等其中一个结束再派，或改用 agent_run 串行执行。` };
+  const c = Number(chatId) || null;
+  const cap = maxParallelPerChat();
+  if (c && cap > 0 && runningCount(c) >= cap) {
+    return { error: `本会话同时在跑的子智能体已达上限（${cap} 个，可在「设置 → 常规 → 子智能体并发上限」调整，0 = 不限）。等其中一个结束再派，或用 agent_kill 停掉不要的那路。` };
   }
-  const id = newId(name);
-  const taskCap = body.length > LIMITS.taskChars ? body.substring(0, LIMITS.taskChars) + '\n…(任务过长已截断)' : body;
+  const finalName = deriveName(name, body);
+  const id = newId(finalName);
   db.prepare(`INSERT INTO ai_subagents (id, parent_chat_id, name, task, status, model_id, cwd)
     VALUES (?, ?, ?, ?, 'queued', ?, ?)`)
-    .run(id, chatId || null, slug(name, 'agent'), taskCap, String(model ?? '').trim(), String(cwd || host?.defaultCwd || process.cwd()));
+    .run(id, c, finalName, body, String(model ?? '').trim(), String(cwd || host?.defaultCwd || process.cwd()));
   return { id };
 }
 
@@ -368,14 +479,14 @@ function start(id) {
   const rec = rowOf(id);
   if (!rec) return { error: `子智能体 ${id} 不存在` };
   if (live.has(id)) return { error: `子智能体 ${id} 已经在跑了` };
-  const handle = { controller: new AbortController(), status: 'queued' };
+  const handle = { controller: new AbortController(), status: 'queued', chatId: Number(rec.parent_chat_id) || null };
   live.set(id, handle);
   const p = drive(id);
   handle.promise = p;
   return { ok: true, promise: p, name: rec.name };
 }
 
-/** 异步派发：立刻返回 id，主 Agent 可以继续干别的，之后用 agent_wait 收结果 */
+/** 异步派发：立刻返回 id，主 Agent 可以继续干别的；结束时结论会自己回到会话里 */
 function spawn(opts) {
   const c = create(opts);
   if (c.error) return c;
@@ -384,45 +495,36 @@ function spawn(opts) {
   return { id: c.id, name: rowOf(c.id)?.name || '' };
 }
 
-/** 同步执行：派出去并等它出结论（最常用） */
-async function runSync(opts, waitMs) {
-  const c = create(opts);
-  if (c.error) return c;
-  const s = start(c.id);
-  if (s.error) { remove(c.id); return s; }
-  const cap = Math.min(Number(waitMs) || LIMITS.timeoutMs, LIMITS.timeoutMs);
-  const winner = await Promise.race([
-    s.promise.then(r => ({ kind: 'done', r })),
-    new Promise(res => setTimeout(() => res({ kind: 'timeout' }), cap)),
-  ]);
-  if (winner.kind === 'timeout') {
-    return { pending: true, id: c.id, message: `子智能体 ${c.id} 还在跑（已等 ${Math.round(cap / 1000)} 秒）。用 agent_wait("${c.id}") 继续等，或 agent_kill("${c.id}") 停掉。` };
-  }
-  const rec = rowOf(c.id) || {};
-  if (winner.r?.error) return { id: c.id, error: winner.r.error, status: rec.status };
-  return { id: c.id, name: rec.name, status: rec.status, result: winner.r?.result || rec.result || '' };
-}
-
-/** 等一个已派发的子智能体出结果 */
+/**
+ * 等一个已派发的子智能体出结果。
+ * 这一路是「当场就要」，所以标记一下：结论由这次调用拿走，finish 就不再往会话里补一条重复汇报。
+ */
 async function wait(id, timeoutMs) {
   ensureTable();
   const rec = rowOf(id);
   if (!rec) return { error: `子智能体 ${id} 不存在。用 agent_list 看有哪些。` };
   const cap = Math.min(Number(timeoutMs) || 120000, LIMITS.timeoutMs);
-  const deadline = Date.now() + cap;
-  while (Date.now() < deadline) {
-    const cur = rowOf(id);
-    if (cur && ['done', 'failed', 'killed'].includes(cur.status)) {
-      return {
-        id, name: cur.name, status: cur.status,
-        result: cur.status === 'done' ? cur.result : '',
-        error: cur.error || undefined,
-      };
+  const already = ['done', 'failed', 'killed'].includes(rec.status);
+  if (!already) noteWaiting(id);
+  try {
+    const deadline = Date.now() + cap;
+    while (Date.now() < deadline) {
+      const cur = rowOf(id);
+      if (cur && ['done', 'failed', 'killed'].includes(cur.status)) {
+        if (!already) takeDelivery(id);
+        return {
+          id, name: cur.name, status: cur.status,
+          result: cur.status === 'done' ? cur.result : '',
+          error: cur.error || undefined,
+        };
+      }
+      await new Promise(r => setTimeout(r, 700));
     }
-    await new Promise(r => setTimeout(r, 700));
+  } finally {
+    if (!already) undoWaiting(id);
   }
   const now = rowOf(id);
-  return { pending: true, id, status: now?.status || 'running', iter: now?.iter || 0, message: `等了 ${Math.round(cap / 1000)} 秒还没结束（已跑 ${now?.iter || 0} 步）。再等用 agent_wait("${id}")。` };
+  return { pending: true, id, status: now?.status || 'running', iter: now?.iter || 0, message: `等了 ${Math.round(cap / 1000)} 秒还没结束（已跑 ${now?.iter || 0} 步）。再等用 agent_wait("${id}")；它结束时结论也会自己回到本会话。` };
 }
 
 function list(chatId) {
@@ -448,10 +550,21 @@ function detail(id) {
   return Object.assign({}, r, { running: live.has(id), steps });
 }
 
-function kill(id) {
-  const h = live.get(id);
+/** 归属：无主记录（试跑那类没带会话）谁都看得见管得了；有主的只认起它的那条会话 */
+function ownedBy(rec, chatId) {
+  if (!rec) return false;
+  const owner = Number(rec.parent_chat_id) || null;
+  const c = Number(chatId) || null;
+  return !c || !owner || owner === c;
+}
+
+function kill(id, chatId) {
   const rec = rowOf(id);
   if (!rec) return { error: `子智能体 ${id} 不存在` };
+  if (!ownedBy(rec, chatId)) {
+    return { error: `子智能体「${id}」不是本会话派出去的（它属于会话 ${rec.parent_chat_id}）。子智能体按会话隔离：本会话的清单里没有它，也停不了它。` };
+  }
+  const h = live.get(id);
   if (!h) return { ok: true, already: true, message: `子智能体 ${id} 已经结束了（状态 ${rec.status}），无需停止。` };
   h.status = 'killed';
   try { h.controller.abort(); } catch (e) { /* 已结束 */ }
@@ -459,24 +572,33 @@ function kill(id) {
   return { ok: true, message: `已请求停止子智能体 ${id}` };
 }
 
-function remove(id) {
+/**
+ * 主会话被停止时连带把自己的子智能体全部中止（他第七十五轮要的那条）。
+ * 以前父回合的 abort 完全不碰这张 live 表：上游流断了，工具还在替它跑、还在烧额度。
+ * 只按 parent_chat_id 挑，别的会话的一颗都不动。
+ */
+function killChat(chatId) {
+  const c = Number(chatId) || null;
+  if (!c) return { killed: [] };
+  const ids = [...live.entries()].filter(([, h]) => Number(h.chatId) === c).map(([id]) => id);
+  for (const id of ids) kill(id, c);
+  return { killed: ids };
+}
+
+function remove(id, chatId) {
   ensureTable();
-  kill(id);
+  const rec = rowOf(id);
+  if (rec && !ownedBy(rec, chatId)) {
+    return { error: `子智能体「${id}」不属于本会话，删不掉（它属于会话 ${rec.parent_chat_id}）。` };
+  }
+  kill(id, chatId);
   try { db.prepare('DELETE FROM ai_subagents WHERE id = ?').run(id); } catch (e) { /* 忽略 */ }
   live.delete(id);
   return { ok: true, message: `已删除子智能体 ${id} 的记录` };
 }
 
-/** 给主 Agent 的汇报文本 */
-function report(r) {
-  if (r.error) return `子智能体失败：${r.error}`;
-  if (r.pending) return r.message;
-  const head = `【子智能体 ${r.name || r.id} · ${r.status}】`;
-  return `${head}\n${r.result || '(无结论)'}`;
-}
-
 module.exports = {
   setHost, ensureTable,
-  create, start, spawn, runSync, wait, list, detail, kill, remove, report,
-  BUILTIN_ALLOW, LIMITS,
+  create, start, spawn, wait, list, detail, kill, killChat, remove,
+  BUILTIN_ALLOW, LIMITS, maxParallelPerChat, DEFAULT_MAX_PARALLEL, takeDeliveries,
 };

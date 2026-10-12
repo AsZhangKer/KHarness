@@ -1,6 +1,10 @@
 // 后台任务：让长命令（dev server / watch / 构建）异步于 AI 主循环运行，不阻塞对话。
 // 与 run_command 共用 shellcmd 的 Shell 拼参逻辑；进程一律登记进 procguard，只允许本模块杀自己起的树。
 // 注意：任务表在内存里，服务重启即失联（退出时会统一清理），不跨重启恢复。
+// 会话归属：每条任务记下是谁（chatId）起的。以前整张表所有会话共用，
+// 于是 A 会话启动的 dev server 会出现在 B 会话的「后台」页里，B 还能 background_kill 掉它
+// —— 跨会话读日志/杀进程既串界面也串权限（他第七十四轮报的那条）。
+// 判据见 owned()：无归属（设置页「试跑」那类没有会话上下文）= 公共，谁都看得见，别把试跑挡死。
 const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
@@ -61,7 +65,7 @@ function appendTail(t, chunk) {
 }
 
 // 返回 { id, pid, log } 或 { error }
-function start(command, cwd) {
+function start(command, cwd, chatId = null) {
   const cmd = String(command || '').trim();
   if (!cmd) return { error: 'run_background:command 不能为空' };
   prune();
@@ -87,7 +91,8 @@ function start(command, cwd) {
   }
   const task = {
     id, command: cmd, cwd: opts.cwd, pid: child.pid, state: 'running', exitCode: null, signal: null,
-    startedAt: Date.now(), endedAt: 0, log, tail: [], bytes: 0, stream, child, killed: false
+    startedAt: Date.now(), endedAt: 0, log, tail: [], bytes: 0, stream, child, killed: false,
+    chatId: Number(chatId) || null,
   };
   tasks.set(id, task);
   procguard.claim(child.pid, sh ? sh.image : (process.platform === 'win32' ? 'cmd.exe' : 'sh'), id);
@@ -130,9 +135,24 @@ function brief(t) {
   return { id: t.id, pid: t.pid, state: STATE_TEXT[t.state] || t.state, runtime: runtimeText(t), exit: t.exitCode, command: t.command };
 }
 
-function status(id, tailLines) {
+/**
+ * 这条任务对「哪个会话」可见/可管。
+ * 无归属（设置页「试跑」、工具直调没带会话上下文）= 公共，谁都看得见；
+ * 有归属的只有起它的那条会话看得见 —— 别的会话拿到 handle 也读不到日志、杀不掉进程。
+ */
+function owned(t, chatId) {
+  if (!chatId) return true;
+  const c = Number(t.chatId);
+  return !c || c === Number(chatId);
+}
+const visibleFor = (chatId) => [...tasks.values()].filter((t) => owned(t, chatId));
+
+const NOT_HERE = (id) => ({ error: `找不到任务「${id}」。后台任务按会话隔离：别的会话起的任务不在本会话的清单里（用 background_list 看本会话自己的任务；服务重启后旧任务不保留）。` });
+
+function status(id, tailLines, chatId = null) {
   const t = tasks.get(String(id || '').trim());
   if (!t) return { error: `background_status:找不到任务「${id}」。用 background_list 看当前有哪些任务（注意：服务重启后旧任务不保留）。` };
+  if (!owned(t, chatId)) return NOT_HERE(id);
   const n = Math.min(Math.max(parseInt(tailLines) || 100, 1), TAIL_LINES);
   const body = t.tail.slice(-n).join('\n');
   return {
@@ -148,19 +168,23 @@ function status(id, tailLines) {
   };
 }
 
-function list() {
-  const rows = [...tasks.values()].sort((a, b) => b.startedAt - a.startedAt).map(brief);
-  if (!rows.length) return { output: '当前没有后台任务（后台任务不跨服务重启）。用 run_background 启动一个：dev server、watch、长时间构建等。' };
+function list(chatId = null) {
+  const mine = visibleFor(chatId);
+  const hidden = tasks.size - mine.length;
+  const rows = mine.sort((a, b) => b.startedAt - a.startedAt).map(brief);
+  if (!rows.length) return { output: '当前会话没有后台任务（后台任务不跨服务重启，且按会话隔离：别的会话起的任务不在这里）。用 run_background 启动一个：dev server、watch、长时间构建等。' };
   const running = rows.filter(r => r.state === '运行中').length;
   const lines = [`共 ${rows.length} 个后台任务（运行中 ${running} 个）：`];
   for (const r of rows) lines.push(`- ${r.id} · ${r.state} · PID ${r.pid} · ${r.runtime} · ${r.command.length > 70 ? r.command.substring(0, 70) + '…' : r.command}`);
+  if (hidden > 0) lines.push('', `（另有 ${hidden} 个任务属于别的会话，本会话看不到也不受本会话影响）`);
   lines.push('', '查详情用 background_status(handle)，终止用 background_kill(handle)。');
   return { output: lines.join('\n') };
 }
 
-async function kill(id) {
+async function kill(id, chatId = null) {
   const t = tasks.get(String(id || '').trim());
   if (!t) return { error: `background_kill:找不到任务「${id}」。先 background_list 确认 handle。` };
+  if (!owned(t, chatId)) return NOT_HERE(id);
   if (t.state !== 'running') return { output: `任务 ${t.id} 已经是「${STATE_TEXT[t.state] || t.state}」状态，无需终止。` };
   t.killed = true;
   const r = await procguard.killTree(t.pid);
@@ -179,4 +203,4 @@ function shutdownAll() {
   }
 }
 
-module.exports = { start, status, list, kill, shutdownAll, tasks, BG_DIR, TAIL_LINES };
+module.exports = { start, status, list, kill, shutdownAll, tasks, owned, visibleFor, BG_DIR, TAIL_LINES };

@@ -10,8 +10,7 @@
 import { reactive } from 'vue';
 import { aiApi } from '../../api';
 import { toast } from '../../stores/toast';
-
-const OPEN_KEY = 'kh.remote_open_hosts';
+import { isCollapsed, setCollapsed } from '../../utils/collapse';
 
 const state = reactive({
   hosts: [],
@@ -20,21 +19,13 @@ const state = reactive({
   busy: false,
 });
 
-function openSet() {
-  try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]')); } catch (e) { return new Set(); }
-}
-function saveOpen() {
-  localStorage.setItem(OPEN_KEY, JSON.stringify(state.hosts.filter((h) => h.open).map((h) => h.id)));
-}
-
 async function refresh() {
   state.busy = true;
   try {
     const rows = (await aiApi.getRemoteHosts()) || [];
-    const opened = openSet();
-    // 第一次拿到某台机器时默认展开：只建了一条连接的人不想再多点一下
-    const had = new Set(state.hosts.map((h) => h.id));
-    state.hosts = rows.map((h) => ({ ...h, open: had.size === 0 ? true : opened.has(h.id) }));
+    // 折叠清单走 utils/collapse（与左栏项目同一套）。原来那份 `had.size === 0 ? true : opened.has(id)`
+    // 守不住：刷新一次页面在这里也算「第一次拿到」，于是每次刷新都把折叠全冲开（第七十四轮 ③）。
+    state.hosts = rows.map((h) => ({ ...h, open: !isCollapsed('h', h.id) }));
     state.loaded = true;
   } catch (e) {
     /* api 拦截器已经弹过 toast */
@@ -51,7 +42,7 @@ function toggle(id) {
   const h = hostOf(id);
   if (!h) return;
   h.open = !h.open;
-  saveOpen();
+  setCollapsed('h', id, !h.open);
 }
 
 async function create(form) {

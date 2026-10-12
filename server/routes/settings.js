@@ -18,28 +18,12 @@ router.get('/', wrap((req, res) => {
 
 /**
  * 版本信息（设置-关于要显示真实版本号，别再写死「NewUI-dev 重构版」）。
- *
- * 三个来源按优先级：
- *   1) 新版外壳传的环境变量 KH_APP_VERSION（= app.getVersion()），KH_APP_PACKAGED=1 才算正式版；
- *   2) 打包时 `pack-prep` 写进服务端载荷里的 version.json —— 它不依赖外壳，所以旧外壳的装机版也认得出正式版；
- *   3) 都没有就是源码/自测跑法：读仓库根 package.json，并按他的口径补 `d` 后缀（v1.3.3d）。
+ * 来源与「开发版/正式版」的判定统一在 utils/build.js —— 「调试」板块显不显示、
+ * 后端 /api/debug/* 开不开，问的都是同一个答案。
  */
 router.get('/app-info', wrap((req, res) => {
-  const fromShell = String(process.env.KH_APP_VERSION || '').trim();
-  let fromFile = null;
-  try {
-    // pack-prep 写的是服务端载荷根目录（server/version.json），不是 routes/ 下 —— 别搞错层级
-    fromFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'version.json'), 'utf8'));
-  } catch (e) { fromFile = null; }
-  let base = fromShell || String((fromFile && fromFile.version) || '');
-  if (!base) {
-    try {
-      base = String(JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')).version || '');
-    } catch (e) { base = ''; }
-  }
-  const packaged = process.env.KH_APP_PACKAGED === '1' || !!(fromFile && fromFile.packaged) || !!(fromFile && fromFile.version);
-  const display = base ? (packaged ? `v${base}` : `v${base}d`) : '';
-  ok(res, { version: base, display, packaged, platform: process.platform, node: process.version });
+  const b = require('../utils/build').resolve();
+  ok(res, { version: b.version, display: b.display, packaged: b.packaged, platform: process.platform, node: process.version });
 }));
 
 // 布尔型设置统一存成 '1' / '0'
@@ -97,11 +81,31 @@ const SETTING_KEYS = {
   // 文本级卡带检测：模型在一段输出里原地复读时掐断。判据照第三方同类项目的成熟参数，
   // 阈值可下调到 60 字（更灵敏更易误报）或关掉。判定点 routes/ai.js 的 stallBreak
   stall_guard_enabled: boolSetting,
-  stall_min_chars: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 60 && n <= 2000 ? String(n) : null; }
+  // 本轮工具结果自动落盘（超预算折成摘要 + 全文写缓存）；关=本轮一个字都不折，靠压缩兜
+  round_tool_fold: boolSetting,
+  // FULL-SEND 审批档的实验室总闸：默认关。关着时这一档连出现在选择菜单里都没有，
+  // 且存量会话行里的 fullsend 会自动降回 default。判定点 routes/ai.js 的 fullSendLabOn()
+  fullsend_enabled: boolSetting,
+  // 多模型池（failover）：已半废弃，默认关，只有实验室里打开才有入口（照 supervisor_enabled 那套）
+  pool_enabled: boolSetting,
+  stall_min_chars: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 60 && n <= 2000 ? String(n) : null; },
+  // 上下文自动压缩阈值（占窗口百分比）。原来写死 80%，没得调 —— 长上下文模型想早点压、
+  // 短上下文模型想压到极限再压，都改不了。判定点 routes/ai.js 的 maybeAutoCompress。
+  compress_threshold: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 10 && n <= 95 ? String(n) : null; },
+  // 同一条会话同时在跑的子智能体上限。0 = 不限（他自己盯着额度时用），判定点 utils/subagent.js。
+  // 上限给到 50：再高就已经不是「开几个分身」而是拿它刷接口了，误填一个三位数只会把机器压死。
+  subagent_max_parallel: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 50 ? String(n) : null; }
 };
 router.put('/', wrap((req, res) => {
   const updates = [];
   const params = [];
+  /* 请求体里出现了白名单没有的键 = 前端比后端新（装机版没重启就是这种形状）。
+     以前是静默丢掉、照样回「设置已保存」，于是界面上填着的值根本没进库，刷新就回原值 —— 看着像「没做持久化」。
+     现在直接说清楚，别让人对着一个没写进去的输入框猜。 */
+  const unknown = Object.keys(req.body || {}).filter((k) => !(k in SETTING_KEYS));
+  if (unknown.length) {
+    return fail(res, 400, `服务端不认识这些设置项：${unknown.join('、')}。多半是后端还在跑旧版本，重启 KHarness 后再试。`);
+  }
   for (const [key, validate] of Object.entries(SETTING_KEYS)) {
     if (req.body?.[key] !== undefined) {
       const v = validate(req.body[key]);
@@ -111,7 +115,9 @@ router.put('/', wrap((req, res) => {
     }
   }
   if (!updates.length) return fail(res, 400, '没有可更新的设置项');
-  const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  // updated_at 必须跟着写：这张表的列是建表时给的默认值，ON CONFLICT 不点它就一直停在插入那天。
+  // 今天查「default_context_limit 到底什么时候被人改回 1000000 的」就因为这个问题完全没答案。
+  const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP');
   const tx = db.transaction(() => { for (let i = 0; i < updates.length; i++) stmt.run(updates[i], params[i]); });
   tx();
   // 代理总闸是缓存着读的（每条请求都要判一次），改完立刻失效，不然要等 5 秒才生效

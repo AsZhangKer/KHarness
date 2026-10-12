@@ -6,22 +6,35 @@
  * 30 个增量 = 300 次 renderMarkdown —— 会话越长每一下越贵，正是「上下文长了才卡」的那条路。
  * 切页更直接：整屏历史每条都要重算一遍（20 条长回复 ≈ 100ms 纯渲染，还没算布局）。
  *
- * 缓存以**正文本身**为 key（不是条目对象）：条目对象每次重算 computed 都是新的，
+ * 缓存以**正文本身**为键（不是条目对象）：条目对象每次重算 computed 都是新的，
  * 按对象缓存等于没缓存；而切回同一个会话时正文一字未变，按内容才命中得了。
- * 上限 300 条、超了就整表重来 —— 这是给人看的加速表，不是必须保住的资产，宁可全 miss 也不许吃内存。
+ *
+ * 溢出时**丢最老的少数几条**，不再整表清空（第七十七轮改的，读数对比见 _tmp_kh77/perf_probe.js）：
+ * 流式那一条每 30ms 就换一个键，必然 miss 一次 —— 整表清空等于「流式期间缓存不存在」，
+ * 屏幕上其余几十条正文每条都要重跑一遍 marked + DOMPurify + hljs。
+ * 上限还是 300 条，吃的内存还是那么多，只是不再一次全丢。
  */
 import { renderMarkdown } from './format';
 
 const MAX = 300;
+const DROP = 60;   // 一次腾掉的条数：流式那阵子其余正文基本都还在
 const cache = new Map();
 
 export function renderMarkdownCached(text) {
   const src = String(text || '');
   if (!src) return '';
+  const st = window.__khRenderStats || (window.__khRenderStats = { md: 0, hit: 0, miss: 0 });
   const hit = cache.get(src);
-  if (hit !== undefined) return hit;
+  if (hit !== undefined) { st.hit++; return hit; }
+  st.miss++;
   const html = renderMarkdown(src);
-  if (cache.size >= MAX) cache.clear();
+  if (cache.size >= MAX) {
+    // Map 按插入顺序迭代：头几条就是最老的（流式那串一次性键正好排在最前）
+    for (const k of cache.keys()) {
+      cache.delete(k);
+      if (cache.size <= MAX - DROP) break;
+    }
+  }
   cache.set(src, html);
   return html;
 }

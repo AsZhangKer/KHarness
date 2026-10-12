@@ -85,14 +85,15 @@ function createSchema() {
     CREATE TABLE IF NOT EXISTS ai_chats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL DEFAULT 1,
-      model_row_id INTEGER NOT NULL,
+      model_row_id INTEGER,
       title TEXT DEFAULT '',
       project_id INTEGER,
       cwd TEXT DEFAULT '',
       plan_mode INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (model_row_id) REFERENCES ai_models(id) ON DELETE CASCADE
+      -- 删模型只该让会话「暂时没选模型」（前端回落到全局默认），不该把整段对话一起带走
+      FOREIGN KEY (model_row_id) REFERENCES ai_models(id) ON DELETE SET NULL
     );
 
     -- 任务列表（Plan 模式：<plan> 标签解析产物，与 ReAct 循环联动）
@@ -282,7 +283,24 @@ const MIGRATIONS = [
   // 只估正文会低估到离谱：实测三条短消息的会话正文 38 tok，而真正发给上游的整包 ≈ 5619 tok
   // （system 提示词 + 37 个工具的 schema 就有 ~3900 tok，正文之外全没算进去）。
   'ALTER TABLE ai_chats ADD COLUMN ctx_anchor_tokens INTEGER DEFAULT 0',
-  'ALTER TABLE ai_chats ADD COLUMN ctx_anchor_msg_id INTEGER DEFAULT 0'
+  // 请求体里「正文之外」那部分（system 提示词 + 工具 schema + 固定头）的实测开销。
+  // 锚点减掉当时的正文就得到它，于是撤回消息 / 导入会话时能按「开销 + 剩余正文」把用量
+  // 绝对落回去 —— 以前只按正文扣，扣完还剩一大坨开销，右侧百分比看着像一点没降（第七十六轮他报的那条）。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_overhead_tokens INTEGER DEFAULT 0',
+  'ALTER TABLE ai_chats ADD COLUMN ctx_anchor_msg_id INTEGER DEFAULT 0',
+  // 上下文「高水位」：本会话见过的最大用量。他要的口径是「宁多不少、只涨不跌」——
+  // 锚点被下一次真实回执校准回小值、或生成期那份整包估算过期时，界面用量不能往回缩；
+  // 只有压缩（手动/自动）和撤回消息才允许把它降下来。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_high_water_tokens INTEGER DEFAULT 0',
+  // Agent / 只读 两个开关的会话级持久化（第六十二轮）：-1 = 这条会话从没手动开关过，跟随全局默认；
+  // 0/1 = 用户在这条会话上显式选过。以前它们只有前端 localStorage 一份（nu_agent/nu_readonly），
+  // 于是「切会话把别的会话的开关也改了」，刷新也只有一份全局值。
+  'ALTER TABLE ai_chats ADD COLUMN agent_mode INTEGER DEFAULT -1',
+  'ALTER TABLE ai_chats ADD COLUMN readonly INTEGER DEFAULT -1',
+  // 本轮 token 明细（{prompt,completion,cached,reasoning,rounds} 一份 JSON）：
+  // 右栏「用量信息」那四格以前只活在 SSE done 帧的内存里，一刷新就归零，
+  // 也从来没有「上一轮的结果」可看（他第七十四轮报的那条）。回合末随 assistant 消息落库。
+  'ALTER TABLE ai_chat_messages ADD COLUMN usage_json TEXT'
 ];
 
 // 上游协议：openai（默认，现状行为）/ anthropic / custom（用户自填端点与字段映射）
@@ -328,6 +346,72 @@ function runMigrations() {
         console.error('[migration] failed:', sql, e.message);
       }
     }
+  }
+}
+
+/**
+ * 「删模型不该连带删掉会话」（第六十二轮 ⑤）。
+ *
+ * 旧库的 ai_chats 把这一列写死成 `model_row_id INTEGER NOT NULL` +
+ * `FOREIGN KEY ... ON DELETE CASCADE`，而 SQLite 既不能原地改列也不能改外键动作。
+ * 三条捷径都实测过、全被库堵住：置空撞 NOT NULL，填 0 当「未指定」撞外键，
+ * 只去掉 NOT NULL 而 CASCADE 还留着时删模型会话照样没（这个库的 foreign_keys 是 1，
+ * better-sqlite3 这份编译默认就开着外键，全仓从没显式设过它）。
+ * 所以只能按官方 safe-alter 流程重建一次这张表。
+ *
+ * 新 DDL 由 sqlite_master 里那份原文改写而来 —— 历史上 ALTER 加过的列全都在这段原文里，
+ * 照抄比重新写一份 DDL 安全。改写结果必须同时不再含 NOT NULL 和 ON DELETE CASCADE，
+ * 任一条不对就整体放弃：宁可保留旧行为，也不能建出一张缺列的表。
+ * 备份没做成也不重建（这是会动的唯一一次，不能没有退路）。
+ * 判据本身幂等：新形状的原文两个特征都不存在，第二次启动直接跳过。
+ */
+function migrateChatModelNullable() {
+  let ddl = '';
+  try {
+    ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chats'").get()?.sql || '');
+  } catch (e) { return; }
+  const isNotNull = /model_row_id\s+INTEGER\s+NOT\s+NULL/i;
+  const isCascade = /REFERENCES\s+ai_models\s*\(\s*id\s*\)\s+ON\s+DELETE\s+CASCADE/i;
+  if (!isNotNull.test(ddl) && !isCascade.test(ddl)) return;
+
+  const next = ddl
+    .replace(isNotNull, 'model_row_id INTEGER')
+    .replace(/FOREIGN KEY \(model_row_id\) REFERENCES ai_models\s*\(\s*id\s*\) ON DELETE CASCADE/i,
+      'FOREIGN KEY (model_row_id) REFERENCES ai_models(id) ON DELETE SET NULL')
+    .replace(/CREATE TABLE\s+(IF NOT EXISTS\s+)?(["`']?)ai_chats\2\s*\(/i, 'CREATE TABLE "ai_chats_new" (');
+  if (next === ddl || isNotNull.test(next) || isCascade.test(next) || !/ai_chats_new/.test(next)) {
+    console.error('[migration] ai_chats 的建表原文和预期形状不符，跳过重建：删模型仍会连带删掉会话（原文：' + ddl.slice(0, 200) + '）');
+    return;
+  }
+
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');   // 先把 WAL 收进主文件，copyFile 才拿得到完整一份
+    const bak = path.join(DATA_DIR, 'kh.db.bak-before-model-fk');
+    if (!fs.existsSync(bak)) fs.copyFileSync(DB_PATH, bak);
+  } catch (e) {
+    console.error('[migration] 重建前的整库备份没做成，放弃本次重建（不备份不动这张表）：', e.message);
+    return;
+  }
+
+  const cols = db.prepare('PRAGMA table_info(ai_chats)').all().map((c) => `"${c.name}"`).join(', ');
+  const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='ai_chats' AND sql IS NOT NULL")
+    .all().map((r) => r.sql);
+  db.pragma('foreign_keys = OFF');   // 必须在事务外；事务里这句是空操作
+  try {
+    db.transaction(() => {
+      db.exec(next);
+      db.exec(`INSERT INTO "ai_chats_new" (${cols}) SELECT ${cols} FROM "ai_chats"`);
+      db.exec('DROP TABLE "ai_chats"');            // 索引随表一起消失，下面按原 SQL 建回来
+      db.exec('ALTER TABLE "ai_chats_new" RENAME TO "ai_chats"');
+      for (const sql of indexes) db.exec(sql);
+    })();
+    const rows = db.prepare('SELECT COUNT(*) c FROM ai_chats').get().c;
+    const bad = db.prepare('PRAGMA foreign_key_check').all();
+    console.log(`[migration] ai_chats 已重建：model_row_id 可为空、删模型改为置空引用（${rows} 条会话原样保留${bad.length ? `；外键检查有 ${bad.length} 处不一致` : ''}）`);
+  } catch (e) {
+    console.error('[migration] ai_chats 重建失败，表保持原样：', e.message);
+  } finally {
+    db.pragma('foreign_keys = ON');
   }
 }
 
@@ -382,6 +466,8 @@ function initDatabase() {
   if (initialized) return;
   createSchema();
   runMigrations();
+  // 放在 runMigrations 之后：重建用的是「补齐所有历史列之后」的那份原文
+  migrateChatModelNullable();
   insertDefaultData();
   backfillThinkingSupport();
   fixFreeChatDefaultCwd();

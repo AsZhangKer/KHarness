@@ -55,7 +55,7 @@ async function startRound(store) {
   store.state.messages = [];
   store.state.busyChats = {};
   store.state.approvals = [];
-  store.state.question = null;
+  store.state.questions = {};
   store.state.models = [{ id: 91, model_id: 'mock-1', display_name: '假模型' }];
   store.state.modelIdx = 0;
   store.send('按给你的参数办事').catch(() => {});   // 假接口到处返回 null，收尾的错不该变成未处理拒绝把 worker 拖崩
@@ -108,9 +108,9 @@ describe('问答卡过期退场', () => {
     const store = useChatStore();
     await startRound(store);
     handlers.onEvent({ t: 'question', id: 'q1', question: '要哪个方案？', options: ['甲', '乙'], chat_id: store.state.chatId });
-    expect(store.state.question?.id).toBe('q1');
+    expect(store.currentQuestion.value?.id).toBe('q1');
     handlers.onEvent({ t: 'question_expired', id: 'q1' });
-    expect(store.state.question).toBe(null);
+    expect(store.currentQuestion.value).toBe(null);
   });
 
   it('回答一个已结束的提问：404 只 toast，横幅照样收', async () => {
@@ -121,7 +121,7 @@ describe('问答卡过期退场', () => {
     let threw = null;
     try { await store.answerQuestion({ text: '甲' }); } catch (e) { threw = e; }
     expect(threw).toBe(null);
-    expect(store.state.question).toBe(null);
+    expect(store.currentQuestion.value).toBe(null);
     expect(toasts.some((t) => /提问已超时|已结束/.test(String(t[0])))).toBe(true);
   });
 });

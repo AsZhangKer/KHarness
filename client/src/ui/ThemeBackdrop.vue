@@ -71,6 +71,9 @@ const backdrop = computed(() => themeMeta().backdrop || '');
   background: var(--aurora-veil);
   animation: none;
 }
+/* 这里的 vw/vh 试过换成百分比（怀疑关键帧里带视口单位会让每帧重算样式），实测没有区别：
+   换掉之后同一档仍然是 3 秒 496 次样式重算（_tmp_kh77/perf_drag.js），所以照原样写。
+   常驻开销的真实来源是「动画一直跑」本身：只要 animation 停掉，同一档就掉到 0 次。 */
 @keyframes drift-a {
   from { transform: translate3d(0, 0, 0) scale(1); }
   to { transform: translate3d(8vw, 6vh, 0) scale(1.15); }

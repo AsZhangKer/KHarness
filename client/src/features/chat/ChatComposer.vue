@@ -82,7 +82,8 @@
       <div v-if="question" class="ask">
         <div class="ask-title">
           AI 提问
-          <span v-if="askLeft != null" class="ap-timer" :class="{ warn: askLeft <= 30 }">剩余 {{ askLeft }}s</span>
+          <!-- 一次问多题时服务端会把序号发过来：让人知道答完还有几题，而不是以为答一题就完了 -->
+          <span v-if="question.q_total > 1" class="ask-idx">第 {{ question.q_index }}/{{ question.q_total }} 题</span>
         </div>
         <div class="ask-q">{{ question.question }}</div>
         <div class="ask-options">
@@ -98,7 +99,7 @@
           v-model="askText"
           class="ask-input"
           placeholder="自定义回答…"
-          @keydown.enter.prevent="sendAsk(askText)"
+          @keydown="imeEnterAsk"
         />
         <div class="ask-actions">
           <button class="k-btn sm ghost" type="button" @click="$emit('answer', { cancelled: true })">取消</button>
@@ -115,9 +116,9 @@
         <i class="fas fa-plug"></i> {{ modelTag }}
       </span>
       <span class="mb-dot">·</span>
-      <span class="mb-item" title="首个正文字节的延迟">首字 {{ firstTokenText }}</span>
+      <span class="mb-item" :title="txt('chat.meta.ttft')">首字 {{ firstTokenText }}</span>
       <span class="mb-dot">·</span>
-      <span class="mb-item" title="跑动中是这两秒的瞬时速率，回合结束换成整轮平均">{{ tokPerSecText }} tok/s</span>
+      <span class="mb-item" :title="txt('chat.meta.speed')">{{ tokPerSecText }} tok/s</span>
       <span class="mb-dot">·</span>
       <span class="mb-item" title="已用 / 窗口上限（以上游实测为锚点）">上下文 {{ ctxPct }}%（{{ ctxUsedText }} / {{ ctxLimitText }} tok）</span>
     </div>
@@ -216,13 +217,15 @@
           :label="approvalShort"
           width="160px"
           :disabled="busy"
-          :title="`审批：${approvalShort}（${approvalExplicit ? '本会话覆盖' : '跟随全局'}）`"
+          :title="approvalMode === 'fullsend'
+            ? '审批：FULL-SEND —— 任何操作一律自动放行（含全屏截取），黑名单/系统关键位置/项目根边界全部越过；只保留 KHarness 自己数据目录的隐身墙'
+            : `审批：${approvalShort}（${approvalExplicit ? '本会话覆盖' : '跟随全局'}）`"
           @change="(v) => $emit('set-approval', v)"
         >
           <!-- 窄到放不下时（tight）只剩图标，文字靠 title 悬浮看 -->
           <template #trigger>
-            <i class="fas fa-pen-nib"></i>
-            <span v-if="!tight">{{ approvalShort }}</span>
+            <i class="fas fa-pen-nib" :class="{ 'ap-fs': approvalMode === 'fullsend' }"></i>
+            <span v-if="!tight" :class="{ 'ap-fs': approvalMode === 'fullsend' }">{{ approvalShort }}</span>
           </template>
         </KDropdown>
 
@@ -301,7 +304,9 @@ import KDropdown from '../../ui/KDropdown.vue';
 import { useBarOverflow, rowNeed } from '../../ui/useBarOverflow.js';
 import { aiApi } from '../../api';
 import { uiPrefs } from '../../stores/prefs';
+import { imeKey, isImeComposing } from '../../utils/ime';
 import { imageViewer as iv } from '../../stores/viewer';
+import { txt } from '../../copy';
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -398,6 +403,9 @@ const approvalItems = computed(() => [
   { value: 'default', label: '默认审批' },
   { value: 'strict', label: '严格审批' },
   { value: 'exempt', label: '免除审批' },
+  // FULL-SEND 默认不进这个菜单：先在 设置 → 实验室功能 打开总闸才出现这一档（服务端同时把关，
+  // 关闸时存量会话会被降回 default）。选中它会弹一次确认，见 chatStore.setApprovalMode。
+  ...(uiPrefs.state.fullSend ? [{ value: 'fullsend', label: 'FULL-SEND', danger: true }] : []),
   // 只有这条会话真被覆盖过才给出口，否则菜单里多一项没意义的「跟随全局」
   ...(props.approvalExplicit ? [{ value: 'follow', label: '跟随全局' }] : []),
 ]);
@@ -442,18 +450,10 @@ watch(
   (id) => { apLeft.value = id ? 180 : 0; apOpen.value = false; }
 );
 
-// ask_user 倒计时：时长由服务端随事件下发（默认 10 分钟）
-const askLeft = ref(null);
-watch(
-  () => props.question?.id,
-  (id) => {
-    askLeft.value = id ? Math.max(1, Math.round((props.question.timeout_ms || 600000) / 1000)) : null;
-  }
-);
+// ask_user 没有倒计时（服务端已去掉超时：用户没答就一直挂着），横幅只留「取消」出口
 
 const ticker = setInterval(() => {
   if (apHead.value && apLeft.value > 0) apLeft.value -= 1;
-  if (props.question && askLeft.value != null && askLeft.value > 0) askLeft.value -= 1;
 }, 1000);
 onUnmounted(() => clearInterval(ticker));
 
@@ -462,9 +462,18 @@ const ctxPct = computed(() => {
   return Math.min(100, Math.round((props.contextUsed / props.contextLimit) * 100));
 });
 
-/* ---- 输入框上方那条信息横条（数字一律显示，没数据就是 0.0）---- */
+/* ---- 输入框上方那条信息横条（速率与上下文有数就显示；首字没出过字显示「—」，不写 0.0s）---- */
 const tokPerSecText = computed(() => (Number(props.tokPerSec) || 0).toFixed(1));
-const firstTokenText = computed(() => ((Number(props.firstTokenMs) || 0) / 1000).toFixed(1) + 's');
+/**
+ * 首字：<1s 显示毫秒。
+ * 一律除以 1000 再 toFixed(1) 会把 0.4 秒读成「0.0s」—— 那是坏读数不是快首字（他点过）。
+ * 一个数都没有（这轮还没出字 / 接不回锚点）就显示「—」，不写 0.0s。
+ */
+const firstTokenText = computed(() => {
+  const ms = Number(props.firstTokenMs) || 0;
+  if (!ms) return '—';
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+});
 const ctxUsedText = computed(() => Math.round(Number(props.contextUsed) || 0).toLocaleString('en-US'));
 const ctxLimitText = computed(() => Math.round(Number(props.contextLimit) || 0).toLocaleString('en-US'));
 /** 「提供商 / 模型真实 ID」：下拉里那个是展示名，这里给的是发请求时真正用的 model_id */
@@ -485,7 +494,7 @@ const SLASH_COMMANDS = [
   { name: 'pool', desc: '打开模型池' },
   { name: 'mode', desc: 'plan|auto|agent|readonly|strict|default|exempt' },
   { name: 'dir', desc: '切换工作目录  /dir <路径>' },
-  { name: 'insert', desc: '预埋提示词  /insert <内容> 或 --clear' },
+  { name: 'insert', desc: '插话提示词  /insert <内容> 或 --clear' },
   { name: 'skills-load', desc: '勾选技能常驻本会话' },
   { name: 'supervise', desc: '监工网页自测（读 kh.checks.md）' },
   { name: 'press', desc: '压缩上下文' },
@@ -494,10 +503,10 @@ const SLASH_COMMANDS = [
   { name: 'help', desc: '显示命令帮助' },
 ];
 
-/* /supervise 受实验室开关控制（监工已半废弃、默认关）：关着就不进补全列表。
+/* /supervise、/pool 受实验室开关控制（监工与多模型池都已半废弃、默认关）：关着就不进补全列表。
    硬打进来由 chatStore 挡回并指路，不留「列表里看不到、敲进去撞后端 403」这种两不着陆。 */
-const COMMANDS = computed(() =>
-  SLASH_COMMANDS.filter((c) => c.name !== 'supervise' || uiPrefs.state.supervisorOn));
+const SLASH_HIDDEN = { supervise: () => uiPrefs.state.supervisorOn, pool: () => uiPrefs.state.poolOn };
+const COMMANDS = computed(() => SLASH_COMMANDS.filter((c) => !SLASH_HIDDEN[c.name] || SLASH_HIDDEN[c.name]()));
 
 const ta = ref(null);
 const cmdIdx = ref(0);
@@ -564,7 +573,7 @@ function resetTaHeight() {
 watch(() => uiPrefs.state.composerHeight, () => nextTick(sizeTa));
 
 const approvalShort = computed(
-  () => ({ strict: '严格', default: '审批', exempt: '免除' }[props.approvalMode] || '审批')
+  () => ({ strict: '严格', default: '审批', exempt: '免除', fullsend: 'FULL-SEND' }[props.approvalMode] || '审批')
 );
 
 const cmdMatches = computed(() => {
@@ -793,7 +802,13 @@ function sendAsk(val) {
   emit('answer', { text: t });
 }
 
+// 提问横幅那个自由输入框：Enter 提交，但合成中交给输入法（imeKey 的说明）
+const imeEnterAsk = imeKey('enter', () => sendAsk(askText.value));
+
 function onKeydown(e) {
+  // 中文输入法合成期间（候选词还没上屏）一个字都不处理：这里一旦替浏览器吃掉 Enter，
+  // compositionend 就丢了，v-model 从此对这个输入框失聪（详见 utils/ime.js）
+  if (isImeComposing(e)) return;
   // @ 文件提及优先：开着的时候 Enter/Tab 是「选中」，不是发送
   if (onMentionKey(e)) return;
   const bare = draft.value.trim().startsWith('/') && !/\s/.test(draft.value.trim());
@@ -1248,6 +1263,21 @@ textarea::placeholder { color: var(--text-3); }
   font-size: 12px;
   color: var(--text-3);
   margin-bottom: 6px;
+}
+/* FULL-SEND 生效时那排审批位要一眼看得出：文字与图标都标红（这一档什么都不问） */
+.ap-fs {
+  color: var(--danger, #e5484d) !important;
+  font-weight: 600;
+}
+/* 多题序号：跟在「AI 提问」后面，比正文弱一档，只用来告诉人后面还有几题 */
+.ask-idx {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-2);
+  font-size: 11px;
 }
 .ask-q { margin-bottom: 10px; }
 .ask-input {

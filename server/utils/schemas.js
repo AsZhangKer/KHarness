@@ -21,7 +21,8 @@ const TOOL_SCHEMAS = {
 };
 
 // 旧工具名 → 新工具名：模型沿用旧调用习惯（或历史轨迹重放）时仍然可用，但不再出现在工具清单里
-const TOOL_ALIASES = { search_files: 'grep', find_files: 'glob' };
+// agent_spawn 自第七十五轮起与 agent_run 是同一件事（run 已改成派完立刻返回），留个口子给老习惯
+const TOOL_ALIASES = { search_files: 'grep', find_files: 'glob', agent_spawn: 'agent_run' };
 
 function resolveToolName(name) {
   const n = String(name || '');

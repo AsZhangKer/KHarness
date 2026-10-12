@@ -7,6 +7,7 @@ const multer = require('multer');
 const { fetch } = require('undici');
 const { db } = require('../database');
 const { ok, fail, failErr, wrap } = require('../utils/respond');
+const logbus = require('../utils/logbus');   // 上游每一趟都往「调试」日志总线记一行
 const { sanitizeText } = require('../utils/sanitize');
 const undoStore = require('../utils/undo');
 const perms = require('../utils/permissions');
@@ -26,6 +27,7 @@ const cuse = require('../utils/cuse');        // 副作用注册 + Computer Use 
 const pagecap = require('../utils/pagecap');   // 长文本进上下文前的预算 + 落盘 + 续取
 const proxylayer = require('../utils/proxy');   // 代理统一判定：全局禁用开关 + 代理连不上退回直连
 const subagent = require('../utils/subagent');
+const plantools = require('../utils/plantools');   // Plan 模式的计划任务工具（只在 plan_mode 开着时挂载，不进设置→工具）
 const orchestrator = require('../utils/orchestrator');   // 托管模式：监工 ⇄ 工作者
 const sidebar = require('../utils/sidebar');
 const supervisor = require('../utils/supervisor');
@@ -34,6 +36,7 @@ const toolgate = require('../utils/toolgate');
 const procguard = require('../utils/procguard');
 const { buildShell } = require('../utils/shellcmd');
 const protocols = require('../utils/protocols');
+const turntrace = require('../utils/turntrace');   // 中断回合的工具轨迹清单（#267）
 
 const router = express.Router();
 
@@ -132,6 +135,20 @@ function stallGuardOn() {
   } catch (e) { return true; }
 }
 function stallMinChars() { return numSetting('stall_min_chars', 240, 60, 2000); }
+
+/** 上下文自动压缩阈值（占窗口的百分比）。第六十九轮前写死 80%，没得调；现在是 设置 → 常规 的 compress_threshold */
+function compressThresholdPct() { return numSetting('compress_threshold', 80, 10, 95); }
+
+// 本轮工具结果「自动落盘」总闸：默认开（原行为 —— 同轮累计超预算就把最早的折成摘要 + 全文写缓存文件）。
+// 读大项目时这条会反咬：前脚读完的文件被折走，模型只能重读，重读回来又把后脚读的挤掉。
+// 关掉之后本轮一个字都不折，全靠会话压缩（80% 线）与上游超长时的「裁尾 + 压缩 + 重发」自救。
+// 走 设置 → 常规 的 round_tool_fold（一轮开始时读一次，中途改设置不影响正在跑的这一轮）。
+function roundToolFoldOn() {
+  try {
+    const v = db.prepare("SELECT value FROM settings WHERE key = 'round_tool_fold'").get()?.value;
+    return v === undefined || v === null || v === '' ? true : v === '1';
+  } catch (e) { return true; }
+}
 
 // ---------- 编码自适配（中文环境核心修复） ----------
 // Windows 中文系统下：cmd/PowerShell 控制台输出为 GBK(cp936)，而文件多为 UTF-8 或 ANSI(GBK)。
@@ -360,12 +377,16 @@ setImmediate(migrateCustomSkills);
 
 // ---------- 任务列表（Plan 模式） ----------
 function getTasks(chatId) {
-  return db.prepare('SELECT id, content, status, error_summary, seq FROM tasks WHERE chat_id = ? ORDER BY seq ASC, id ASC').all(chatId);
+  return plantools.listTasks(chatId);
 }
 
-// 解析并剥离 AI 正文中的任务标签；返回 { text, changed }
-// <plan>\n- 任务1\n- 任务2\n</plan> → 重建该会话任务列表
-// <task-status idx="N" status="doing|done|failed" error="摘要"/> → 更新对应任务状态
+/**
+ * 正文标签兜底解析。计划任务的正路是 plan_write / plan_update 工具（utils/plantools.js），
+ * 这里只剩两个兜底用途：弱模型仍按历史习惯在正文里吐 <plan>/<task-status> 时照旧落库并把标签
+ * 从正文剥掉（免得用户看见一排尖括号），以及 Plan 模式关着（工具没挂载）时仍能建列表。
+ * 实测的四种静默失效（全角引号、status 不在白名单、idx 从 0 起、idx 越界）在这里仍然静默 ——
+ * 那是正文协议的固有毛病，写库动作本身已交给 plantools，不要再往这里加解析规则。
+ */
 function parseTaskTags(content, chatId) {
   let text = String(content || '');
   let changed = false;
@@ -375,17 +396,8 @@ function parseTaskTags(content, chatId) {
       .map(l => l.trim())
       .filter(l => l)
       .map(l => l.replace(/^[-*•]\s*/, '').trim())
-      .filter(l => l)
-      .slice(0, 50);
-    if (items.length) {
-      const del = db.prepare('DELETE FROM tasks WHERE chat_id = ?');
-      const ins = db.prepare('INSERT INTO tasks (chat_id, content, status, seq) VALUES (?, ?, ?, ?)');
-      db.transaction(() => {
-        del.run(chatId);
-        items.forEach((c, i) => ins.run(chatId, c.substring(0, 500), 'pending', i + 1));
-      })();
-      changed = true;
-    }
+      .filter(l => l);
+    if (plantools.applyPlan(chatId, items).count) changed = true;
     return '';
   });
   const statusRe = /<task-status\b[^>]*\/?>/gi;
@@ -394,11 +406,7 @@ function parseTaskTags(content, chatId) {
     const status = ((tag.match(/status\s*=\s*["']?(doing|done|failed)/i) || [])[1] || '').toLowerCase();
     const error = ((tag.match(/error\s*=\s*["']([^"']*)["']/i) || [])[1] || '').substring(0, 300);
     if (Number.isInteger(idx) && idx >= 1 && ['doing', 'done', 'failed'].includes(status)) {
-      const t = db.prepare('SELECT id FROM tasks WHERE chat_id = ? AND seq = ?').get(chatId, idx);
-      if (t) {
-        db.prepare('UPDATE tasks SET status = ?, error_summary = ? WHERE id = ?').run(status, status === 'failed' ? (error || '（AI 未提供错误摘要）') : '', t.id);
-        changed = true;
-      }
+      if (!plantools.setTaskStatus(chatId, idx, status, error).error) changed = true;
     }
     return '';
   });
@@ -420,12 +428,14 @@ const SENSITIVE_DIRS = /^\/(etc|root|sys|proc|boot|dev|usr|sbin|bin|lib|opt|srv|
 const SENSITIVE_DIRS_WIN = /^[a-zA-Z]:[\\/](windows|program files( \(x86\))?|programdata)([\\/]|$)/i;
 const DANGEROUS_CMD = /\b(rm|dd|mkfs|mke2fs|shutdown|reboot|halt|poweroff|fdisk|parted|blockdev|kill|killall|pkill|chmod|chown|shred|wipefs|format|del|rd|rmdir)\b|\bsudo\b|\bsu\b|\|\s*(ba)?sh\b|:\(\)\{/;
 
-// 统一的审批判定：权限规则（黑/白名单）→ 审批模式（严格/默认/免除）→ 高权限底线
+// 统一的审批判定：权限规则（黑/白名单）→ 审批模式（严格/默认/免除/FULL-SEND）→ 高权限底线
 // 返回 { need, level:'orange'|'red'|null, reason, isHigh, denied?:string }
-// 三种模式语义：
+// 四种模式语义：
 //   strict 严格：所有「修改类」工具调用（含工作目录内写文件/编辑/删除/建目录/执行的危险命令）一律先人工审批
 //   default 默认：仅当操作越出工作目录、涉系统关键设置、或为危险命令时审批
 //   exempt 免除：除高权限操作外全部自动放行
+//   fullsend FULL-SEND：任何操作一律自动放行（**含全屏截取**）、黑名单/高priv/Computer Use 门/项目根边界全部跳过；
+//            唯一还挡着的是上面那堵「KHarness 自己的数据」隐身墙 —— 它护的是主库里的真实密钥，不是权限
 function decideApproval2(chatId, name, args, cwd, projectRoot, bypass, cuPre) {
   const mode = effectiveApprovalMode(chatId);
   // 这条会话在远端：路径判定必须换成 posix（一次 SQLite 查表，微秒级）
@@ -439,6 +449,9 @@ function decideApproval2(chatId, name, args, cwd, projectRoot, bypass, cuPre) {
     const priv = privatepaths.guardPrivatePath(p, { chatId });
     if (priv) return { need: false, level: null, reason: null, isHigh: false, denied: priv };
   }
+
+  // FULL-SEND：隐身墙之上不再有任何闸门 —— 黑名单、高priv、Computer Use 门、MCP 破坏性、严格/默认审批全跳
+  if (mode === 'fullsend') return { need: false, level: null, reason: null, isHigh: false, fullSend: true };
 
   // 权限规则：黑名单直接拒绝（任何模式、含高权限底线之上），白名单免审批
   const pv = perms.evaluate(subj);
@@ -545,6 +558,19 @@ function collectToolSubjects(name, args, cwd, remote = false) {
 
 const FILE_TARGET_TOOLS = new Set(['read_file', 'view_image', 'write_file', 'edit_file', 'list_dir', 'grep', 'glob', 'delete_file', 'delete_dir', 'create_dir', 'rename_file']);
 
+/**
+ * 「在工作目录内」的判据 —— 免除审批就是拿它决定要不要审（他报的：工作目录 A:\ 时访问 A:\xiaoyuren
+ * 被判成越界）。以前本地这条是 `p.startsWith(cwd + path.sep)`，而**工作目录自己带尾分隔符时**
+ * （盘符根 `D:\`、POSIX 根 `/`）拼出来成了 `D:\\` / `//`，根底下任何路径都不带这个双分隔符 →
+ * 一律判越界；顺带盘符大小写（cwd=`D:\x`、目标 `d:\x\a.txt`）也一并冤枉。
+ * 本地交给 insideRoot（path.relative 天然规避盘符大小写与尾分隔符），远程按 posix 自己算、根单独处理。
+ */
+function withinCwd(p, cwd, remote) {
+  if (!cwd) return false;
+  if (remote) return p === cwd || p.startsWith(cwd.endsWith('/') ? cwd : cwd + '/');
+  return insideRoot(p, cwd);
+}
+
 function checkApproval(name, args, cwd, projectRoot = null, remote = false) {
   const rp = remote ? remoteUtil.posixPath(cwd || '/') : cwd;   // 远程会话一律用 posix 的 cwd 做边界
   if (FILE_TARGET_TOOLS.has(name)) {
@@ -557,8 +583,7 @@ function checkApproval(name, args, cwd, projectRoot = null, remote = false) {
       if (SENSITIVE_DIRS.test(p) || SENSITIVE_DIRS_WIN.test(p) || SENSITIVE_DIRS.test(t) || SENSITIVE_DIRS_WIN.test(t)) {
         return { level: 'red', reason: `访问系统敏感目录：${p}` };
       }
-      const outside = remote ? !(p === rp || p.startsWith(rp + '/')) : !(p.startsWith(cwd + path.sep) || p === cwd);
-      if (outside) return { level: 'orange', reason: `访问工作目录之外的路径：${p}（当前目录 ${rp}）` };
+      if (!withinCwd(p, remote ? rp : cwd, remote)) return { level: 'orange', reason: `访问工作目录之外的路径：${p}（当前目录 ${rp}）` };
     }
     return null;
   }
@@ -572,7 +597,7 @@ function checkApproval(name, args, cwd, projectRoot = null, remote = false) {
     for (const raw of perms.extractPaths(cmd)) {
       const p = remote ? remoteexec.rj(rp, raw) : (path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(cwd || process.cwd(), raw));
       if (SENSITIVE_DIRS.test(p)) return { level: 'red', reason: `命令涉及系统敏感目录：${p}` };
-      if (remote ? (p === rp || p.startsWith(rp + '/')) : (p === cwd || p.startsWith(cwd + path.sep) || p.startsWith(cwd + '/'))) continue;
+      if (withinCwd(p, remote ? rp : cwd, remote)) continue;
       if (/^\/(tmp|usr\/bin|bin|sbin)(\/|$)/.test(p) || p === '/usr/bin/env') continue; // 系统可执行/临时目录不算越界
       if (!remote && process.platform !== 'win32' && !p.startsWith('/')) continue;
       return { level: 'orange', reason: `命令涉及工作目录之外的路径：${p}` };
@@ -582,9 +607,15 @@ function checkApproval(name, args, cwd, projectRoot = null, remote = false) {
   return null;
 }
 
-// ---------- 审批模式（严格 strict / 默认 default / 免除 exempt） ----------
+// ---------- 审批模式（严格 strict / 默认 default / 免除 exempt / FULL-SEND fullsend） ----------
 // 存储：settings 表 approval_mode，null/空 = default
-const APPROVAL_MODES = ['default', 'strict', 'exempt'];
+const APPROVAL_MODES = ['default', 'strict', 'exempt', 'fullsend'];
+
+// FULL-SEND 的实验室总闸：默认关，且**不进主页那排选择菜单**（要先去 设置→实验室功能 打开）。
+// 关闸时这个档位一律不算生效 —— 会话行里存着的 fullsend 自动降回 default（他 2026-10-10 的口径）。
+function fullSendLabOn() {
+  try { return db.prepare("SELECT value FROM settings WHERE key = 'fullsend_enabled'").get()?.value === '1'; } catch (e) { return false; }
+}
 function getApprovalMode() {
   return (db.prepare("SELECT value FROM settings WHERE key = 'approval_mode'").get()?.value || 'default');
 }
@@ -608,9 +639,14 @@ function setChatApprovalMode(chatId, mode) {
   return true;
 }
 function effectiveApprovalMode(chatId) {
-  const m = getChatApprovalMode(chatId);
-  return m || getApprovalMode();
+  const m = getChatApprovalMode(chatId) || getApprovalMode();
+  // 实验室总闸关着 → 存量 fullsend 一律降回 default（不留隐形越级，且界面显示的就是这个生效值）
+  if (m === 'fullsend' && !fullSendLabOn()) return 'default';
+  return m;
 }
+
+/** FULL-SEND 是否对这条会话生效（越级面的唯一开关，见 decideApproval2 与 guardTargetPath） */
+function isFullSend(chatId) { return effectiveApprovalMode(chatId) === 'fullsend'; }
 
 // ---------- 高权限操作识别（免除模式下仍需审批，且不弹 Windows 通知） ----------
 // 关机/重启/格式化磁盘/操作盘符/管理员权限提升 等
@@ -630,12 +666,6 @@ function isHighPrivilege(name, args) {
   if (HIGH_PRIV_PATH.test(path.resolve('.', p))) return true;
   return false;
 }
-// 判定某路径是否在 cwd 之外（默认模式下审批条件之一）
-function isOutsideCwd(p, cwd) {
-  const abs = path.resolve(cwd, p);
-  return !(abs === cwd || abs.startsWith(cwd + path.sep));
-}
-
 // ---------- 审批等待：挂起工具执行，等待前端用户裁决 ----------
 const pendingApprovals = new Map();
 
@@ -741,29 +771,29 @@ const activeHolders = new Map(); // chatId -> holder
 
 // ---------- ask_user：AI 主动提问（复用审批那套「挂起 → SSE → 前端裁决」通道） ----------
 const pendingQuestions = new Map(); // id -> { resolve, chatId }
-const QUESTION_DEFAULT_TIMEOUT = 10 * 60 * 1000;
 
-function waitQuestion(id, chatId, timeoutMs, deniedList, onExpire) {
+/**
+ * 没有超时。用户没回答就一直挂着 —— 他 2026-10-10 点名要去掉超时机制（走开一会儿回来还能接着答）。
+ * 放行只有三条：用户答了 / 用户点取消（deniedList 里的 cancel）/ 这一轮结束（releaseQuestionsForChat、finally 清孤儿）。
+ */
+function waitQuestion(id, chatId, deniedList, onExpire) {
   return new Promise((resolve) => {
-    let timer = null;
     const finish = (r) => {
       if (!pendingQuestions.has(id)) return;
       pendingQuestions.delete(id);
-      if (timer) clearTimeout(timer);
       const i = deniedList.indexOf(cancel);
       if (i >= 0) deniedList.splice(i, 1);
       resolve(r);
-      // 用户没答上（超时/随流取消/被新一轮顶掉）：前端那张问答卡同样要退场，留着点它就是 404
+      // 用户没答上（随流取消/被新一轮顶掉）：前端那张问答卡同样要退场，留着点它就是 404
       if (!r.answered) { try { onExpire && onExpire(); } catch (e) { /* 流已断开 */ } }
     };
     const cancel = () => finish({ answered: false, cancelled: true });
     pendingQuestions.set(id, { resolve: (r) => finish(r), chatId });
-    timer = setTimeout(() => finish({ answered: false, timeout: true }), timeoutMs || QUESTION_DEFAULT_TIMEOUT);
     deniedList.push(cancel);
   });
 }
 
-// 用户在问题挂着时直接发起新一轮对话：视为「未回答」并立刻放行，避免白等 10 分钟
+// 用户在问题挂着时直接发起新一轮对话：视为「未回答」并立刻放行，免得两条流互相等
 function releaseQuestionsForChat(chatId, note) {
   for (const [id, q] of [...pendingQuestions.entries()]) {
     if (q.chatId !== chatId) continue;
@@ -774,7 +804,7 @@ function releaseQuestionsForChat(chatId, note) {
 router.post('/chat/answer', wrap((req, res) => {
   const id = String(req.body?.id || '');
   const q = pendingQuestions.get(id);
-  if (!q) return fail(res, 404, '该提问已结束或已超时');
+  if (!q) return fail(res, 404, '该提问已结束（这一轮已经过去了，重新提问即可）');
   if (req.body?.cancel) {
     q.resolve({ answered: false, cancelled: true });
     return ok(res, null, '已取消，AI 会自行决定下一步');
@@ -967,6 +997,9 @@ router.get('/chats/:id/context', wrap((req, res) => {
       thinking_level: chat.thinking_level || '',
       plan_mode: chat.plan_mode ? 1 : 0,
       temperature: chat.temperature ?? null,
+      // 源会话实测过的「正文之外开销」（system + 工具 schema）。导入时靠它把用量起在真实口径上，
+      // 缺这个字段（旧导出文件）就退回正文口径，等下一次上游回执自然校准。
+      ctx_overhead_tokens: Number(chat.ctx_overhead_tokens) || 0,
       model: chat.p_model_id ? { model_id: chat.p_model_id, display_name: chat.p_display_name || '' } : null,
       // 项目只带名字不带路径：换机器/路径变了也不至于导入失败
       project: chat.project_id
@@ -1062,6 +1095,14 @@ router.post('/chats/import', wrap((req, res) => {
     }
   })();
 
+  /* 导入的会话以前不管开销：右侧用量走 basis:'body'（只算正文），比真实整包低一个数量级，
+     而 chatContextUsage 末尾那句 raiseHighWater(used) 会把这个错值直接钉成峰值 ——
+     之后无论怎么聊都停在低位（他这轮问的「导入上下文时窗口变动是否也有类似问题」：有，就是这个）。
+     导出文件带着源会话实测过的开销就按它起底，旧文件没带就按正文起，等第一轮真实回执自然校准。 */
+  const ov = Number(ctx.chat?.ctx_overhead_tokens);
+  if (Number.isInteger(ov) && ov > 0) setOverhead(chatId, ov);
+  settleContextAfterShrink(chatId);
+
   ok(res, {
     chat_id: chatId,
     title,
@@ -1090,7 +1131,7 @@ router.get('/approval-mode', wrap((req, res) => {
 }));
 router.put('/approval-mode', wrap((req, res) => {
   const mode = String(req.body?.mode || '');
-  if (!APPROVAL_MODES.includes(mode)) return fail(res, 400, '无效的审批模式（default/strict/exempt）');
+  if (!APPROVAL_MODES.includes(mode)) return fail(res, 400, '无效的审批模式（default/strict/exempt/fullsend）');
   setApprovalMode(mode);
   ok(res, { mode }, `审批模式已设为 ${mode}`);
 }));
@@ -1492,21 +1533,15 @@ router.post('/chat/retract', wrap((req, res) => {
   if (!chat) return fail(res, 404, '对话不存在');
   const target = db.prepare('SELECT id, content FROM ai_chat_messages WHERE id = ? AND chat_id = ?').get(messageId, chatId);
   if (!target) return fail(res, 404, '消息不存在');
-  // 锚点要跟着减：删掉的正文先从锚点里扣掉，否则撤回后右侧用量会停在虚高的数字（下一轮才自愈）
-  const doomed = db.prepare('SELECT content FROM ai_chat_messages WHERE chat_id = ? AND id >= ?').all(chatId, messageId);
-  const dropped = doomed.reduce((a, m) => a + estimateTokens(m.content || ''), 0);
+  // 界面那个百分比是整包（正文 + system + 工具 schema + 上一轮那发真的带上过的工具轨迹）。
+  // 撤回按「被删的那几条正文」增量减（口径见 settleContextAfterRetract），并把新值回给前端立刻显示。
+  const doomed = db.prepare(
+    'SELECT id, content FROM ai_chat_messages WHERE chat_id = ? AND id >= ? AND archived = 0'
+  ).all(chatId, messageId);
   const del = db.prepare('DELETE FROM ai_chat_messages WHERE chat_id = ? AND id >= ?').run(chatId, messageId);
-  try {
-    const row = db.prepare('SELECT ctx_anchor_tokens, ctx_anchor_msg_id FROM ai_chats WHERE id = ?').get(chatId);
-    if (row && Number(row.ctx_anchor_tokens) > 0) {
-      const kept = Math.max(0, Number(row.ctx_anchor_tokens) - dropped);
-      const lastId = db.prepare('SELECT id FROM ai_chat_messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1').get(chatId);
-      db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
-        .run(kept, lastId ? lastId.id : 0, chatId);
-    }
-  } catch (e) { /* 旧库无列时忽略 */ }
+  const usage = settleContextAfterRetract(chatId, doomed);
   touchChatStmt.run(chatId);
-  ok(res, { deleted: del.changes, content: target.content }, `已撤回 ${del.changes} 条消息`);
+  ok(res, { deleted: del.changes, content: target.content, usage }, `已撤回 ${del.changes} 条消息`);
 }));
 
 // ---------- 视觉文件内存仓库 ----------
@@ -1863,13 +1898,22 @@ router.get('/subagents/:id', wrap((req, res) => {
 }));
 
 router.post('/subagents/kill', wrap((req, res) => {
-  const r = subagent.kill(String(req.body?.agent_id || ''));
+  // chat_id 决定「这条会话有没有资格停它」：别的会话派出去的分身停不了（与后台任务同一口径）
+  const r = subagent.kill(String(req.body?.agent_id || ''), parseInt(req.body?.chat_id) || null);
   if (r.error) return fail(res, 400, r.error);
   ok(res, null, r.message);
 }));
 
+// 主会话被停止时，把它派出去、还在跑的分身全部连带中止（前端 stop() 打这一枪）
+router.post('/subagents/kill-chat', wrap((req, res) => {
+  const cid = parseInt(req.body?.chat_id);
+  if (!Number.isInteger(cid) || cid <= 0) return fail(res, 400, '缺少 chat_id');
+  const r = subagent.killChat(cid);
+  ok(res, r, r.killed.length ? `已请求停止本会话的 ${r.killed.length} 个子智能体` : '本会话没有还在跑的子智能体');
+}));
+
 router.post('/subagents/delete', wrap((req, res) => {
-  const r = subagent.remove(String(req.body?.agent_id || ''));
+  const r = subagent.remove(String(req.body?.agent_id || ''), parseInt(req.body?.chat_id) || null);
   if (r.error) return fail(res, 400, r.error);
   ok(res, null, r.message);
 }));
@@ -2279,13 +2323,16 @@ function repairJson(raw) {
 }
 
 // 内置 + 已启用的扩展工具（外部 API 接口 / 后台任务 / 记忆 / ask_user）的参数 schema
-function allToolSchemas() {
-  return { ...TOOL_SCHEMAS, ...toolgate.schemas() };
+// planOn：Plan 模式的三个计划工具只有会话开了 Plan 才挂载（这是能力开关）。
+// 参数校验那一层不看它，plan 的 schema 恒在（见 validateToolArgs）—— 校验是安全网，
+// 不该因为会话没开 Plan 就把自己那三个工具的参数说明也一起摘掉。
+function allToolSchemas(planOn) {
+  return { ...TOOL_SCHEMAS, ...toolgate.schemas(), ...(planOn ? plantools.PLAN_SCHEMAS : {}) };
 }
 
 // 本次请求实际可用的工具清单（扩展工具按设置里的开关动态挂载，改完不用重启）
-function activeAgentTools() {
-  return AGENT_TOOLS.concat(toolgate.definitions());
+function activeAgentTools(planOn) {
+  return AGENT_TOOLS.concat(toolgate.definitions()).concat(planOn ? plantools.PLAN_TOOLS : []);
 }
 
 // ---------- 工具能力地图（每轮随开关状态现算） ----------
@@ -2307,8 +2354,8 @@ function capabilityMapOn() {
   } catch (e) { return true; }
 }
 
-function buildCapabilityMap() {
-  const live = activeAgentTools().map(t => (t && t.function && t.function.name) || '').filter(Boolean);
+function buildCapabilityMap(planOn) {
+  const live = activeAgentTools(planOn).map(t => (t && t.function && t.function.name) || '').filter(Boolean);
   if (!live.length) return '';
   const gate = new Map(toolgate.listForUi().map(x => [x.name, x]));
   const builtinDesc = new Map(AGENT_TOOLS.map(t => [t.function.name, t.function.description]));
@@ -2384,6 +2431,41 @@ function isContextLengthError(status, body) {
 }
 
 /**
+ * 「整包被掐断」与「上游在 200 的流里下发临时错误」：这两种都不是请求本身有问题，
+ * 原样重发一次基本就好 —— 他报的现象正是「刷新一下又能继续了」。
+ * 典型形状：undici 复用了一条 keep-alive 连接，而服务端已经半关它，于是正文读一半报
+ * `TypeError: terminated` / ECONNRESET；以及流里下发 "Unable to process your request right now"、
+ * "Upstream stream terminated unexpectedly before completion" 这类网关话术。
+ * 判据必须和「这一个字都还没吐出来」配套用：吐过字再整发重发就是重复刷屏，那种走续写。
+ */
+function isStreamDropError(e) {
+  const c = (e && e.cause) || {};
+  const s = `${(e && e.message) || ''} ${c.code || ''} ${c.message || ''}`;
+  return /terminated|ECONNRESET|ECONNREFUSED|socket hang up|UND_ERR_SOCKET|UND_ERR_CONNECT|other side closed|Premature close|network/i.test(s);
+}
+function isTransientUpstreamChunk(e) {
+  if (!e || !e.__khUpstream) return false;
+  return /unable to process|try again|later|temporar|overload|rate limit|upstream stream terminated|invalid request|bad gateway|service unavailable|no_available_workers/i.test(String(e.message || ''));
+}
+
+/**
+ * 「半死的复用连接」：连接级、请求一个字节都没发出去（undici 从池里拿了一条对面已经关掉的
+ * keep-alive socket）。fetchUpstream 里只重试这一类，不含 ECONNREFUSED / DNS 失败 ——
+ * 那种是真连不上，重试 16 次只会把「模型池换下一个」拖成几分钟的白等。
+ */
+function isHalfDeadSocket(e) {
+  const c = (e && e.cause) || {};
+  const s = `${(e && e.message) || ''} ${c.code || ''} ${c.message || ''}`;
+  return /ECONNRESET|ECONNABORTED|socket hang up|UND_ERR_SOCKET|other side closed|Premature close|EPIPE/i.test(s);
+}
+
+// 上游不可用的重试上限（网关状态码与流内断流共用这一把尺）；和 429 的 rl_retry_max 各算各的
+function gwRetryMax() {
+  const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'gw_retry_max'").get()?.value);
+  return Number.isInteger(n) && n >= 0 ? n : 16;
+}
+
+/**
  * 整包被判超长时，就地裁**这次要发出去**的消息序列 —— 库里一条都不删。
  * 从尾部往前圈出约两倍需求的区间，把其中最占体积的几条换成一句省略占位（先 tool 结果、再长正文），
  * 因为溢出几乎总是工具返回值撑的，丢最肥的几条最省、也最少破坏语义。
@@ -2427,7 +2509,7 @@ function shedTailForOverflow(msgs, tools, ratio = 0.2) {
 
 // 返回 null = 通过；返回 string = 给 AI 的校验错误（作为 tool_result 触发反思重试）
 function validateToolArgs(name, args) {
-  const schema = allToolSchemas()[resolveToolName(name)];
+  const schema = { ...allToolSchemas(), ...plantools.PLAN_SCHEMAS }[resolveToolName(name)];
   if (!schema) return null;
   const errs = [];
   for (const [key, rule] of Object.entries(schema)) {
@@ -2482,6 +2564,10 @@ async function guardTargetPath(raw, cwd, projectRoot, chatId) {
   // 自己的数据先挡：这里用解析过链接的真实路径，所以「把 kh.db 做成符号链接到项目里」也照样挡得住
   const priv = privatepaths.guardPrivatePath(real, { chatId });
   if (priv) return { error: priv };
+
+  // FULL-SEND：下面的项目根/工作目录边界一并跳过（越级访问系统关键位置是他给这一档定的用途）。
+  // 上面的隐身墙不动 —— 那一堵护的是主库里的真实密钥，不属于审批面。
+  if (isFullSend(chatId)) return null;
 
   if (projectRoot) {
     let rootReal = null;
@@ -2619,6 +2705,9 @@ async function execTool(rawName, args, cwd, holder = { child: null }, projectRoo
     if (guard) return guard;
   }
   try {
+    // Plan 模式的计划任务工具。不注册进 toolgate：它的开关是「这个会话开没开 Plan」，
+    // 不是用户去设置页勾的那一格，挂进工具页只会多出一个永远勾不动的死项。
+    if (plantools.PLAN_NAMES.has(name)) return await plantools.exec(name, args, { chatId, cwd });
     // 开关型扩展工具（外部 API 接口 + 后台任务/记忆/ask_user）：未启用时明确告知模型，避免它反复尝试
     if (toolgate.isGateTool(name)) return await toolgate.run(name, args, Object.assign({ chatId, cwd }, ctx));
     switch (name) {
@@ -2938,7 +3027,7 @@ function agentSystemPrompt(cwd, opts = {}) {
   ];
   // 工具能力地图：随本轮开关状态现算，压成按分组的紧凑一览（关掉走 settings.tool_capability_map=0）
   if (capabilityMapOn()) {
-    const capMap = buildCapabilityMap();
+    const capMap = buildCapabilityMap(planMode);
     if (capMap) lines.push(capMap);
   }
   if (projectRoot) {
@@ -2974,14 +3063,13 @@ function agentSystemPrompt(cwd, opts = {}) {
   if (block) lines.push('', block);
   if (planMode) {
     lines.push('', [
-      '[任务模式（Plan 模式）已开启——协议必须严格遵守]',
-      '1. 接到需要多步完成的任务时，先输出计划：<plan> 标签内每行一条任务（以 "- " 开头），标签结束后再开始执行。',
-      '2. 执行过程中用状态标签同步进度（单独一行，会被系统解析并从正文中移除，用户在任务面板中看到状态）：',
-      '   <task-status idx="1" status="doing"/> 开始某项前；<task-status idx="1" status="done"/> 完成后；',
-      '   <task-status idx="1" status="failed" error="失败原因摘要"/> 失败时（error 写明卡在哪，用户不看日志也能懂）。',
-      '3. idx 从 1 开始对应 <plan> 中的行序号。每完成一项就同步状态，不要等全部结束才汇报。',
-      '4. 某步骤失败且无法自行修复（权限/资源不存在等）时，把该项标记 failed 并继续其余任务，最后向用户总结。',
-      '5. 简单问答（无需多步执行）不必输出 <plan>，直接回答。'
+      '[任务模式（Plan 模式）已开启——计划用工具维护，不要再写 <plan> / <task-status> 那种正文标签]',
+      '1. 接到需要多步完成的任务时，先调 plan_write 把任务列进右侧「计划」面板（一条一步，控制在 15 条以内），然后再开始执行。',
+      '2. 每开始一项就 plan_update(seq, "doing")，做完置 "done"，做不下去置 "failed" 并在 error 里写清卡在哪（用户不看日志也能懂进度）。每完成一项同步一次，不要等全部结束才汇报。',
+      '3. seq 取工具返回文本行首的编号，不要凭记忆猜；不确定就 plan_list 看一眼当前列表。',
+      '4. plan_write 是整表重建：再调一次会把已有进度清回未开始。只有计划内容真的变了才重发，逐项推进用 plan_update。',
+      '5. 某步骤失败且无法自行修复（权限/资源不存在等）时，把该项标 failed 并继续其余任务，最后向用户总结。',
+      '6. 简单问答（无需多步执行）不必建计划，直接回答。'
     ].join('\n'));
   }
   // 外部 API 工具：仅在设置里启用后才告知模型（未启用的不要提，免得它凭空调用）
@@ -3118,10 +3206,130 @@ function packageTokens(msgs, tools) {
  */
 const livePkgByChat = new Map();
 
+/**
+ * 高水位：这个会话「见过的最大用量」，写进库。
+ *
+ * 为什么要单独存一层：用量有三个来源（真实锚点 / 锚点+新增正文 / 生成中的整包估算），三者会轮流当最大值，
+ * 于是以前会**自己往回缩** —— 一轮里连读几十个文件，估算冲到 60%，回合结束真实锚点校准回 40%；
+ * 或者那份整包估算过期退场，数字当场掉一截。他要的是「一直叠加，直到触发自动压缩」，
+ * 所以把峰值钉住：往上抬随便，往下落只有压缩和撤回允许。
+ */
+function highWaterTokens(chatId) {
+  try {
+    return Math.max(0, Number(db.prepare('SELECT ctx_high_water_tokens FROM ai_chats WHERE id = ?').get(chatId)?.ctx_high_water_tokens) || 0);
+  } catch (e) { return 0; }   // 旧库无列
+}
+
+function raiseHighWater(chatId, tokens) {
+  const n = Math.round(Number(tokens) || 0);
+  if (!chatId || !(n > 0)) return;
+  try {
+    db.prepare('UPDATE ai_chats SET ctx_high_water_tokens = ? WHERE id = ? AND ctx_high_water_tokens < ?').run(n, chatId, n);
+  } catch (e) { /* 旧库无列时忽略 */ }
+}
+
+/** 绝对改写：只在「上下文真的变小了」的地方用（压缩、撤回） */
+function setHighWater(chatId, tokens) {
+  const n = Math.max(0, Math.round(Number(tokens) || 0));
+  if (!chatId) return;
+  try {
+    db.prepare('UPDATE ai_chats SET ctx_high_water_tokens = ? WHERE id = ?').run(n, chatId);
+  } catch (e) { /* 旧库无列时忽略 */ }
+}
+
+/**
+ * 「正文之外那部分开销」：system 提示词 + 几十个工具 schema + 固定头，实测约三四千 tok。
+ * 来源是「上游真实回执」减「当时的正文估算」（recordContextAnchor），压缩时也用同一个口径补记。
+ *
+ * 为什么要单独存：导入进来的会话没有锚点可依据，只报正文会低估一个数量级 —— 界面写着 3%，
+ * 模型那边其实已经嫌长。有这份实测值就能按「开销 + 正文」给它起底（settleContextAfterShrink）。
+ * 撤回**不拿它做绝对落值**：上一轮跑过工具时这里存的其实是「system + schema + 那一发的工具轨迹」，
+ * 轨迹重量下一轮并不发出去，用它落值会让同一条撤回的降幅忽大忽小（见 settleContextAfterRetract）。
+ */
+function overheadTokens(chatId) {
+  try {
+    return Math.max(0, Number(db.prepare('SELECT ctx_overhead_tokens FROM ai_chats WHERE id = ?').get(chatId)?.ctx_overhead_tokens) || 0);
+  } catch (e) { return 0; }   // 旧库无列
+}
+
+function setOverhead(chatId, tokens) {
+  const n = Math.max(0, Math.round(Number(tokens) || 0));
+  if (!chatId || !(n > 0)) return;
+  try {
+    db.prepare('UPDATE ai_chats SET ctx_overhead_tokens = ? WHERE id = ?').run(n, chatId);
+  } catch (e) { /* 旧库无列时忽略 */ }
+}
+
+/**
+ * 上下文「真的变小了」之后的统一收口（导入会话用）：
+ * 用量 = 实测开销 + 现在还剩的正文，锚点与高水位都按这个值**绝对**落回去。
+ * 开销一次都没实测过（新会话直接导入）就退回正文口径，不编一个数出来。
+ */
+function settleContextAfterShrink(chatId) {
+  if (!chatId) return null;
+  const ov = overheadTokens(chatId);
+  const last = db.prepare(
+    'SELECT id FROM ai_chat_messages WHERE chat_id = ? AND archived = 0 ORDER BY id DESC LIMIT 1'
+  ).get(chatId);
+  const rows = db.prepare('SELECT content FROM ai_chat_messages WHERE chat_id = ? AND archived = 0').all(chatId);
+  const summary = db.prepare('SELECT summary FROM ai_chats WHERE id = ?').get(chatId)?.summary || '';
+  const body = rows.reduce((a, r) => a + estimateTokens(r.content), 0) + estimateTokens(summary);
+  const target = body + ov;
+  try {
+    // anchor_msg_id 指着最后一条剩余消息：那些正文才不会被「锚点之后新增」再算一遍
+    db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
+      .run(Math.round(target), last ? last.id : 0, chatId);
+  } catch (e) { /* 旧库无列时忽略 */ }
+  setHighWater(chatId, target);
+  clearLivePackage(chatId);
+  return chatContextUsage(chatId);
+}
+
+/**
+ * 撤回消息的回落：**按被删掉的那些正文减**（他第七十七轮的口径就是「减去就行了」）。
+ *
+ * 为什么不再用上面那个绝对收口：`ctx_overhead_tokens` 是「上游整包回执 − 正文」倒推出来的，
+ * 而上一轮只要跑过工具，那发回执里就躺着几十 KB 的工具结果 —— 它们只进 steps_json，
+ * 下一轮的上文根本不带。这份轨迹重量被当成「固定开销」存下来之后，下一次没有工具的轮次
+ * 又把它改回小值，于是同一条撤回的降幅取决于「上一次那轮带没带工具」（实测同一条 23 tok 的消息：
+ * 带过工具时减 23，紧接着跑了一轮纯正文后再撤同一条要减两万多 —— 他报的「有时偏多」就是这个）。
+ * 按增量减不碰那两个存量口径，减多少只取决于删了多少字。
+ *
+ * 锚点里只减「锚点及其之前」那部分（锚点之后那些本来就是 `since` 现算的，行没了它自己就掉）；
+ * 高水位按整包减，宁可留在偏高的位置（他是嫌减多了，不是嫌减少）。
+ */
+function settleContextAfterRetract(chatId, deleted) {
+  if (!chatId) return null;
+  let total = 0, beforeAnchor = 0;
+  let anchor = 0, anchorMsg = 0;
+  try {
+    const row = db.prepare('SELECT ctx_anchor_tokens AS a, ctx_anchor_msg_id AS m FROM ai_chats WHERE id = ?').get(chatId) || {};
+    anchor = Number(row.a) || 0;
+    anchorMsg = Number(row.m) || 0;
+  } catch (e) { /* 旧库无列 */ }
+  for (const d of deleted || []) {
+    const t = estimateTokens(d.content);
+    total += t;
+    if (Number(d.id) <= anchorMsg) beforeAnchor += t;
+  }
+  if (anchor > 0 && beforeAnchor > 0) {
+    try {
+      db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ? WHERE id = ?').run(Math.max(0, Math.round(anchor - beforeAnchor)), chatId);
+    } catch (e) { /* 旧库无列时忽略 */ }
+  }
+  const hw = highWaterTokens(chatId);
+  if (hw > 0 && total > 0) setHighWater(chatId, Math.max(0, hw - total));
+  clearLivePackage(chatId);
+  return chatContextUsage(chatId);
+}
+
 function noteLivePackage(chatId, msgs, tools) {
   if (!chatId || !Array.isArray(msgs)) return;
   try {
-    livePkgByChat.set(Number(chatId), { tokens: packageTokens(msgs, tools), at: Date.now() });
+    const t = packageTokens(msgs, tools);
+    livePkgByChat.set(Number(chatId), { tokens: t, at: Date.now() });
+    // 这一发真的是按这个整包发出去的：哪怕回合中途报错、真实回执永远拿不到，峰值也已经记账了
+    raiseHighWater(chatId, t);
   } catch (e) { /* 估算失败不影响请求 */ }
 }
 
@@ -3164,6 +3372,7 @@ function chatContextUsage(chatId, opts = {}) {
   if (chat.summary) body += estimateTokens(chat.summary);
   const anchor = Number(chat.ctx_anchor_tokens) || 0;
   const anchorMsg = Number(chat.ctx_anchor_msg_id) || 0;
+  const ov = overheadTokens(chatId);
   let used, basis;
   if (anchor > 0) {
     let since = 0;
@@ -3171,14 +3380,21 @@ function chatContextUsage(chatId, opts = {}) {
     used = anchor + since;
     basis = 'anchor';
   } else {
-    used = body + (Number(opts.overhead) || 0);
-    basis = opts.overhead ? 'body+overhead' : 'body';
+    // 没有锚点（新会话、或导入进来还没跑过一轮）时，用实测过的固定开销兜一下：
+    // 只报正文会低估一个数量级，界面写着 3% 而模型那边已经嫌长（opts.overhead 是调用方现算的整包，优先它）
+    const oh = Number(opts.overhead) || ov;
+    used = body + oh;
+    basis = oh ? 'body+overhead' : 'body';
   }
   // 生成中的整包估算只往上抬、不往下压（真实锚点永远优先于估算）
   const live = livePackageTokens(chatId);
   if (live > used) { used = live; basis = 'live-package'; }
+  // 高水位兜底：口径切换（估算退场、锚点被真实值校准回小）都不许把数字拉回去
+  const hw = highWaterTokens(chatId);
+  if (hw > used) { used = hw; basis = 'high-water'; }
+  else raiseHighWater(chatId, used);
   const { limit, source } = resolveContextWindow(chatId);
-  return { used, body, anchor, anchor_msg_id: anchorMsg, basis, limit, limit_source: source };
+  return { used, body, anchor, overhead: ov, anchor_msg_id: anchorMsg, basis, limit, limit_source: source };
 }
 
 /**
@@ -3196,6 +3412,11 @@ function reanchorAfterCompress(chatId, overhead) {
     db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
       .run(anchor, last ? last.id : 0, chatId);
   } catch (e) { /* 旧库无列时忽略 */ }
+  // 压缩前量出来的那份固定开销就是现在最准的开销值，跟着记下来给撤回/导入用
+  setOverhead(chatId, overhead);
+  // 压缩是唯二允许用量往回走的地方（另一个是撤回消息）：高水位必须跟着落到压缩后的值，
+  // 否则它会顶在压缩前的峰值，判成「压了等于没压」，下一轮又去压缩 —— 死循环。
+  setHighWater(chatId, anchor);
 }
 
 /** 回合结束：把这一轮上游实测的整包大小记成锚点（右侧用量与压缩判定都以它为基准） */
@@ -3207,6 +3428,13 @@ function recordContextAnchor(chatId, usage) {
   try {
     db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = ?, ctx_anchor_msg_id = ? WHERE id = ?')
       .run(anchor, last ? last.id : 0, chatId);
+    // 整包减正文 = 正文之外那份开销（system + 工具 schema + 那一发真的带上过的工具轨迹）。
+    // 这是唯一能实测到它的时机，存下来给导入会话起底用（见 settleContextAfterShrink）；
+    // 撤回不拿它做绝对落值，那份轨迹重量会让降幅忽大忽小（见 settleContextAfterRetract）。
+    setOverhead(chatId, anchor - chatContextUsage(chatId).body);
+    // 真实整包可能比生成期那份估算小（比如尾巴被裁过、或本轮最后一次请求本来就轻）：
+    // 界面不跟着回落，峰值由高水位钉住，等压缩才降。
+    raiseHighWater(chatId, anchor);
     // 真实整包到手，生成期间那份估算就该退场了（继续留着会把用量顶在偏高的位置不放）
     clearLivePackage(chatId);
   } catch (e) { /* 旧库无列时忽略 */ }
@@ -3582,14 +3810,19 @@ router.put('/projects/:id', wrap(async (req, res) => {
       if (err) return fail(res, 400, err);
     }
     db.prepare('UPDATE projects SET name = ?, root_path = ? WHERE id = ?').run(name, root, id);
+    let resetRemote = 0;
     if (root !== row.root_path) {
       // 根目录变了：其下会话的 cwd 若不在新根内，重置为新根（远端路径用前缀判断，别用本地 path 模块）
       const chats = db.prepare('SELECT id, cwd FROM ai_chats WHERE project_id = ?').all(id);
       for (const c of chats) {
-        if (c.cwd && c.cwd !== root && !c.cwd.startsWith(root + '/')) db.prepare('UPDATE ai_chats SET cwd = ? WHERE id = ?').run(root, c.id);
+        if (c.cwd && c.cwd !== root && !c.cwd.startsWith(root + '/')) {
+          db.prepare('UPDATE ai_chats SET cwd = ? WHERE id = ?').run(root, c.id);
+          resetRemote += 1;
+        }
       }
     }
-    return ok(res, { id, name, root_path: root, remote_id: row.remote_id }, '项目已更新');
+    return ok(res, { id, name, root_path: root, remote_id: row.remote_id, chats_reset: resetRemote },
+      resetRemote ? `项目已更新，${resetRemote} 条会话的目录已不在新根内，重置为项目根` : '项目已更新');
   }
   let root = row.root_path;
   if (req.body?.root_path !== undefined) {
@@ -3599,16 +3832,20 @@ router.put('/projects/:id', wrap(async (req, res) => {
     if (err) return fail(res, 400, err);
   }
   db.prepare('UPDATE projects SET name = ?, root_path = ? WHERE id = ?').run(name, root, id);
+  let reset = 0;
   if (root !== row.root_path) {
     // 根目录变更：其下会话的 cwd 若不在新根内，重置为项目根
+    // （只改库里的会话字段 —— 改名与改目录都不许动磁盘上的任何文件/目录，这是他的硬口径）
     const chats = db.prepare('SELECT id, cwd FROM ai_chats WHERE project_id = ?').all(id);
     for (const c of chats) {
       if (c.cwd && !insideRoot(c.cwd, root)) {
         db.prepare('UPDATE ai_chats SET cwd = ? WHERE id = ?').run(root, c.id);
+        reset += 1;
       }
     }
   }
-  ok(res, { id, name, root_path: root }, '项目已更新');
+  ok(res, { id, name, root_path: root, chats_reset: reset },
+    reset ? `项目已更新，${reset} 条会话的目录已不在新根内，重置为项目根` : '项目已更新');
 }));
 
 // 删除项目
@@ -3971,9 +4208,15 @@ router.put('/providers/:id', wrap((req, res) => {
 router.delete('/providers/:id', wrap((req, res) => {
   const id = parseInt(req.params.id);
   if (!Number.isInteger(id) || id < 1) return fail(res, 400, '无效的提供商ID');
+  // 提供商 → 模型是级联删的，模型 → 会话现在是置空。先显式置空才报得出「影响几条会话」，
+  // 删掉的那一层是它的模型，不是用户的对话。
+  const modelIds = db.prepare('SELECT id FROM ai_models WHERE provider_id = ?').all(id).map((r) => r.id);
+  const chats = modelIds.length ? nullifyChatModelRefs(modelIds) : 0;
   const result = db.prepare('DELETE FROM ai_providers WHERE id = ?').run(id);
   if (result.changes === 0) return fail(res, 404, '提供商不存在');
-  ok(res, null, '删除成功（其下模型与测试结果已级联删除）');
+  ok(res, { chats_affected: chats }, chats
+    ? `已删除（其下 ${modelIds.length} 个模型级联删除，${chats} 条用到它们的会话改为「未指定模型」，对话都还在）`
+    : '删除成功（其下模型与测试结果已级联删除）');
 }));
 
 // ---------- 管理端：模型 CRUD ----------
@@ -4073,12 +4316,25 @@ router.put('/models/:id', wrap((req, res) => {
   }
 }));
 
+/**
+ * 删模型前先数出「有哪些会话在用它的」，把它们置空再删。
+ * 库里现在已经是 ON DELETE SET NULL，这一步看着重复，但只有显式做才拿得到条数报给界面；
+ * 顺带保证「导入了旧库、迁移还没跑」的那种场合也不会一键连坐删掉对话。
+ */
+function nullifyChatModelRefs(ids) {
+  const placeholders = ids.map(() => '?').join(',');
+  const chats = db.prepare(`SELECT COUNT(*) c FROM ai_chats WHERE model_row_id IN (${placeholders})`).get(...ids).c;
+  db.prepare(`UPDATE ai_chats SET model_row_id = NULL WHERE model_row_id IN (${placeholders})`).run(...ids);
+  return chats;
+}
+
 router.delete('/models/:id', wrap((req, res) => {
   const id = parseInt(req.params.id);
   if (!Number.isInteger(id) || id < 1) return fail(res, 400, '无效的模型ID');
+  const chats = nullifyChatModelRefs([id]);
   const result = db.prepare('DELETE FROM ai_models WHERE id = ?').run(id);
   if (result.changes === 0) return fail(res, 404, '模型不存在');
-  ok(res, null, '删除成功');
+  ok(res, { chats_affected: chats }, chats ? `已删除（${chats} 条用到它的会话改为「未指定模型」，对话都还在）` : '删除成功');
 }));
 
 // 批量删除模型
@@ -4089,8 +4345,10 @@ router.post('/models/batch-delete', wrap((req, res) => {
   const parsed = ids.map(v => parseInt(v)).filter(v => Number.isInteger(v) && v > 0);
   if (parsed.length === 0) return fail(res, 400, '无效的模型ID列表');
   const placeholders = parsed.map(() => '?').join(',');
+  const chats = nullifyChatModelRefs(parsed);
   const result = db.prepare(`DELETE FROM ai_models WHERE id IN (${placeholders})`).run(...parsed);
-  ok(res, { deleted: result.changes }, `已删除 ${result.changes} 个模型`);
+  ok(res, { deleted: result.changes, chats_affected: chats },
+    chats ? `已删除 ${result.changes} 个模型（${chats} 条用到它们的会话改为「未指定模型」，对话都还在）` : `已删除 ${result.changes} 个模型`);
 }));
 
 // 切换模型禁用状态
@@ -4368,7 +4626,7 @@ router.post('/chat', (req, res) => {
   const agent = !!req.body?.agent;
   const bypass = !!req.body?.bypass;
   // 前端传入本次会话的审批模式（严格/默认/免除）：落到会话行持久化，供审批判定与前端一致
-  const requestedApprovalMode = ['strict', 'default', 'exempt'].includes(req.body?.approval_mode) ? req.body.approval_mode : '';
+  const requestedApprovalMode = APPROVAL_MODES.includes(req.body?.approval_mode) ? req.body.approval_mode : '';
   // 思考档位同理随每次请求带上（界面下拉显示什么就发什么）。以前只认会话行的 thinking_level，
   // 而行只在用户点过下拉时才被 PATCH 写入 → 新会话首轮、以及从没碰过下拉的会话拿到的是空串
   // → normalizeThinkingLevel 判成 mode='default' → 一个思考参数都不发 → 该模型不思考，界面上也就没有思考可展示。
@@ -4440,12 +4698,21 @@ router.post('/chat', (req, res) => {
       projectRoot: project?.root_path || chatRow?.project_root || '',
     });
   } else {
-    if (agent && bodyCwd) {
-      const p = path.resolve(bodyCwd);
-      try { if (fs.statSync(p).isDirectory()) cwd = p; } catch (e) { /* 目录无效则忽略 */ }
+    // 会话行优先（唯一事实源）：库里存过目录就照它跑，请求体那份只是前端当下的显示。
+    // 以前的顺序是「请求体 > 库里」，加上发消息时那条回写，等于前端一过期就能把会话目录改掉。
+    if (chatRow?.cwd) {
+      let alive = false;
+      try { alive = fs.statSync(chatRow.cwd).isDirectory(); } catch (e) { alive = false; }
+      if (alive) cwd = chatRow.cwd;
+      else if (!project) {
+        // 目录被移走/删掉了：自由会话不能静默掉回桌面 —— 那会把「没找到目录」变成「在别的目录上跑」，
+        // 文件写到谁都不知道的地方，而且用户下次看到的就是那个被偷偷改回去的值。
+        return fail(res, 400, `会话的工作目录不存在或不可访问：${chatRow.cwd}。用 /dir <路径> 或左栏会话右键「设置工作目录」换一个。`);
+      }
     }
-    if (!cwd && chatRow?.cwd) {
-      try { if (fs.statSync(chatRow.cwd).isDirectory()) cwd = chatRow.cwd; } catch (e) { /* 目录可能已被移走 */ }
+    if (!cwd && agent && bodyCwd) {
+      const p = path.resolve(bodyCwd);
+      try { if (fs.statSync(p).isDirectory()) cwd = p; } catch (e) { /* 库里没存、请求体这个又不可用，往下走默认 */ }
     }
     if (project) {
       const root = path.resolve(project.root_path);
@@ -4473,7 +4740,8 @@ router.post('/chat', (req, res) => {
     // upstreamMsgs + tools 的整包估算取更大值 —— 一口气读几十个文件时锚点还是旧的，会漏判。
     const usage = chatContextUsage(chatId);
     const liveUsed = live && Array.isArray(live.msgs) ? Math.max(usage.used, packageTokens(live.msgs, live.tools)) : usage.used;
-    if (liveUsed < limit * 0.8) return false;
+    const thr = compressThresholdPct();
+    if (liveUsed < limit * thr / 100) return false;
     const pct = Math.round(liveUsed / limit * 100);
     if (!modelRow) {
       send({ t: 'note', message: `上下文已达 ${liveUsed}/${limit} tok，但本机没有可用模型来生成摘要，未自动压缩。` });
@@ -4483,9 +4751,11 @@ router.post('/chat', (req, res) => {
     autoCompressCount++;
     // 「先压缩、再回答」要在消息流里看得见（他点名要的）：t:'compress' 走实时渲染，卡片同时进
     // turnCompressSteps 落库，两边是同一张卡的不同阶段。
-    const card = { type: 'compress', phase: 'start', used: liveUsed, limit, percent: pct, from };
+    // threshold 一起带上：卡片那句「已达 X%」要说的是当时生效的阈值，前端自己写死 80 就是假话，
+    // 而且这张卡会落库，重载后还得说得出当时那个数。
+    const card = { type: 'compress', phase: 'start', used: liveUsed, limit, percent: pct, from, threshold: thr };
     turnCompressSteps.push(card);
-    send({ t: 'compress', phase: 'start', used: liveUsed, limit, percent: pct, basis: usage.basis, from });
+    send({ t: 'compress', phase: 'start', used: liveUsed, limit, percent: pct, basis: usage.basis, from, threshold: thr });
     try {
       const r = await compressChat(chatId, modelRow, makeDispatcher(modelRow), controller.signal);
       if (r.skipped) {
@@ -4515,6 +4785,10 @@ router.post('/chat', (req, res) => {
     // 「停止」也要收整棵进程树：只 kill 直接子进程会留下 node/npm 之类的孤儿（procguard 只认本服务登记的 PID）
     if (toolHolder.child) { procguard.killTree(toolHolder.child.pid).catch(() => {}); }
     for (const deny of onAbort.deniedList.splice(0)) deny();
+    // 主会话停了，它派出去还在跑的子智能体也必须停（他第七十五轮点的那条）：
+    // 以前父回合断了只管上游流与子进程，分身还在替它跑、还在烧额度
+    const sa = subagent.killChat(chatId);
+    if (sa.killed.length) logbus.push({ tag: 'op', text: `会话 ${chatId} 停止，连带中止 ${sa.killed.length} 个子智能体：${sa.killed.join(', ')}` });
   };
   onAbort.deniedList = [];
   res.on('close', () => { if (!res.writableEnded) onAbort(); });
@@ -4542,7 +4816,8 @@ router.post('/chat', (req, res) => {
   };
 
   const insertMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, role, content) VALUES (?, ?, ?)');
-  const insertAssistantMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, role, content, model_row_id, reasoning, steps_json, unfinished) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  // usage_json：这一回合的 token 明细（上游回执汇总），落库后右栏那四格刷新还看得到
+const insertAssistantMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, role, content, model_row_id, reasoning, steps_json, unfinished, usage_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
 
   (async () => {
     const started = Date.now();
@@ -4560,11 +4835,17 @@ router.post('/chat', (req, res) => {
     let lastReqSentAt = 0;
     let turnErrText = '';
     let turnAbortedByUser = false;
+    // 本轮上游回执的 token（声明在 try 外面）：回合被异常打断时，外层 catch 也要拿它去记上下文锚点，
+    // 否则「报错中止的那一轮」在用量里完全不留痕迹，下一次开局又从小数字算起。
+    let turnUsage = null;
     const noteTurnError = (msg, exhausted) => {
       turnErrText = String(msg || '').substring(0, 400);
       // retry_exhausted：这一轮是「自动重试打光之后」断的，前端据此标未完成并留按钮
       send({ t: 'error', message: msg, ...(exhausted ? { retry_exhausted: true } : {}) });
     };
+    // 这两个必须在 try 外面声明：catch 那条路（异常打断的回合）也要读它们来补轨迹清单与 unfinished 标记
+    let agentSteps = [];
+    let turnUnfinished = false; // 中断/停止的本轮 → 入库标记未完成（前端显示「继续生成」按钮）
     try {
       if (!chatId) {
         chatTitle = stripImageTokens(content).trim().substring(0, 30) || '新对话';
@@ -4574,9 +4855,13 @@ router.post('/chat', (req, res) => {
           .run(1, poolRows[0].id, chatTitle, project ? project.id : null, cwd, planMode ? 1 : 0, defCtx);
         chatId = Number(r.lastInsertRowid);
       } else {
-        // 已有会话：跟随本次发送的模型与工作目录（项目会话的 cwd 已被 clamp 在项目根内）
-        db.prepare('UPDATE ai_chats SET model_row_id = ?, cwd = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(poolRows[0].id, cwd, chatId);
+        // 已有会话：只跟随本次发送的模型。
+        // **cwd 不再回写**（第六十七轮）：以前这条 UPDATE 每轮都把请求体里的目录盖回会话行，
+        // 而请求体那份是前端当时的状态 —— 切会话/刷新后的过期值、或者别处的默认值，
+        // 都会把用户用 /dir 认真改过的目录冲掉（他报的「自由会话改完工作目录又自己变回去」）。
+        // 会话行是工作目录的唯一事实源，只有 /chat/cwd（/dir 与左栏右键）能改它。
+        db.prepare('UPDATE ai_chats SET model_row_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(poolRows[0].id, chatId);
       }
       touchChatStmt.run(chatId);
       if (requestedApprovalMode) setChatApprovalMode(chatId, requestedApprovalMode);
@@ -4644,6 +4929,11 @@ router.post('/chat', (req, res) => {
         out.push(...history.map(h => buildUpstreamContent(h.role, stripLegacyToolLog(h.content))));
         // 继续生成模式：未完成回复之后追加合成指令（history 已包含到未完成回复为止的全部上文）
         if (continueSynthetic) out.push(...continueSynthetic);
+        /* 子智能体的交回在这里进上文 —— 形状是一条 assistant 文本（模型读作「我上一轮拿到的返回」），
+           不写 ai_chat_messages。以前是插一条 role:'user' + speaker:'subagent' 的消息：
+           上下文里凭空多出一句「用户说的」话，界面上还是个没头的气泡（他第七十七轮要求去掉）。 */
+        const saDeliver = subagent.takeDeliveries(chatId);
+        if (saDeliver) out.push({ role: 'assistant', content: saDeliver });
         return out;
       };
 
@@ -4672,7 +4962,7 @@ router.post('/chat', (req, res) => {
         send({ t: 'error', message: `本轮对话因包含审查词汇“${userHit}”已自动终止` });
         errSent = true;
         fullReply = `[已终止：包含审查词汇“${userHit}”]`;
-        insertAssistantMsg.run(chatId, 'assistant', fullReply, poolRows[0].id, '', null);
+        insertAssistantMsg.run(chatId, 'assistant', fullReply, poolRows[0].id, '', null, null, null);
         touchChatStmt.run(chatId);
         return;
       }
@@ -4723,12 +5013,13 @@ router.post('/chat', (req, res) => {
         // 429 最大重试次数可在设置页自定义（rl_retry_max，默认 16）
         const rlMax = (() => { const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'rl_retry_max'").get()?.value); return Number.isInteger(n) && n >= 0 ? n : 16; })();
         // 网关/服务不可用的重试次数同样可调（gw_retry_max，默认 16）：和 429 各算各的，互不挤占
-        const gwMax = (() => { const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'gw_retry_max'").get()?.value); return Number.isInteger(n) && n >= 0 ? n : 16; })();
+        const gwMax = gwRetryMax();
         for (let attempt = 0; attempt < rlMax + gwMax + 8; attempt++) {
           // 按提供商协议构造真实请求（openai 直通；anthropic/custom 由 protocols 翻译）
           noteLivePackage(chatId, payload.messages, payload.tools);
           const req = protocols.buildChatRequest(row, payload);
           const dispatcher = directOnly ? undefined : makeDispatcher(row);
+          const tAttempt = Date.now();
           try {
             resp = await fetch(req.url, {
               method: req.method,
@@ -4737,6 +5028,8 @@ router.post('/chat', (req, res) => {
               dispatcher,
               signal: controller.signal
             });
+            // 每一趟都记，重试的那些也记：他要看的是「429 试了几次、每次都几点」
+            logbus.upstream({ model: row.display_name, url: req.url, status: resp.status, ms: Date.now() - tAttempt });
           } catch (e) {
             // 代理软件没开 / 端口不对：退回直连再发一次，并在本次请求内保持直连
             // （否则后面每次工具往返都先撞一遍代理，白等）。只认连接级错误 ——
@@ -4746,6 +5039,19 @@ router.post('/chat', (req, res) => {
               send({ t: 'note', message: `[${row.display_name}] 代理 ${row.proxy_host}:${row.proxy_port || 7890} 连不上，本次改走直连重试…` });
               continue;
             }
+            // 连接级失败（复用的 keep-alive socket 被对面掐了、半死连接、ECONNRESET）：
+            // 请求根本没发出去、一个字都没消费，整发重发零成本 —— 这就是他说的
+            // 「不是上游服务问题，刷新一下又能继续」，不重发就等于把 kh 自己的连接问题算成模型坏了。
+            // 按 gw_retry_max 退避（和 502/503 同一口径），AbortError 不在识别范围里，用户按停止照旧生效。
+            if (isHalfDeadSocket(e) && gwRetry < gwMax) {
+              gwRetry++;
+              const waitMs = Math.min(gwRetry * 3000, 15000);
+              send({ t: 'note', message: `[${row.display_name}] 连接被掐断（${oneLine(errDetail(e), 90)}），${Math.round(waitMs / 1000)} 秒后整发重发（${gwRetry}/${gwMax}）…` });
+              await sleep(waitMs);
+              continue;
+            }
+            // 这条路是「试完了还是没发出去」：界面上只留一句概括，全量原因进日志总线
+            logbus.upstream({ model: row.display_name, url: req.url, ms: Date.now() - tAttempt, error: oneLine(errDetail(e), 200) });
             throw e;
           }
           if (resp.status === 429 && rlRetry < rlMax) {
@@ -5012,6 +5318,7 @@ router.post('/chat', (req, res) => {
         let genMsSum = 0;
         let curRow = null;   // catch 里要说清楚是哪个模型断的（row 是 for 里的 const，外面拿不到）
         let plainSheds = 0;  // 超长自救次数（见下面 !resp.ok 分支）
+        let plainStreamRetries = 0;  // 流断/流内临时错误的整发重发次数（见 consumeStream 的 catch）
         const block = await plainAgentsBlock().catch(() => '');
         const outMsgs = block ? [{ role: 'system', content: block }, ...msgs] : msgs;
         try {
@@ -5076,6 +5383,22 @@ router.post('/chat', (req, res) => {
                 }
               }
             } catch (e) {
+              // 与 Agent 分支同一口径：连接被掐断 / 流内临时错误，且一个字都没吐出来 → 整发重发。
+              // 这里的 `continue` 走的是模型池那个 for，不退一格就会跳到下一个模型（mi-- 才是重发同一个）
+              const noOutput = !(e && e.partial
+                && (String(e.partial.content || '').trim() || String(e.partial.reasoning || '').trim()));
+              const drop = noOutput && isStreamDropError(e);
+              const flaky = noOutput && !drop && isTransientUpstreamChunk(e);
+              const cap = drop ? gwRetryMax() : 5;
+              if ((drop || flaky) && plainStreamRetries < cap) {
+                plainStreamRetries++;
+                const waitMs = Math.min(plainStreamRetries * 3000, 15000);
+                const whyTxt = drop ? '连接被掐断' : '上游临时错误';
+                send({ t: 'note', message: `[${row.display_name}] ${whyTxt}（${oneLine(e.message, 90)}），${Math.round(waitMs / 1000)} 秒后整发重发（${plainStreamRetries}/${cap}）…` });
+                await sleep(waitMs);
+                mi--;
+                continue;
+              }
               // 单次输出长度上限（terminated）：携带已思考/已输出内容自动续写一次
               if (e && e.__khUpstream && /terminated|length|token/i.test(String(e.message)) && e.partial) {
                 send({ t: 'note', message: `[${row.display_name}] 单次输出达长度上限，携带已思考内容自动续写…` });
@@ -5128,6 +5451,9 @@ router.post('/chat', (req, res) => {
       // Agent 工具循环（模型池 failover + 审批门 + 参数校验 + 脱敏 + 任务联动 + 全文本累积）
 const runAgent = async (msgs, rows) => {
         const steps = [];
+        // 让外层 catch 也看得见这份数组（同一个引用，不是复制）：异常从 runAgent 里抛出来时，
+        // 已经执行过的那几步工具正是「中断回合轨迹清单」唯一的数据来源（#267）。
+        agentSteps = steps;
         let allText = '';
         // 远程会话：AGENTS.md 要从远端读、系统提示词要讲清「你在别人的机器上」
         const remoteHost = remoteHostFor(chatId);
@@ -5173,6 +5499,8 @@ const runAgent = async (msgs, rows) => {
         // 上游判输入超长时的自救次数（最多 3 次，每次裁得更狠：20% → 40% → 60%）。
         // 以前只裁一次，第二次还是超长就直接把错误丢给用户 —— 他的口径是「宁多不少，别因为超长罢工」。
         let overflowSheds = 0;
+        // 连接被掐断 / 流里下发临时错误：整发重发的次数（只在「一个字还没吐出来」时才重发）
+        let streamRetries = 0;
         // 无进展保护：同一 (工具+参数) 连续重复次数，达到阈值即打断循环。
         // 阈值在 设置 → 常规 调（repeat_break_threshold，默认 3）；一轮开始时应一次，
         // 免得每个工具调用都查一次库、也防止中途改值让这一轮的计数口径前后不一。
@@ -5185,25 +5513,40 @@ const runAgent = async (msgs, rows) => {
         // 下一次请求模型前再查一次，覆盖「上一批被中断/没有回喂机会」的情况。
         const injectAtBoundary = () => {
           if (!chatId) return 0;
+          let n = 0;
           const lines = takeInsertBuffer(chatId);
-          if (!lines.length) return 0;
-          upstreamMsgs.push({
-            role: 'user',
-            content: '[工具结果回喂时插入提示词_用户输入]\n' + lines.map(l => `- ${l}`).join('\n') +
-              '\n（以上是用户在工具中断点临时补充的指示，来自本机界面输入，优先级高于此前你自己制定的计划；请据此调整后续动作，必要时先重排任务再继续）'
-          });
-          send({ t: 'insert_injected', count: lines.length, items: lines });
-          step({ type: 'insert', items: lines });
-          return lines.length;
+          if (lines.length) {
+            upstreamMsgs.push({
+              role: 'user',
+              content: '[工具结果回喂时插入提示词_用户输入]\n' + lines.map(l => `- ${l}`).join('\n') +
+                '\n（以上是用户在工具中断点临时补充的指示，来自本机界面输入，优先级高于此前你自己制定的计划；请据此调整后续动作，必要时先重排任务再继续）'
+            });
+            send({ t: 'insert_injected', count: lines.length, items: lines });
+            step({ type: 'insert', items: lines });
+            n = lines.length;
+          }
+          /* 子智能体在这条安全边界上交回：形状是「工具返回」那样的一条 assistant 文本，
+             不落消息表，所以消息流里不会凭空长出一个「子智能体」气泡（第七十七轮他要求的口径）。
+             本轮没跑到边界也不要紧 —— 构建跨轮上文时（buildBaseMsgs）还会捞一次，取走即标记，不会重复。 */
+          const sa = subagent.takeDeliveries(chatId);
+          if (sa) {
+            upstreamMsgs.push({ role: 'assistant', content: sa });
+            step({ type: 'note', message: '子智能体已把结论交回（见右栏那一行的详情）' });
+            n += 1;
+          }
+          return n;
         };
         // 本轮工具结果的预算。工具结果不进跨轮上文，但在**同一轮里**它们全躺在 upstreamMsgs 里，
         // 每次请求模型都整包重发 —— 一口气读三十个文件时，爆掉的正是这里（压缩管的是跨轮，救不了本轮）。
         // 超预算就把最早的几条就地折成「原文多少字 + 开头一小段 + 全文落盘路径」，
         // 模型要看细节自己 read_file 那个文件。最新一条刚回喂完的不动它（它多半正是当前依据）。
         const ROUND_TOOL_BUDGET_TOKENS = 24000;
+        // 开关关掉 = 本轮永不折叠（连累计计数都不再需要动作），全靠会话压缩与撞线自救兜底
+        const foldRoundTools = roundToolFoldOn();
         const roundToolFeeds = [];   // { msg, tokens, name, text, collapsed }
         let roundToolTokens = 0;
         const trackToolFeed = (name, isTextMode) => {
+          if (!foldRoundTools) return;   // 关掉落盘：一条都不折，也不用记账
           const msg = upstreamMsgs[upstreamMsgs.length - 1];
           if (!msg) return;
           // content 是数组的那条是截图回喂：按其中的文字部分计量，图片本身不按 token 估（估不准），
@@ -5270,11 +5613,14 @@ const runAgent = async (msgs, rows) => {
         //   拿不到这个标记就拒绝执行 cu_* —— 详见 utils/cuse.js 里 NEED_MAIN_LOOP 的说明。
         const askCtx = {
           cuMainLoop: true,
-          ask: ({ question, options, timeoutMs }) => {
+          ask: ({ question, options, progress }) => {
             const qid = crypto.randomBytes(8).toString('hex');
-            send({ t: 'question', id: qid, question, options: options || [], chat_id: chatId, timeout_ms: timeoutMs || QUESTION_DEFAULT_TIMEOUT });
-            step({ type: 'question', question, options: options || [] });
-            return waitQuestion(qid, chatId, timeoutMs, onAbort.deniedList, () => send({ t: 'question_expired', id: qid }));
+            // 多题时把序号带给横幅（「第 2/3 题」），单题不带 —— 前端对缺字段是安全的
+            const idx = progress && progress.total > 1 ? { q_index: progress.index, q_total: progress.total } : {};
+            // 不带 timeout_ms：提问没有超时，用户没答就一直挂着（前端横幅因此不再显示倒计时）
+            send({ t: 'question', id: qid, question, options: options || [], chat_id: chatId, ...idx });
+            step({ type: 'question', question, options: options || [], ...idx });
+            return waitQuestion(qid, chatId, onAbort.deniedList, () => send({ t: 'question_expired', id: qid }));
           }
         };
         if (chatId) {
@@ -5285,7 +5631,7 @@ const runAgent = async (msgs, rows) => {
         }
         const withTextProtocol = (on) => {
           const base = agentSystemPrompt(cwd, promptOpts);
-          upstreamMsgs[sysIdx] = { role: 'system', content: on ? base + '\n\n' + texttool.textToolPrompt(allToolSchemas()) : base };
+          upstreamMsgs[sysIdx] = { role: 'system', content: on ? base + '\n\n' + texttool.textToolPrompt(allToolSchemas(planMode)) : base };
         };
         // 模型池逐个失败时，最后那句「所有模型均请求失败」不能只甩一句概括——
         // 记下最后一次失败的原因，让用户在错误条上直接看到是上游 401 / 超时 / 不支持工具哪种。
@@ -5316,7 +5662,7 @@ const runAgent = async (msgs, rows) => {
                 step({ type: 'note', message: `手动压缩生效：重建上游基底（${rebuilt.length} 条）` });
               }
               // 一轮里连开几十个工具时，上下文是在回合中间爆掉的，这里补一道
-              if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
+              if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
                 const rebuilt = buildBaseMsgs();
                 upstreamMsgs.splice(1, baseLen, ...rebuilt);
                 baseLen = rebuilt.length;
@@ -5324,7 +5670,7 @@ const runAgent = async (msgs, rows) => {
               }
             } else await remindUncommitted();   // 实验室：回合开头提醒一次未提交变更
             const body = { model: row.model_id, messages: upstreamMsgs };
-            if (!textMode) body.tools = activeAgentTools();
+            if (!textMode) body.tools = activeAgentTools(planMode);
             // 每次真的发请求前记一次整包（含这一轮新读进来的工具结果），右侧用量与 80% 判定才跟得上
             noteLivePackage(chatId, body.messages, body.tools);
             lastReqSentAt = Date.now();
@@ -5339,13 +5685,13 @@ const runAgent = async (msgs, rows) => {
               if (isContextLengthError(resp.status, errBody) && overflowSheds < 3) {
                 overflowSheds++;
                 const ratio = [0.2, 0.4, 0.6][overflowSheds - 1];
-                let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(), ratio);
-                if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
+                let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(planMode), ratio);
+                if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
                   // 重建基底会把基底里裁掉的占位换回原文（基底来自库），所以重建后再裁一次尾巴
                   const rebuilt = buildBaseMsgs();
                   upstreamMsgs.splice(1, baseLen, ...rebuilt);
                   baseLen = rebuilt.length;
-                  s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(), ratio);
+                  s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(planMode), ratio);
                   step({ type: 'note', message: `超长自救：已压缩并按新摘要重建基底（${rebuilt.length} 条）` });
                 }
                 send({ t: 'note', message: `[${row.display_name}] 输入超长，已裁切重试（省略 ${s.touched} 段约 ${s.shed} tok，本地记录未删；上游原话：${oneLine(errBody, 100)}）` });
@@ -5392,6 +5738,25 @@ const runAgent = async (msgs, rows) => {
             try {
               r0 = await consumeStream(resp, row);
             } catch (e) {
+              // 连接被掐断 / 上游在流里下发临时错误，且**一个字都还没吐出来** → 整发重发同一请求。
+              // 不重发就等于把「我们复用了一条半死的 keep-alive 连接」算成模型坏了：他说的
+              // 「不是上游服务问题，刷新一下又能继续」正是这种。吐过字的不走这条路（那是续写的活）。
+              // 只有「一个字节都没落下」才整发重发：吐过正文或吐过思考的，走下面那条续写的路，
+              // 否则会把「模型达到单次输出上限」也当成掉线，白白重烧 16 次同一发请求。
+              const noOutput = !(e && e.partial
+                && (String(e.partial.content || '').trim() || String(e.partial.reasoning || '').trim()));
+              const drop = noOutput && isStreamDropError(e);
+              const flaky = noOutput && !drop && isTransientUpstreamChunk(e);
+              const cap = drop ? gwRetryMax() : 5;
+              if ((drop || flaky) && streamRetries < cap) {
+                streamRetries++;
+                const waitMs = Math.min(streamRetries * 3000, 15000);
+                const whyTxt = drop ? '连接被掐断' : '上游临时错误';
+                send({ t: 'note', message: `[${row.display_name}] ${whyTxt}（${oneLine(e.message, 90)}），${Math.round(waitMs / 1000)} 秒后整发重发（${streamRetries}/${cap}）…` });
+                step({ type: 'note', message: `${whyTxt}，已自动整发重发（第 ${streamRetries}/${cap} 次）` });
+                await sleep(waitMs);
+                continue;
+              }
               // 单次输出长度上限（terminated）：把截断的思考/正文作为上文塞进 upstreamMsgs，
               // 向模型解释清楚后续接（continue 本轮循环重新请求）；只续接一次
               if (e && e.__khUpstream && /terminated|length|token/i.test(String(e.message)) && e.partial && !continuedOnce) {
@@ -5435,7 +5800,7 @@ const runAgent = async (msgs, rows) => {
             // 原生模式下也抽取一次——弱模型常把调用"写"成正文而没发起 tool_call（此时仅接受已知工具名，避免误执行示例代码）
             let textCalls = [];
             {
-              const known = textMode ? null : Object.keys(allToolSchemas());
+              const known = textMode ? null : Object.keys(allToolSchemas(planMode));
               const ex = texttool.extractTextCalls(r0.content || '', known);
               if (ex.calls.length) {
                 textCalls = ex.calls;
@@ -5490,7 +5855,7 @@ const runAgent = async (msgs, rows) => {
             // 回合开头和「结果回喂完之后」判，工具一批批执行途中涨上去的那段没人管）。
             // 放在这里还有一个硬好处：此刻 upstreamMsgs 尾巴上还没有「带 tool_calls 的 assistant 消息」
             // （下一条语句才 push），压缩换基底不会把待配对的工具调用切掉 —— 那会被上游 400 拒包。
-            if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools() })) {
+            if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
               const rebuilt = buildBaseMsgs();
               upstreamMsgs.splice(1, baseLen, ...rebuilt);
               baseLen = rebuilt.length;
@@ -5648,6 +6013,8 @@ const runAgent = async (msgs, rows) => {
               if (name === 'run_command') send({ t: 'cmd_running', command: String(args.command || '').substring(0, 200) });
               result = await execTool(name, args, cwd, toolHolder, project ? project.root_path : null, readonlyMode, effectiveApprovalMode(chatId), chatId, askCtx);
               if (name === 'run_command') send({ t: 'cmd_running', command: null });
+              // 计划工具改完表立刻推给右侧「计划」面板（正文标签那条老兜底路径同样这么推）
+              if (plantools.PLAN_NAMES.has(name) && !result.error) send({ t: 'tasks', tasks: getTasks(chatId) });
               // 敏感数据脱敏：工具输出进入 AI 上下文（前端展示/入库/上游）前统一处理（AI 生成的代码不脱敏）
               if (result.output) result.output = redactSecrets(result.output);
               if (result.error) result.error = redactSecrets(result.error);
@@ -5735,11 +6102,8 @@ const runAgent = async (msgs, rows) => {
         }
       };
 
-      let agentSteps = [];
       let usedModelRow = poolRows[0].id;
-      let turnUsage = null;
       let turnGenMs = 0;
-      let turnUnfinished = false; // 中断/停止的本轮 → 入库标记未完成（前端显示「继续生成」按钮）
       if (agent) {
         const r = await runAgent(baseMsgs, poolRows);
         agentSteps = r.steps || [];
@@ -5782,12 +6146,18 @@ const runAgent = async (msgs, rows) => {
 
       // 本轮用户消息仍存在才入库：撤回会删除本轮用户消息（含其后的停止消息），避免孤儿回复残留进上下文
       const userMsgExists = !!(userMsgId && db.prepare('SELECT 1 FROM ai_chat_messages WHERE id = ? AND chat_id = ?').get(userMsgId, chatId));
-      if (fullReply.trim() && userMsgExists) {
+      const allSteps = [...turnCompressSteps, ...agentSteps];
+      // 中断的回合（上游报错 / 手动停止 / 断流）把已执行的工具轨迹接在正文后面（#267）：
+      // 跨轮只 replay role+content，steps_json 没有第二个读者，而以前整条又被 `fullReply.trim()` 卡住不写
+      // —— 于是"跑了十几步工具然后 502"的那一轮在库里根本不存在，下一轮完全不知道刚才读过哪个文件、改过哪张表。
+      // 一个字都没吐也照写（整条就是这份清单）；正常回合不写，模型自己那段回复已经说了它做了什么。
+      const digest = turnUnfinished ? turntrace.traceDigest(allSteps) : '';
+      if (userMsgExists && (fullReply.trim() || digest)) {
         // 入库前统一解析任务标签（幂等；runAgent 流中已实时处理过，普通模式在此处理）
         const fin = parseTaskTags(stripLegacyToolLog(fullReply), chatId);
         if (fin.changed) send({ t: 'tasks', tasks: getTasks(chatId) });
-        const allSteps = [...turnCompressSteps, ...agentSteps];
-        insertAssistantMsg.run(chatId, 'assistant', fin.text.substring(0, 50000), usedModelRow, (fullReasoning || '').substring(0, 20000) || null, allSteps.length ? JSON.stringify(allSteps) : null, turnUnfinished ? 1 : 0);
+        const bodyText = digest ? `${fin.text ? `${fin.text}\n\n` : ''}${digest}` : fin.text;
+        insertAssistantMsg.run(chatId, 'assistant', bodyText.substring(0, 50000), usedModelRow, (fullReasoning || '').substring(0, 20000) || null, allSteps.length ? JSON.stringify(allSteps) : null, turnUnfinished ? 1 : 0, turnUsage ? JSON.stringify(turnUsage) : null);
         touchChatStmt.run(chatId);
       }
       // 校准上下文锚点：本轮上游实测的 prompt+completion 就是「下一轮整包」的底数，
@@ -5813,14 +6183,30 @@ const runAgent = async (msgs, rows) => {
         const usage = chatContextUsage(chatId);
         // usage 为上游返回的真实 token 数（agent 多轮已汇总：completion 累加、prompt/cached 取最大轮）
         // gen_ms 为纯生成时长（首末 SSE 数据间隔之和，不含工具执行时间），前端据此算精确 tok/s
-        send({ t: 'done', latency_ms: Date.now() - started, context_used: usage.used, context_limit: usage.limit, tasks: getTasks(chatId), usage: turnUsage, gen_ms: turnGenMs });
+        // ttft_ms 是**上游侧**的首包延迟：后端把请求发出去 → 收到第一个 SSE 数据块（思考或正文，谁先到算谁），
+        // 同一轮里只记第一次，后续工具回喂的续答不会冲掉它。
+        // 界面上那格「首字」现在以客户端为准（按下发送 → 第一个包，第七十七轮他重新拍的口径，比这里多一段本机开销），
+        // 这个值只在前端没锚点时兜底 + 给模型表「首字延迟」那一列用。
+        send({ t: 'done', latency_ms: Date.now() - started, context_used: usage.used, context_limit: usage.limit, tasks: getTasks(chatId), usage: turnUsage, gen_ms: turnGenMs, ttft_ms: turnTtftMs });
+      } else {
+        // 报错的这一轮不发 done，右侧用量就冻在断之前的数字上：单独补一次 usage，界面才知道这轮真吃过上下文
+        try {
+          const u = chatContextUsage(chatId);
+          send({ t: 'usage', used: u.used, limit: u.limit, basis: u.basis });
+        } catch (e2) { /* 报用量失败不能吃掉报错本身 */ }
       }
     } catch (e) {
       const userMsgExists2 = !!(userMsgId && db.prepare('SELECT 1 FROM ai_chat_messages WHERE id = ? AND chat_id = ?').get(userMsgId, chatId));
-      if (fullReply.trim() && userMsgExists2) {
+      // 异常打断的回合同样补一份工具轨迹清单（#267）：半截回复一个字没有时也照入库，
+      // 否则「跑到一半崩了」这一轮在库里彻底不存在，下一轮什么都不知道。以前 steps_json 硬写 null。
+      const catchSteps = [...turnCompressSteps, ...agentSteps];
+      const catchDigest = turntrace.traceDigest(catchSteps);
+      const catchText = stripLegacyToolLog(fullReply).trim();
+      if (userMsgExists2 && (catchText || catchDigest)) {
         try {
+          const body = catchDigest ? (catchText ? `${catchText}\n\n${catchDigest}` : catchDigest) : catchText;
           // 走到这里就是「这轮被异常打断」，半截回复入库时一律标未完成 → 消息流里留得住那颗按钮
-          insertAssistantMsg.run(chatId, 'assistant', stripLegacyToolLog(fullReply).substring(0, 50000), poolRows[0].id, (fullReasoning || '').substring(0, 20000) || null, null, 1);
+          insertAssistantMsg.run(chatId, 'assistant', body.substring(0, 50000), poolRows[0].id, (fullReasoning || '').substring(0, 20000) || null, catchSteps.length ? JSON.stringify(catchSteps) : null, 1, turnUsage ? JSON.stringify(turnUsage) : null);
           touchChatStmt.run(chatId);
         } catch (e2) { /* 忽略 */ }
       }
@@ -5830,6 +6216,16 @@ const runAgent = async (msgs, rows) => {
       } else if (/timeout|timed out|ETIMEDOUT/i.test(msg)) {
         // 超时也把底层原因留着（UND_ERR_BODY_TIMEOUT 之类），只加个能一眼看懂的头
         msg = `请求超时：${msg}`;
+      }
+      // 报错中止的这一轮同样吃掉过上下文：有真实回执就拿它记锚点，一次都没有也至少把
+      // 生成期间量到的整包峰值留在高水位里（noteLivePackage 已经抬过）。以前这条路直接跳过记账，
+      // 于是「断一次再刷新，用量回到没发生过的样子」——他说的「因报错中止的对话上下文算不对」就是这里。
+      if (chatId) {
+        try {
+          recordContextAnchor(chatId, turnUsage);
+          const u = chatContextUsage(chatId);
+          send({ t: 'usage', used: u.used, limit: u.limit, basis: u.basis });
+        } catch (e3) { /* 记用量失败不能把报错本身吃掉 */ }
       }
       send({ t: 'error', message: String(msg).substring(0, ERROR_MAX_LEN) });
     } finally {
@@ -5947,6 +6343,15 @@ router.patch('/chats/:id/settings', wrap((req, res) => {
     updates.push('plan_mode = ?');
     params.push(req.body?.plan_mode ? 1 : 0);
   }
+  // Agent / 只读 的会话级开关：只收 -1/0/1（-1 = 取消显式选择，回到跟随全局默认）。
+  // 前端 setModeFlag 在用户真的按下开关时才写 0/1，所以「这条会话选过没选过」这件事不会丢。
+  for (const col of ['agent_mode', 'readonly']) {
+    if (req.body?.[col] === undefined) continue;
+    const v = Number(req.body[col]);
+    if (![-1, 0, 1].includes(v)) return fail(res, 400, `${col} 只能是 -1（跟随全局）、0 或 1`);
+    updates.push(`${col} = ?`);
+    params.push(v);
+  }
   if (req.body?.title !== undefined) {
     const t = String(req.body.title || '').replace(/[\u0000-\u001f<>]/g, '').trim().substring(0, 60);
     if (!t) return fail(res, 400, '会话名称不能为空');
@@ -6062,9 +6467,34 @@ router.post('/chats', wrap(async (req, res) => {
   }
   // 新会话默认上下文窗口（设置页 default_context_limit，0=不限）
   const defCtx = (() => { const n = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'default_context_limit'").get()?.value); return Number.isInteger(n) && n > 0 ? n : 0; })();
-  const r = db.prepare('INSERT INTO ai_chats (user_id, model_row_id, title, project_id, cwd, plan_mode, context_limit, remote_id) VALUES (?, ?, ?, ?, ?, 0, ?, ?)')
-    .run(1, modelRowId, title, projectId, cwd, defCtx, remoteId);
+  // plan_mode 照前端给的来（他报的「弹窗新建的会话永远不是 Plan」就是这里以前写死 0）
+  const initPlan = req.body?.plan_mode ? 1 : 0;
+  const r = db.prepare('INSERT INTO ai_chats (user_id, model_row_id, title, project_id, cwd, plan_mode, context_limit, remote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(1, modelRowId, title, projectId, cwd, initPlan, defCtx, remoteId);
   const chat = db.prepare('SELECT id, title, project_id, model_row_id, remote_id FROM ai_chats WHERE id = ?').get(Number(r.lastInsertRowid));
+  ok(res, chat);
+}));
+
+/* 会话配置单读（第七十二轮）：切换会话时前端只要这一小份。
+   下面 GET /chats/:id 那一坨（整段消息 + steps_json 解析）是「打开会话」用的；
+   「上一条会话还在生成、切回来」那条快路径以前干脆什么都不读，于是界面留着**别条会话**的模型与开关 ——
+   他报的「a 在跑，切去 _b 再切回 a，a 的模型名变成 _b 那个，下一次请求真发给它」就是这条。 */
+router.get('/chats/:id/settings', wrap((req, res) => {
+  const id = parseInt(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return fail(res, 400, '无效的对话ID');
+  const chat = db.prepare(`
+    SELECT c.id, c.model_row_id, c.context_limit, c.cwd, c.plan_mode, c.approval_mode,
+           c.agent_mode, c.readonly,
+           c.temperature, c.frequency_penalty, c.presence_penalty, c.thinking_level, c.censored_words
+    FROM ai_chats c WHERE c.id = ? AND c.user_id = ?
+  `).get(id, 1);
+  if (!chat) return fail(res, 404, '对话不存在');
+  // 与 GET /chats/:id 同一个算法：界面显示的那份必须就是判定真正生效的那份（口径见 #225）
+  chat.approval_mode = String(chat.approval_mode || '');
+  chat.approval_effective = effectiveApprovalMode(id);
+  // 用量也一起给：切回一条**正在生成**的会话走的是这条快路径，它不拉整段历史，
+  // 右侧百分比就只能靠这里现算的那一份 —— 少给就等于让屏幕留着上一条会话的数（第七十三轮 ②）。
+  chat.usage = chatContextUsage(id);
   ok(res, chat);
 }));
 
@@ -6075,9 +6505,12 @@ router.get('/chats/:id', wrap((req, res) => {
   const chat = db.prepare(`
     SELECT c.id, c.title, c.model_row_id, c.created_at, c.updated_at, c.context_limit,
            c.project_id, c.cwd, c.plan_mode, c.remote_id, c.approval_mode,
+           c.agent_mode, c.readonly,
            c.temperature, c.frequency_penalty, c.presence_penalty, c.search_enabled, c.search_strategy, c.thinking_level, c.censored_words,
            LENGTH(c.summary) AS summary_length, m.display_name AS model_name
-    FROM ai_chats c JOIN ai_models m ON c.model_row_id = m.id
+    -- LEFT JOIN：模型被删掉（或「管理模型」里被取消勾选删除）后 model_row_id 会是空引用，
+    -- 用内连接的话这条会话直接 404 打不开 —— 会话是用户的东西，不能因为参照表少了一行就消失。
+    FROM ai_chats c LEFT JOIN ai_models m ON c.model_row_id = m.id
     WHERE c.id = ? AND c.user_id = ?
   `).get(id, 1);
   if (!chat) return fail(res, 404, '对话不存在');
@@ -6086,7 +6519,7 @@ router.get('/chats/:id', wrap((req, res) => {
   chat.approval_mode = String(chat.approval_mode || '');
   chat.approval_effective = effectiveApprovalMode(id);
   const messages = db.prepare(`
-    SELECT msg.id, msg.role, msg.content, msg.reasoning, msg.steps_json, msg.unfinished, msg.created_at, msg.speaker, am.display_name AS model_name
+    SELECT msg.id, msg.role, msg.content, msg.reasoning, msg.steps_json, msg.unfinished, msg.created_at, msg.speaker, msg.usage_json, am.display_name AS model_name
     FROM ai_chat_messages msg LEFT JOIN ai_models am ON msg.model_row_id = am.id
     WHERE msg.chat_id = ? ORDER BY msg.id ASC
   `).all(id);
@@ -6098,6 +6531,13 @@ router.get('/chats/:id', wrap((req, res) => {
       try { m.steps = JSON.parse(m.steps_json); } catch (e) { m.steps = null; }
     }
     delete m.steps_json;
+    // 本轮 token 明细：右栏那四格与消息上那颗「入 · 出」都读它（以前只活在内存里，刷新就没）
+    if (typeof m.usage_json === 'string' && m.usage_json) {
+      try { m.usage = JSON.parse(m.usage_json); } catch (e) { m.usage = null; }
+    } else {
+      m.usage = null;
+    }
+    delete m.usage_json;
   }
   ok(res, { chat, messages, usage: chatContextUsage(id), tasks: getTasks(id) });
 }));
@@ -6592,10 +7032,12 @@ router.post('/reveal', wrap((req, res) => {
   ok(res, { path: abs, selected, note }, selected ? '已在资源管理器中选中' : '已打开所在目录');
 }));
 
-// ---------- 后台任务面板（右栏「后台」页；与 background_list 工具同一数据源） ----------
+// ---------- 后台任务面板（右栏「后台」页；与 background_list 工具同一数据源、同一套会话归属） ----------
 router.get('/background', wrap((req, res) => {
   const bg = require('../utils/bg');
-  const rows = [...bg.tasks.values()]
+  // chat_id 决定看哪一份：整张表所有会话共用时，A 起的 dev server 会出现在 B 的页面上（还能被 B 杀掉）
+  const chatId = parseInt(req.query.chat_id) || null;
+  const rows = bg.visibleFor(chatId)
     .sort((a, b) => b.startedAt - a.startedAt)
     .map((t) => ({
       id: t.id,
@@ -6609,14 +7051,14 @@ router.get('/background', wrap((req, res) => {
       runtime_ms: Date.now() - t.startedAt,
       tail: (t.tail || []).slice(-20).join('\n'),
     }));
-  ok(res, { tasks: rows });
+  ok(res, { tasks: rows, hidden: chatId ? bg.tasks.size - rows.length : 0 });
 }));
 
 router.post('/background/kill', wrap(async (req, res) => {
   const bg = require('../utils/bg');
   const id = String(req.body?.id || '').trim();
   if (!id) return fail(res, 400, '缺少任务 id');
-  const r = await bg.kill(id);
+  const r = await bg.kill(id, parseInt(req.body?.chat_id) || null);
   if (r.error) return fail(res, 404, r.error);
   ok(res, null, r.output || '已请求终止');
 }));

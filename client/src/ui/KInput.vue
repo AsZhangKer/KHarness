@@ -9,13 +9,15 @@
       :disabled="disabled"
       :readonly="readonly"
       @input="$emit('update:modelValue', $event.target.value)"
-      @keydown.enter="$emit('enter', $event)"
+      @keydown="onKey"
     />
     <span v-if="hint" class="k-hint">{{ hint }}</span>
   </label>
 </template>
 
 <script setup>
+import { imeGuard } from '../utils/ime';
+
 defineProps({
   modelValue: { type: [String, Number], default: '' },
   label: { type: String, default: '' },
@@ -26,7 +28,9 @@ defineProps({
   readonly: Boolean,
   block: Boolean,
 });
-defineEmits(['update:modelValue', 'enter']);
+const emit = defineEmits(['update:modelValue', 'enter']);
+// 输入法候选词还没上屏时的 Enter 属于输入法，不该被当成「确认」发出去
+const onKey = imeGuard('enter', (e) => emit('enter', e));
 </script>
 
 <style scoped>

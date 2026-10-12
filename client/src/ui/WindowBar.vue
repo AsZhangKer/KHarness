@@ -74,9 +74,10 @@
  *
  * 最大化状态由主进程推（maximize/unmaximize 事件）：自己拿 screen 尺寸猜不可靠，多屏 + DPI 会骗人。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { recycleBin } from '../stores/recycle';
+import { settingsApi } from '../api';
 
 const router = useRouter();
 const recycle = recycleBin();
@@ -102,7 +103,13 @@ function measureBar() {
   if (el) barBottom = el.getBoundingClientRect().bottom;
 }
 
-const MENUS = [
+// 「检查更新」这一档只做两件事：把发行页开到系统浏览器里，再把当前版本号摆在菜单底部让人自己比。
+// 版本号取后端 /settings/app-info 的 display（和设置-关于同一个来源），别在这儿再写死一份数字。
+const appVer = ref('');
+const RELEASES_URL = 'https://github.com/AsZhangKer/KHarness/releases';
+function openReleases() { window.open(RELEASES_URL, '_blank', 'noopener'); }
+
+const MENUS = computed(() => [
   {
     key: 'file',
     label: '文件',
@@ -137,12 +144,17 @@ const MENUS = [
     ],
   },
   {
-    // 还没有联网更新服务，先按他说的留一个「(空)」，别挂个点了没反应的假入口
+    // 还没有联网更新服务，所以这一档只做两件事：把发行页开在系统浏览器里，再把当前版本号摆在底部让人自己比。
+    // 版本号取后端 /settings/app-info 的那个 display（开发版带 d），别在这儿再写死一份数字。
     key: 'update',
     label: '检查更新',
-    items: [{ label: '(空)', disabled: true }],
+    items: [
+      { label: '最新发行版', run: openReleases },
+      { sep: true },
+      { label: `当前版本 ${appVer.value || '读取中…'}`, disabled: true },
+    ],
   },
-];
+]);
 
 async function act(action, what) {
   const res = await api.winCtl(action, what);
@@ -188,6 +200,7 @@ let off = null;
 onMounted(async () => {
   if (!show.value) return;
   measureBar();
+  settingsApi.appInfo().then((a) => { appVer.value = (a && (a.display || a.version)) || ''; }).catch(() => {});
   window.addEventListener('resize', measureBar);
   const st = await api.winCtl('state');
   if (st && typeof st.maximized === 'boolean') maximized.value = st.maximized;

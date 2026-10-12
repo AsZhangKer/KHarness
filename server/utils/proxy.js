@@ -4,6 +4,12 @@
 // 要加「全局禁用代理」这个开关就得改 9 处，很容易漏 —— 漏掉的那条路会偷偷继续走代理。
 // 现在统一收在这里，并且多一个能力：**代理连不上时自动退回直连**（见 isProxyConnectError）。
 const { db } = require('../database');
+const netclient = require('./netclient');
+
+// 这个模块是所有上游请求的必经之路（聊天、压缩、跑分、拉列表、ping、侧栏、子智能体、监工、托管都过它），
+// 所以在它被 require 的时候就把连接策略装上 —— 装在这里比装在 index.js 更保险：
+// 任何一条能打到上游的路径，必然先加载过这里。
+netclient.install();
 
 let cachedDisabled = null;
 let cachedAt = 0;
@@ -23,14 +29,15 @@ function proxyGloballyDisabled() {
 
 function cacheBust() { cachedAt = 0; cachedDisabled = null; }
 
-/** 该提供商这次请求该用哪个 dispatcher；返回 undefined = 直连 */
+/** 该提供商这次请求该用哪个 dispatcher；返回 undefined = 直连（直连走 netclient 那套全局 Agent） */
 function proxyFor(row) {
   if (!row || !row.proxy_enabled || !row.proxy_host) return undefined;
   if (proxyGloballyDisabled()) return undefined;
   try {
-    const { ProxyAgent } = require('undici');
     const port = row.proxy_port || 7890;
-    return new ProxyAgent(`http://${row.proxy_host}:${port}`);
+    // 以前这里每次调用都 new 一个 ProxyAgent 且从不关闭：每个提供商每条请求攒一整套连接池。
+    // 现在按代理地址复用（空闲策略见 netclient）。
+    return netclient.proxyAgentFor(`http://${row.proxy_host}:${port}`);
   } catch (e) {
     return undefined;
   }
@@ -50,19 +57,44 @@ function isProxyConnectError(e) {
  * 一次性的「走代理，代理连不上就直连」请求：拉模型列表 / ping 这类单发请求用它。
  * 聊天主循环不走这里 —— 它有自己的重试循环，且直连决定要一直保持（见 routes/ai.js fetchUpstream 的 directOnly）。
  * onFallback 在真的退回直连时回调一次，调用方拿去给 UI 发提示。
+ *
+ * 这一趟成功与否都往日志总线记一行：聊天那条已经在 fetchUpstream 里各记一次，
+ * 剩下的上游请求（拉列表、ping、测速、压缩）全从这一个出口走，一处就覆盖完了。
  */
 async function fetchViaProxy(row, url, opts = {}, onFallback = null) {
   const { fetch } = require('undici');
+  const logbus = require('./logbus');
+  const model = String((row && (row.display_name || row.model_id)) || '');
+  const started = Date.now();
+  const done = (extra) => logbus.upstream({ provider: (row && row.provider_name) || '', model, url, ms: Date.now() - started, ...extra });
   const dispatcher = proxyFor(row);
-  if (!dispatcher) return { resp: await fetch(url, opts), fellBack: false };
+  if (!dispatcher) {
+    try {
+      const resp = await fetch(url, opts);
+      done({ status: resp.status });
+      return { resp, fellBack: false };
+    } catch (e) {
+      done({ error: String(e && (e.message || e) || '') });
+      throw e;
+    }
+  }
   try {
-    return { resp: await fetch(url, { ...opts, dispatcher }), fellBack: false };
+    const resp = await fetch(url, { ...opts, dispatcher });
+    done({ status: resp.status });
+    return { resp, fellBack: false };
   } catch (e) {
-    if (!isProxyConnectError(e)) throw e;
+    if (!isProxyConnectError(e)) { done({ error: String(e && (e.message || e) || '') }); throw e; }
     if (onFallback) onFallback();
     const rest = { ...opts };
     delete rest.dispatcher;
-    return { resp: await fetch(url, rest), fellBack: true };
+    try {
+      const resp = await fetch(url, rest);
+      done({ status: resp.status });
+      return { resp, fellBack: true };
+    } catch (e2) {
+      done({ error: String(e2 && (e2.message || e2) || '') });
+      throw e2;
+    }
   }
 }
 

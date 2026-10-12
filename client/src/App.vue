@@ -17,6 +17,8 @@
     <ConfirmDialog />
     <PromptDialog />
     <ImageViewer />
+    <!-- 后台日志悬浮窗：只在开发版（版本号带 d）会 open，正式版这扇窗压根不出现 -->
+    <LogFloat />
   </div>
   </template>
 </template>
@@ -29,8 +31,10 @@ import UiToasts from './ui/UiToasts.vue';
 import ConfirmDialog from './ui/ConfirmDialog.vue';
 import PromptDialog from './ui/PromptDialog.vue';
 import ImageViewer from './ui/ImageViewer.vue';
+import LogFloat from './ui/LogFloat.vue';
 import ThemeBackdrop from './ui/ThemeBackdrop.vue';
 import { uiPrefs } from './stores/prefs';
+import { readAppInfoForDev } from './stores/debuglog';
 
 // 浏览器独立窗口用的是同一份前端 + URL 上多一个 ?kh=browser（主进程 loadURL 时带上）。
 // 异步组件：只有那一扇窗会去拉这个 chunk，正常启动不为它多付一字节。
@@ -38,7 +42,11 @@ const BARE = new URLSearchParams(window.location.search).has('kh');
 const BrowserWindowPage = defineAsyncComponent(() => import('./features/chat/BrowserWindowPage.vue'));
 
 // 界面偏好（提示音、折叠方式、压缩保留条数…）开屏拉一次，深处组件直接用，不再各自读 localStorage
-onMounted(() => { uiPrefs.load(); });
+// 「调试」板块的显不显示也在这里一次定死：判据就是关于页那串版本号结不结尾带 d
+onMounted(() => {
+  uiPrefs.load();
+  readAppInfoForDev();
+});
 </script>
 
 <style scoped>

@@ -137,14 +137,19 @@ fs.cpSync(path.join(ROOT, 'server'), payload, {
 });
 /* 版本号写进服务端载荷：设置-关于要显示真实版本（v1.3.3），而且**不能依赖外壳** ——
    旧 app.asar 里没有 KH_APP_VERSION 这条环境变量，只靠外壳传就会把装机版标成 v1.3.3d（他定的口径：d = 非正式版）。
-   这份文件由打包机写，源码/自测跑法没有它 → 后端读根 package.json 并补 d。 */
+   这份文件由打包机写，源码/自测跑法没有它 → 后端读根 package.json 并补 d。
+   packaged 这个标志按出包那一步的意图写（第六十四轮「调试」板块要认它）：
+     默认 / --release → true，进安装包里就是正式版（v1.3.5，无调试板块、/api/debug 404）；
+     --dev           → false，打给自己日用的 win-unpacked（v1.3.5d，带调试板块）。
+   外壳只会看 app.isPackaged，那份和自用版在它眼里一模一样，所以这个判断不能交给外壳。 */
+const IS_DEV_PACK = process.argv.includes('--dev');
 const ROOT_VERSION = String(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version || '');
 if (!ROOT_VERSION) {
   console.error('pack-prep: 根 package.json 没有 version 字段');
   process.exit(1);
 }
-fs.writeFileSync(path.join(payload, 'version.json'), JSON.stringify({ version: ROOT_VERSION, packaged: true }) + '\n', 'utf8');
-console.log(`pack-prep: 写入 server/version.json（v${ROOT_VERSION}，正式版）`);
+fs.writeFileSync(path.join(payload, 'version.json'), JSON.stringify({ version: ROOT_VERSION, packaged: !IS_DEV_PACK }) + '\n', 'utf8');
+console.log(`pack-prep: 写入 server/version.json（v${ROOT_VERSION}，${IS_DEV_PACK ? '开发版 v…d，界面带「调试」板块' : '正式版'}）`);
 
 for (const stack = [payload]; stack.length;) {
   const dir = stack.pop();

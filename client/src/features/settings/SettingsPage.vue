@@ -13,7 +13,7 @@
           v-model="setQuery"
           class="k-input"
           type="search"
-          placeholder="搜设置项（卡带 / 审批 / 主题 / 回收站…）"
+          :placeholder="txt('settings.searchPlaceholder')"
           @keydown.esc="setQuery = ''"
         />
         <div v-if="setHits.length" class="set-hits">
@@ -36,36 +36,37 @@
       <h3>Shell执行器</h3>
       <div class="form">
         <label class="field">
-          <span>默认 Shell</span>
+          <span>{{ txt('settings.defaultShell.label') }}</span>
           <KDropdown :items="shellItems" v-model="shell" block width="100%" />
         </label>
         <!-- 候选列表以外的那个 Shell（比如装在 D:\Tools 下的 portable busybox / nu）以前没法选，
              所以这里给一个直接填路径的口子；存的是同一条 agent_shell，服务端会校验文件能不能执行 -->
         <label class="field">
-          <span>自定义 Shell 路径</span>
+          <span>{{ txt('settings.shell.customLabel') }}</span>
           <div class="shell-custom">
-            <KInput v-model="shellCustom" placeholder="可执行文件完整路径，如 D:\Tools\nu\nu.exe" block />
-            <button class="k-btn sm" type="button" @click="applyShellCustom">用这个</button>
+            <KInput v-model="shellCustom" :placeholder="txt('settings.shell.customPlaceholder')" block />
+            <button class="k-btn sm" type="button" @click="applyShellCustom">{{ txt('settings.shell.apply') }}</button>
           </div>
         </label>
-        <p class="field-note">填了「用这个」后立刻生效（覆盖上面下拉选的那个）；路径不存在或不可执行会被服务端拒绝，不会把 Agent 的 Shell 设成一个跑不起来的东西。</p>
-        <KInput v-model="cmdTimeout" label="命令超时（秒，0=不限）" type="number" block />
-        <KInput v-model="defaultContext" label="默认上下文窗口（token）" type="number" block />
-        <KInput v-model="rlRetryMax" label="上游 429 最大重试" type="number" block />
-        <KInput v-model="gwRetryMax" label="上游不可用（500/502/503/504/524）最大重试" type="number" block />
-        <button class="k-btn primary sm" type="button" @click="saveUpstream">
-          <i class="fas fa-floppy-disk"></i> 保存上游设置
+        <p class="field-note">{{ txt('settings.shell.note') }}</p>
+        <KInput v-model="cmdTimeout" :label="txt('settings.cmdTimeout.label')" :placeholder="txt('settings.unsetPlaceholder')" type="number" block />
+        <KInput v-model="defaultContext" :label="txt('settings.defaultContext.label')" :placeholder="txt('settings.unsetPlaceholder')" type="number" block />
+        <KInput v-model="compressThreshold" :label="txt('settings.compress.label')" :placeholder="txt('settings.unsetPlaceholder')" type="number" block />
+        <KInput v-model="rlRetryMax" :label="txt('settings.retry.rl')" :placeholder="txt('settings.unsetPlaceholder')" type="number" block />
+        <KInput v-model="gwRetryMax" :label="txt('settings.retry.gw')" :placeholder="txt('settings.unsetPlaceholder')" type="number" block />
+        <button class="k-btn primary sm" type="button" :disabled="!upstreamReady"
+          :title="upstreamReady ? '' : txt('settings.unsetPlaceholder')" @click="saveUpstream">
+          <i class="fas fa-floppy-disk"></i> {{ txt('settings.save') }}
         </button>
       </div>
     </section>
 
-    <!-- 常规 · 全局提示词：所有本机会话都会带上的那一份 AGENTS.md -->
+    <!-- 常规 · 全局系统提示词：所有本机会话都会带上的那一份 AGENTS.md -->
     <section v-show="tab === 'general'" data-tab="general" class="card">
-      <h3>全局提示词</h3>
+      <h3>{{ txt('settings.agents.title') }}</h3>
       <div class="form">
         <p class="muted gp-note">
-          这份文件会作为「知识库」或「长期记忆」、「系统提示词」合并进每一次请求的头部；
-          项目根目录里的 <code>AGENTS.md</code> 会合并进它后面；保存后回到主页生效。
+          {{ txt('settings.agents.note') }}
         </p>
         <div class="field">
           <span>文件</span>
@@ -128,14 +129,19 @@
             @change="savePref({ repeatBreak: Number($event.target.value) })"
           />
         </label>
-        <p class="field-note">
-          模型连续 {{ prefs.repeatBreak }} 次调用同一个操作（工具名和参数完全一样）就打断这一轮，避免它陷在自循环里白烧额度。
-          调到 2 很激进 —— 正常的「换个写法再试一次」也会被掐断；弱模型反复重试同一个命令时才需要往上调。改完下一轮对话就生效。
-        </p>
+        <label class="field">
+          <span>{{ txt('settings.agentParallel.label') }}</span>
+          <input
+            class="k-input w120" type="number" min="0" max="50" step="1"
+            :value="prefs.agentParallel"
+            :title="txt('settings.agentParallel.note')"
+            @change="savePref({ agentParallel: Number($event.target.value) })"
+          />
+        </label>
         <div class="field line stall-line">
           <label class="field line">
             <input class="k-check" type="checkbox" :checked="prefs.stallGuard" @change="savePref({ stallGuard: $event.target.checked })" />
-            <span>卡带检测（模型原地复读时掐断）</span>
+            <span>{{ txt('settings.stall.label') }}</span>
           </label>
           <input
             v-if="prefs.stallGuard"
@@ -144,16 +150,11 @@
             min="60"
             max="2000"
             step="20"
-            title="连续重复多少字判定为卡带"
+            title="连续重复多少字判定为死循环"
             :value="prefs.stallMin"
             @change="savePref({ stallMin: Number($event.target.value) })"
           />
         </div>
-        <p v-if="prefs.stallGuard" class="field-note">
-          跟上面那条不是一回事：那条管「同一个工具反复调」，这条管「同一段话反复写」。
-          命中后本轮直接掐断，尾部重复内容会被裁掉，你回一句「继续」就能接上。
-          60 很灵敏（模型正常引用同一段代码也可能被掐），2000 基本只抓最恶劣的死循环。
-        </p>
         <label class="field line">
           <input class="k-check" type="checkbox" :checked="prefs.toolMap" @change="savePref({ toolMap: $event.target.checked })" />
           <span>把可用工具清单写进系统提示</span>
@@ -163,6 +164,10 @@
           专门治「工具其实开着，但它想不到要用」。代价是每轮多几百 token，
           工具开得越多涨得越多；嫌费额度就关掉。
         </p>
+        <label class="field line">
+          <input class="k-check" type="checkbox" :checked="prefs.roundFold" @change="savePref({ roundFold: $event.target.checked })" />
+          <span>{{ txt('settings.roundFold.label') }}</span>
+        </label>
         <label class="field line">
           <input class="k-check" type="checkbox" :checked="prefs.reasonOpen" @change="savePref({ reasonOpen: $event.target.checked })" />
           <span>思考默认展开</span>
@@ -186,10 +191,6 @@
           <input class="k-check" type="checkbox" :checked="prefs.proxyDisabled" @change="savePref({ proxyDisabled: $event.target.checked })" />
           <span>禁用全局代理设定</span>
         </label>
-        <p class="field-note">
-          打开后，所有提供商即使勾了「代理」也一律直连，提供商上的代理配置保留不动，关掉就恢复。
-          关闭时，若某个勾了代理的提供商连不上代理节点，会自动退回直连重试并在对话里提示一次。
-        </p>
       </div>
     </section>
 
@@ -198,20 +199,21 @@
       <h3>审批模式</h3>
       <div class="links">
         <button
-          v-for="m in ['default', 'strict', 'exempt']"
+          v-for="m in approvalChoices"
           :key="m"
           class="btn"
-          :class="{ primary: approvalMode === m }"
+          :class="{ primary: approvalMode === m, 'ap-fs-btn': m === 'fullsend' }"
           type="button"
           @click="setApproval(m)"
-        >{{ { default: '默认', strict: '严格', exempt: '免除' }[m] }}</button>
+        >{{ { default: '默认', strict: '严格', exempt: '免除', fullsend: 'FULL-SEND' }[m] }}</button>
       </div>
+      <p class="field-note">{{ txt('settings.approval.note') }}</p>
     </section>
 
     <section v-show="tab === 'security'" data-tab="security" class="card">
       <h3>敏感数据脱敏</h3>
       <div class="form">
-        <KInput v-model="secretForm" label="新规则（原样替换为 ***）" block placeholder="sk-xxx / 密码字段名" />
+        <KInput v-model="secretForm" :label="txt('settings.secret.newLabel')" block placeholder="sk-xxx / 密码字段名" />
         <button class="btn" type="button" @click="addSecret">添加脱敏规则</button>
       </div>
       <div v-for="s in secrets" :key="s.id" class="row">
@@ -222,24 +224,23 @@
 
     <section v-show="tab === 'security'" data-tab="security" class="card">
       <h3>权限规则</h3>
-      <p class="muted">命中黑名单直接拒绝（即使免除审批也拦得住）；白名单用于在严格/默认模式下放行特定目标。</p>
       <div class="grid-4">
         <label class="field">
-          <span>类型</span>
+          <span>{{ txt('settings.perm.kind') }}</span>
           <KDropdown :items="kindItems" v-model="permForm.kind" block width="100%" />
         </label>
         <label class="field">
-          <span>名单</span>
+          <span>{{ txt('settings.perm.list') }}</span>
           <KDropdown :items="listItems" v-model="permForm.list" block width="100%" />
         </label>
         <label class="field">
-          <span>匹配</span>
+          <span>{{ txt('settings.perm.match') }}</span>
           <KDropdown :items="matchItems" v-model="permForm.match" block width="100%" />
         </label>
-        <KInput v-model="permForm.pattern" label="内容（命令 / 路径 / 关键词 / 工具名）" block />
+        <KInput v-model="permForm.pattern" :label="txt('settings.perm.pattern')" block />
       </div>
       <div class="grid-2">
-        <KInput v-model="permForm.note" label="备注（可留空）" block />
+        <KInput v-model="permForm.note" :label="txt('settings.perm.note')" block />
         <button class="btn primary" type="button" style="align-self:end" @click="addPerm">添加规则</button>
       </div>
       <div v-if="!perms.length" class="muted" style="margin-top:10px">还没有权限规则。</div>
@@ -251,14 +252,14 @@
         <button class="btn sm danger" type="button" @click="removePerm(p)">删除</button>
       </div>
 
-      <h4 class="sub">规则试跑（不执行，只看判定）</h4>
+      <h4 class="sub">{{ txt('settings.perm.testTitle') }}</h4>
       <div class="grid-2">
         <KInput v-model="permTestForm.tool" label="工具名" block placeholder="run_command" />
         <KInput v-model="permTestForm.command" label="命令行" block placeholder="rm -rf /" />
-        <KInput v-model="permTestForm.paths" label="路径（分号或换行分隔）" block placeholder="D:\projects\foo" />
+        <KInput v-model="permTestForm.paths" :label="txt('settings.perm.testPaths')" block placeholder="D:\projects\foo" />
         <KInput v-model="permTestForm.text" label="关键词文本" block />
       </div>
-      <button class="btn" type="button" @click="runPermTest">试跑判定</button>
+      <button class="btn" type="button" @click="runPermTest">{{ txt('settings.perm.testRun') }}</button>
       <pre v-if="permTestResult" class="perm-out">{{ JSON.stringify(permTestResult, null, 2) }}</pre>
     </section>
 
@@ -266,9 +267,9 @@
     <section v-show="tab === 'skills'" data-tab="skills" class="card">
       <h3>自定义技能</h3>
       <div class="form">
-        <KInput v-model="skillName" label="技能名（kebab-case）" block />
+        <KInput v-model="skillName" :label="txt('settings.skill.name')" block />
         <label class="field">
-          <span>Markdown 正文</span>
+          <span>{{ txt('settings.skill.body') }}</span>
           <textarea v-model="skillBody" class="textarea" rows="8"></textarea>
         </label>
         <button class="btn primary" type="button" @click="importSkill">按上面内容导入</button>
@@ -278,7 +279,6 @@
           </button>
           <input ref="skillFileEl" type="file" accept=".md,.markdown,text/markdown,text/plain" style="display:none" @change="onPickSkillFile" />
         </div>
-        <p class="muted">自定义技能存在数据目录的 skills/ 下（重装与热同步都不会冲掉）；同名会覆盖内置示例技能。</p>
       </div>
       <div v-for="s in skills" :key="s.name" class="row">
         <div class="grow">
@@ -369,10 +369,7 @@
     <!-- MCP 服务器：外部能力接入（发现出的工具在上面的「工具」页里逐个启用） -->
     <section v-show="tab === 'mcp'" data-tab="mcp" class="card">
       <h3>MCP 服务器</h3>
-      <p class="muted">
-        接外部 MCP 能力（stdio 子进程或 Streamable HTTP）。发现出来的工具会出现在「工具」页的 MCP 一节，默认关闭。
-        第三方工具不天然免审批：只有它自声明 readOnlyHint 才当只读放行，自声明破坏性的走红色确认。
-      </p>
+      <p class="muted">{{ txt('settings.mcp.note') }}</p>
       <div v-for="s in mcpServers" :key="s.id" class="tool-card" :class="{ on: s.enabled }">
         <div class="row">
           <div class="grow">
@@ -407,7 +404,6 @@
           <p v-if="!s.tools.length" class="muted">尚未发现工具（连接成功后会有）。</p>
         </div>
       </div>
-      <p v-if="!mcpServers.length" class="muted">还没有 MCP 服务器，下面新增第一个。</p>
       <h4 class="sub">{{ mcpForm.id ? '编辑服务器' : '新增服务器' }}</h4>
       <div class="form">
         <div class="cfg">
@@ -491,14 +487,14 @@
           <span>界面字体</span>
           <KDropdown :items="fontList" v-model="fontChoice" placeholder="默认" block width="100%" @change="applyFont" />
         </label>
-        <div class="muted">分栏宽度可在聊天页拖拽调节并记忆。云母·蓝 / 云母·紫 / 星夜带动态背景，若机器性能吃紧可在系统里关掉动画。</div>
         <label class="field">
           <span>消息区最大宽度</span>
           <KDropdown :items="widthItems" v-model="contentWidth" block width="100%" @change="applyWidth" />
         </label>
         <label class="field line">
           <input class="k-check" type="checkbox" :checked="whaleOn" @change="setWhaleOn($event.target.checked)" />
-          <span>小鲸鱼挂件（关掉就不再显示；挂件自己的菜单与位置/音效配置都保留）</span>
+          <span>{{ txt('settings.whale.label') }}</span>
+          <span class="muted">{{ txt('settings.whale.note') }}</span>
         </label>
       </div>
     </section>
@@ -517,6 +513,16 @@
           <button v-else type="button" class="k-switch" :class="{ on: labOn[x.key] }" @click.prevent="toggleLab(x.key)"></button>
         </label>
 
+        <!-- FULL-SEND 总闸：这一档太危险，默认连出现在审批下拉里的资格都没有，得先在这里点亮。
+             走服务端 settings（不是 localStorage 占位），因为真正放不放行是后端 decideApproval2 说了算。 -->
+        <div class="k-row-card" style="display:flex;align-items:center;gap:12px">
+          <div style="flex:1">
+            <div class="k-row-title">FULL-SEND 审批档</div>
+            <div class="k-row-desc">{{ txt('settings.lab.fullsend.desc') }}</div>
+          </div>
+          <button type="button" class="k-switch" :class="{ on: prefs.fullSend }" @click.prevent="toggleFullSendLab"></button>
+        </div>
+
         <!-- Computer Use：这一条不是占位，是真面板。总开关只在这里 ——
              后端已把 cu_* 那组工具从「工具」页隐藏了，别处再放一个开关只会两头打架。 -->
         <div class="k-row-card">
@@ -528,7 +534,7 @@
                   ? '本平台不可用：坐标引擎要 PowerShell + Win32 SendInput + UIA，netwright 也是 Windows 桌面自动化。'
                   : (cu.enabled
                       ? 'AI 可以看屏、点窗口、动鼠标；每一步都要你批准（除非开「全部开放」）。'
-                      : '让 AI 直接操作这台电脑：netwright 在线就用它，没装就全程走坐标引擎。') }}
+                      : txt('settings.lab.cu.desc')) }}
               </div>
             </div>
             <button
@@ -639,10 +645,7 @@
           <div class="cu-head">
             <div class="grow">
               <div class="k-row-title">图片大小控制</div>
-              <div class="k-row-desc">
-                截图送给模型之前统一压到这个尺寸（按最长边算）并转成 JPEG。
-                当前：{{ prefs.imgMaxSide ? prefs.imgMaxSide + ' px' : '不限制（原图送出）' }}
-              </div>
+              <div class="k-row-desc">{{ txt('settings.lab.img.desc') }}</div>
             </div>
           </div>
           <div class="cu-line" style="margin-top:8px">
@@ -664,13 +667,9 @@
               placeholder="自定义"
               @change="applyImgCustom"
             />
-            <span class="muted">px 最长边（0 = 不限制）</span>
+            <span class="muted">{{ txt('settings.lab.img.maxSide') }}</span>
           </div>
-          <p class="field-note">
-            管的是「全屏截图 / 整屏截取 / 网页整页截图」这几类送进模型的图。
-            另外有一条固定规则：整个上下文里**只有最近一张图会真的发出去**，更早的会换成「[过期的图片]」——
-            截图是一步一张的，留着旧图只会让请求体越来越大直到被上游拒收。
-          </p>
+          <p class="field-note">{{ txt('settings.lab.img.note') }}</p>
         </div>
 
         <!-- AI 监工 / 托管：半废弃。功能没删，但入口收在这道闸后面 ——
@@ -699,28 +698,65 @@
             关掉只是收起入口，历史报告（<span class="mono">ai_supervise_runs</span> 与数据目录里的 supervise 报告）都还在，重新打开就看得见。
           </p>
         </div>
+
+        <!-- 多模型池「先点优先」：同样半废弃，入口收在这道闸后面（顶栏那颗开关早就没了，只剩 /pool 与 /mode auto） -->
+        <div class="k-row-card">
+          <div class="cu-head">
+            <div class="grow">
+              <div class="k-row-title">多模型池「先点优先」<span class="muted">　半废弃</span></div>
+              <div class="k-row-desc">
+                {{ prefs.poolOn
+                  ? '已打开：/pool 池选择器和 /mode auto 回来了，一轮里会按池序换模型重试。这条线不再继续维护，出问题先当已知风险看。'
+                  : '按池子里的顺序轮流点名、这个不行就跳下一个。已半废弃，默认关闭（每条会话只用它自己选中的那一个模型）。' }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="k-switch"
+              :class="{ on: prefs.poolOn }"
+              :title="prefs.poolOn ? '关掉模型池入口' : '打开模型池入口'"
+              @click.prevent="savePref({ poolOn: !prefs.poolOn })"
+            ></button>
+          </div>
+          <p class="field-note">
+            打开后多出来的是：输入框的 <span class="mono">/pool</span> 池选择器、<span class="mono">/mode auto</span> 开关，
+            以及一轮请求失败后按池序换下一个模型的那条通道。关掉只收起入口，池子内容不清空，重新打开还在。
+          </p>
+        </div>
       </div>
     </section>
 
     <!-- 关于 -->
     <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>关于 KHarness</h3>
-      <div class="muted">
-        本地 AI Harness：模型管理 / 延迟测试 / Playground（Agent 工具调用、项目会话、任务面板、用量与轨迹）。
-      </div>
+      <div class="muted">{{ txt('settings.about.desc') }}</div>
       <div class="row"><span class="muted">版本号</span><span class="mono">{{ versionLabel }}</span></div>
-      <div class="row"><span class="muted">形态</span><span>{{ isDesktop ? '桌面端（Electron）' : '网页端（浏览器直连本机服务）' }}</span></div>
-      <div class="row"><span class="muted">文档</span><span>README.md / TOOLS-CALLING.md</span></div>
+    </section>
+
+    <!-- 调试：只在开发版出现（判据就是上面那串版本号结尾带不带 d，正式包里这一整块不存在） -->
+    <section v-show="tab === 'about' && dbg.state.dev" data-tab="about" class="card">
+      <h3>调试<span class="muted">　仅开发版（{{ versionLabel }}）</span></h3>
+      <p class="muted">
+        这两颗键只在版本号带 <span class="mono">d</span> 的开发版出现，正式包里这一整块连通道都没有。
+        日志只存内存里最近 2000 行、重启即清，不落盘（里面会有真实的上游响应体）。
+      </p>
+      <div class="row dbg-row">
+        <button class="btn" type="button" @click="dbg.open()">
+          <i class="fas fa-terminal"></i> LogOutput
+        </button>
+        <span class="muted">日志悬浮窗：实时的后台输出、进来的请求、每一趟上游调用，可筛选 / 复制 / 清空。</span>
+      </div>
+      <div class="row dbg-row">
+        <button class="btn" type="button" @click="openDevTools">
+          <i class="fas fa-code"></i> DevTools
+        </button>
+        <span class="muted">弹出这扇窗的开发者工具（Console / 元素 / 网络），用来看界面侧的报错与控件。</span>
+      </div>
     </section>
 
     <!-- 数据库：桌面端与仓库端之间不自动搬，只有这两个口子 -->
     <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>数据库</h3>
-      <p class="muted">
-        导出走的是一致性快照（含 WAL 里还没落盘的写入），拿到的是一个自包含的单文件；
-        导入会先做完整性与表结构校验，通过了也只是「暂存」，<b>重启后才应用</b>，
-        应用前会自动给现库留一份 <code>kh.db.pre-import-*</code> 备份。
-      </p>
       <div class="row"><span class="muted">位置</span><span class="mono">{{ dbInfo.path || '—' }}</span></div>
       <div class="row">
         <span class="muted">大小</span>
@@ -751,11 +787,8 @@
       </p>
 
       <!-- 换位置：桌面端专属。网页端既弹不出目录选择框，也没有指针文件供下次启动读回 -->
-      <div class="sub-head">改数据库位置</div>
-      <p class="muted">
-        目标目录里<b>已经有 <code>kh.db</code> 就直接改用</b>，没有则把当前库整份复制过去（一致性快照，原文件一律不动）。
-        两种情况都只是「排定」，<b>重启后才生效</b>。
-      </p>
+      <div class="sub-head">{{ txt('settings.db.moveTitle') }}</div>
+      <p class="muted">{{ txt('settings.db.moveNote') }}</p>
       <template v-if="isDesktop">
         <div class="row"><span class="muted">当前目录</span><span class="mono">{{ loc.dir || dbInfo.path || '—' }}</span></div>
         <div class="row"><span class="muted">取自</span><span>{{ loc.using_default ? '默认位置' : '自定义位置（指针文件里记着）' }}</span></div>
@@ -778,16 +811,12 @@
     <!-- 恢复出厂设置：清库不可逆，所以逐字确认 + 三次点击，误触不了 -->
     <section v-show="tab === 'about'" data-tab="about" class="card">
       <h3>恢复出厂设置</h3>
-      <p class="muted">
-        清空整份数据库：模型与提供方、全部会话与消息、用量记录、设置全部归零。
-        <b>不做任何备份，删了就找不回来</b>。想留底请先用上面的「导出数据库」。
-      </p>
       <template v-if="isDesktop">
         <div v-if="loc.reset_pending" class="row">
           <span class="muted">状态</span><span class="warn-text">已排定清空，重启后端时执行（这一步还没真的删）</span>
         </div>
         <label class="field">
-          <span>请逐字输入下面这句话</span>
+          <span>{{ txt('settings.factory.confirmLabel') }}</span>
           <input v-model="factoryPhrase" class="k-input" autocomplete="off" :placeholder="FACTORY_PHRASE" />
           <span class="muted phrase-hint">{{ FACTORY_PHRASE }}</span>
         </label>
@@ -816,7 +845,7 @@
     <AgentsEditor
       :open="gpOpen"
       :target="{ scope: 'global' }"
-      title="全局提示词（AGENTS.md）"
+      :title="txt('settings.agents.title')"
       @close="gpOpen = false"
       @saved="onPromptSaved"
     />
@@ -841,6 +870,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { aiApi, settingsApi } from '../../api';
 import { toast } from '../../stores/toast';
+import { txt } from '../../copy';
 import { toastErr, errFull } from '../../utils/errText';
 import KTabs from '../../ui/KTabs.vue';
 import KInput from '../../ui/KInput.vue';
@@ -852,6 +882,8 @@ import { uiPrefs } from '../../stores/prefs';
 import { soundApproval } from '../../utils/sound';
 import { promptDialog } from '../../stores/prompt';
 import { confirmDialog } from '../../stores/confirm';
+import { debugLog as dbg } from '../../stores/debuglog';
+import { isImeComposing } from '../../utils/ime';
 
 const tabs = [
   { id: 'general', label: '常规' },
@@ -925,13 +957,23 @@ async function gotoSetting(h) {
 const shell = ref('');
 const shellCandidates = ref([]);
 const shellCustom = ref('');
-const cmdTimeout = ref(360);
-const defaultContext = ref(0);
-// 默认值和后端一致（rl_retry_max / gw_retry_max 没设过时服务端按 16 算），
-// 界面上写 2、实际跑 16 那种「名实不符」别再犯。
-const rlRetryMax = ref(16);
-const gwRetryMax = ref(16);
+/* 这一组数字项一律「还没读到 = null」，输入框留空，不拿初值冒充真值。
+   原来写的是 ref(360) / ref(0) / ref(16) / ref(80)：只要 loadAll 里那段没跑成（接口失败、或在回填前就点了保存），
+   payload 就把这几个「看着像默认」的数原样写回服务端 —— 他 2026-10-11 撞的「默认上下文窗口怎么变成 0 了」就是这个，
+   库里真值 1000000 被冲成 0（而 0 在这个字段是**有意义的具体值**「不限」，不能拿来当兜底）。 */
+const cmdTimeout = ref(null);
+const defaultContext = ref(null);
+// 自动压缩阈值（占上下文窗口的百分比）。以前后端写死 80%，这里没有出口
+const compressThreshold = ref(null);
+const rlRetryMax = ref(null);
+const gwRetryMax = ref(null);
+// 读到过一次才准保存（那颗按钮在没读到之前是灰的，别让人对着空框点保存）
+const upstreamReady = ref(false);
 const approvalMode = ref('default');
+// FULL-SEND 要实验室总闸开着才摆出来（和会话下拉、控制台同一判据）
+const approvalChoices = computed(() =>
+  (uiPrefs.state.fullSend ? ['default', 'strict', 'exempt', 'fullsend'] : ['default', 'strict', 'exempt'])
+);
 const secretForm = ref('');
 const secrets = ref([]);
 const permMeta = ref({ kinds: [], lists: [], matches: [] });
@@ -997,6 +1039,24 @@ const labsSimple = computed(() => labs.filter((x) => !x.panel));
 function toggleLab(k) {
   labOn.value = { ...labOn.value, [k]: !labOn.value[k] };
   localStorage.setItem('nu_labs', JSON.stringify(labOn.value));
+}
+
+/* FULL-SEND 总闸：开它要过一次确认（这一档跳过一切审批与越级面），关它不用（往安全方向走不该设卡）。 */
+async function toggleFullSendLab() {
+  const to = !prefs.fullSend;
+  if (to) {
+    const okGo = await confirmDialog(
+      '打开 FULL-SEND 审批档？\n\n'
+      + '这只是让审批下拉里多出这一项，选中的会话才会生效。生效的会话里：任何操作直接执行、不弹卡，'
+      + '权限黑名单 / 高权限底线（关机重启、盘符与系统目录、全屏截取）/ Computer Use 放行 / 项目根与工作目录边界全部跳过。'
+      + 'KHarness 自己的数据目录仍然挡着。\n\n'
+      + 'AI 可以在你这台电脑上做任何它能做的事，出问题不会再有人来拦它。',
+      { title: '启用 FULL-SEND', danger: true, okText: '开启这一档' }
+    );
+    if (!okGo) return;
+  }
+  await savePref({ fullSend: to });
+  if (!to) toast('已关掉 FULL-SEND：用过它的会话自动降回「默认审批」', 'success');
 }
 
 /* ---------------- Computer Use（实验室 → 面板） ----------------
@@ -1188,8 +1248,12 @@ function cuSpecFromPointer(e) {
 }
 
 function onCaptureKey(e) {
-  e.preventDefault();
-  e.stopPropagation();
+  // 录入中不抢输入法那一下（合成中的按键属于候选词，见 utils/ime.js）
+  if (isImeComposing(e)) return;
+  const hasMod = CU_MOD_ORDER.some(([, prop]) => e[prop]);
+  // 没按修饰键时只提示、不吞键：以前这里无条件 preventDefault，于是「点了录入又去别处打字」
+  // 会把整页（含同页其他 tab 的输入框）的按键全吃掉，连 Ctrl+V 都发不出去，只能重启。
+  if (hasMod) { e.preventDefault(); e.stopPropagation(); }
   if (e.type !== 'keydown') return;
   const { spec, why } = cuSpecFromEvent(e);
   if (why) { cuHotkeyNote.value = why; return; }
@@ -1330,7 +1394,7 @@ onUnmounted(() => {
   clearTimeout(cuDetectTimer);
 });
 
-/* ---- 全局提示词（~/.kharness/AGENTS.md）：路径与状态从后端读，编辑在 AgentsEditor 弹窗里 ---- */
+/* ---- 全局系统提示词（~/.kharness/AGENTS.md）：路径与状态从后端读，编辑在 AgentsEditor 弹窗里 ---- */
 const gpOpen = ref(false);
 const gpInfo = ref({ path: '', exists: false, tokens: 0 });
 
@@ -1340,7 +1404,7 @@ async function loadGlobalPrompt() {
   } catch (e) {
     // 读不到路径也别空着：按同一套规则给个提示，用户至少知道该去哪儿放这份文件
     gpInfo.value = { path: '', exists: false, tokens: 0 };
-    toastErr(e, '读取全局提示词失败');
+    toastErr(e, '读取全局系统提示词失败');
   }
 }
 function onPromptSaved(d) {
@@ -1360,7 +1424,7 @@ async function setWhaleOn(v) {
   whaleOn.value = v;
   try {
     await aiApi.saveWhaleConfig({ enabled: v });
-    toast(v ? '已开启小鲸鱼挂件' : '已关闭小鲸鱼挂件（回到聊天页就看不见它了）', 'info', 2200);
+    toast(v ? txt('settings.whale.on') : txt('settings.whale.off'), 'info', 2200);
   } catch (e) {
     whaleOn.value = !v;
     toastErr(e, '挂件开关保存失败');
@@ -1407,7 +1471,7 @@ function shellLabel(c) {
 const shellItems = computed(() => shellCandidates.value.map((c) => ({ value: c.value, label: c.label || shellLabel(c.value) })));
 
 /**
- * 自定义 Shell 路径：立刻生效（不等「保存上游设置」那颗按钮）。
+ * 自定义 Shell 路径：立刻生效（不等那颗「保存配置」按钮）。
  * 服务端会 fs.accessSync(X_OK) 校验，填错路径直接 400 回来，不会把 Agent 的 Shell 设成跑不起来的东西。
  */
 async function applyShellCustom() {
@@ -1449,6 +1513,21 @@ async function loadAppInfo() {
 }
 const versionLabel = computed(() => (appInfo.value && appInfo.value.display) || '读取失败');
 
+/**
+ * DevTools：桌面端让外壳开这一扇窗自己的开发者工具（页面自己开不了）。
+ * 网页端（浏览器直连本机服务）里没有 window.khDesktop，浏览器也不允许网页唤起自己的 F12 ——
+ * 只说清该按哪个键，不给一个「点了没反应」的按钮。
+ */
+function openDevTools() {
+  const kd = window.khDesktop;
+  if (!kd || typeof kd.winCtl !== 'function') {
+    return toast('这是浏览器里打开的页面，打不开 DevTools：请按 F12（或 Ctrl+Shift+I）', 'warn', 6000);
+  }
+  Promise.resolve(kd.winCtl('devtools')).then((r) => {
+    if (r && r.ok === false) toast(`DevTools 没打开：${r.error || '外壳不认这个动作'}`, 'error', 6000);
+  }).catch((e) => toast(`DevTools 没打开：${e?.message || e}`, 'error', 6000));
+}
+
 async function loadAll() {
   // 逐项独立加载：任何一项失败都要说出来，别静默用默认值盖住真值
   const bad = [];
@@ -1467,14 +1546,18 @@ async function loadAll() {
   } catch { bad.push('Shell'); }
   try {
     const st = await settingsApi.getAll();
-    cmdTimeout.value = Number(st?.cmd_timeout_seconds ?? 360);
-    defaultContext.value = Number(st?.default_context_limit ?? 0);
-    rlRetryMax.value = Number(st?.rl_retry_max ?? 16);
-    gwRetryMax.value = Number(st?.gw_retry_max ?? 16);
+    // 键不在（或值不是数）就留 null：那是「服务端还没存过这一项」，不是「值为 0」
+    const num = (v) => { const n = Number(v); return v === undefined || v === null || v === '' || !Number.isFinite(n) ? null : n; };
+    cmdTimeout.value = num(st?.cmd_timeout_seconds);
+    defaultContext.value = num(st?.default_context_limit);
+    rlRetryMax.value = num(st?.rl_retry_max);
+    compressThreshold.value = num(st?.compress_threshold);
+    gwRetryMax.value = num(st?.gw_retry_max);
+    upstreamReady.value = true;
   } catch { bad.push('上游设置'); }
   try {
     const am = await aiApi.getApprovalMode();
-    approvalMode.value = am?.mode || 'default';
+    approvalMode.value = (am?.mode === 'fullsend' && !uiPrefs.state.fullSend) ? 'default' : (am?.mode || 'default');
   } catch { bad.push('审批模式'); }
   try {
     const s = await aiApi.getSecrets();
@@ -1524,6 +1607,11 @@ async function savePref(patch) {
   if (patch.volume !== undefined) patch.volume = Math.min(1, Math.max(0, Number(patch.volume) || 0));
   if (patch.imgMaxSide !== undefined) patch.imgMaxSide = Math.min(8192, Math.max(0, Math.round(Number(patch.imgMaxSide) || 0)));
   if (patch.repeatBreak !== undefined) patch.repeatBreak = Math.min(20, Math.max(2, Math.round(Number(patch.repeatBreak) || 3)));
+  // 0 是有效值（不限），不能像上面那几条一样用 || 兜默认数，否则「填 0」会被吃回 5
+  if (patch.agentParallel !== undefined) {
+    const n = Math.round(Number(patch.agentParallel));
+    patch.agentParallel = Number.isFinite(n) ? Math.min(50, Math.max(0, n)) : 5;
+  }
   if (patch.stallMin !== undefined) patch.stallMin = Math.min(2000, Math.max(60, Math.round(Number(patch.stallMin) || 240)));
   const okk = await uiPrefs.save(patch);
   if (okk && patch.volume !== undefined && patch.sound !== false) soundApproval();
@@ -1563,14 +1651,29 @@ function previewSound() {
 }
 
 async function saveUpstream() {
-  const payload = {
-    cmd_timeout_seconds: Number(cmdTimeout.value) || 0,
-    default_context_limit: Number(defaultContext.value) || 0,
-    rl_retry_max: Number(rlRetryMax.value) || 0,
-    gw_retry_max: Number(gwRetryMax.value) || 0,
-  };
+  // 只带「有值」的项：null（没读到 / 他手动清空了输入框）一律不提交 ——
+  // 提交下去就是把服务端的真值覆盖成前端编的那个 0，这正是上次丢 1000000 的过程。
+  // 想真的设成 0（不限）就明明白白填 0，那是有效值，不是空。
+  const payload = {};
+  for (const [key, val] of [['cmd_timeout_seconds', cmdTimeout.value], ['default_context_limit', defaultContext.value],
+    ['compress_threshold', compressThreshold.value], ['rl_retry_max', rlRetryMax.value], ['gw_retry_max', gwRetryMax.value]]) {
+    if (val !== null && val !== undefined && String(val).trim() !== '') payload[key] = Number(val);
+  }
+  if (!Object.keys(payload).length) {
+    return toast('这些数字项一个都没填，也没读到服务端现值 —— 没有要保存的内容。刷新页面重试，或先填要改的那一项。', 'warn', 4200);
+  }
   try {
     await settingsApi.update(payload);
+    /* 回 200「设置已保存」不等于真存进去了：后端版本比前端旧时，它认不下新键、
+       旧代码会静默丢掉那一项照样回成功 —— 界面上就是「填了、保存了、刷新又空白」。
+       所以按提交项逐条读回来对一遍，对不上就点名，别让人对着一个没写进去的输入框猜。 */
+    const st = await settingsApi.getAll();
+    const miss = Object.keys(payload).filter((k) => String(st?.[k]) !== String(payload[k]));
+    if (miss.length) {
+      const got = miss.map((k) => `${k}=${st?.[k] === undefined ? '（库里没有这一项）' : st[k]}`).join('、');
+      return toastErr(new Error(`提交：${JSON.stringify(payload)}；读回：${got}`),
+        txt('settings.notStored', { keys: miss.join('、') }), 8000, { where: 'settings.saveUpstream' });
+    }
   } catch (e) {
     return toastErr(e, '上游设置保存失败');
   }
@@ -1582,14 +1685,24 @@ async function saveUpstream() {
     }
   }
   localStorage.setItem('nu_shell', shell.value || '');
-  localStorage.setItem('nu_cmd_timeout', String(cmdTimeout.value));
-  localStorage.setItem('nu_ctx', String(defaultContext.value));
-  localStorage.setItem('nu_rl', String(rlRetryMax.value));
+  if (cmdTimeout.value !== null) localStorage.setItem('nu_cmd_timeout', String(cmdTimeout.value));
+  if (defaultContext.value !== null) localStorage.setItem('nu_ctx', String(defaultContext.value));
+  if (rlRetryMax.value !== null) localStorage.setItem('nu_rl', String(rlRetryMax.value));
   await loadAll();   // 用服务端真值回填，保存后看到的和刷新后看到的一致
   toast('已保存', 'success');
 }
 
 async function setApproval(mode) {
+  if (mode === 'fullsend') {
+    const okGo = await confirmDialog(
+      '把「全局默认审批」设成 FULL-SEND？\n\n'
+      + '此后每一条没单独设过审批模式的会话都直接执行一切操作 —— 跳过黑名单、高权限底线（含全屏截取）、'
+      + 'Computer Use 放行与项目根边界。只有 KHarness 自己的数据目录仍然挡着。\n\n'
+      + '想只在个别会话里用，就别动这里，去那条会话的下拉里选。',
+      { title: '全局默认 → FULL-SEND', danger: true, okText: '设为全局默认' }
+    );
+    if (!okGo) return;
+  }
   try {
     await aiApi.setApprovalMode(mode);
     approvalMode.value = mode;
@@ -1740,7 +1853,7 @@ async function onPickSkillFile(ev) {
 
 async function removeSkill(s) {
   // 服务端是 unlinkSync，没有回收站：这个 .md 删掉就真的没了
-  if (!(await confirmDialog(`删除技能「${s.name}」？文件直接从技能目录移除，不进回收站，找不回来。`, { title: '删除技能', danger: true }))) return;
+  if (!(await confirmDialog(`删除技能「${s.name}」？文件直接从技能目录移除，不进回收站，找不回来。`, { title: '删除技能', danger: true, okText: '删除' }))) return;
   try {
     await aiApi.deleteSkill(s.name);
     skills.value = skills.value.filter((x) => x.name !== s.name);
@@ -1997,7 +2110,7 @@ async function restartNow() {
   }
 }
 
-/* ---------- 改数据库位置 / 恢复出厂设置（都只在桌面端开放） ---------- */
+/* ---------- 迁移数据库 / 恢复出厂设置（都只在桌面端开放） ---------- */
 const FACTORY_PHRASE = '我确认清空数据库，并理解删除后无法找回';
 const loc = ref({});
 const locBusy = ref(false);
@@ -2039,7 +2152,7 @@ async function chooseDbDir() {
   const dir = String(picked.dir || '');
   const ok = await confirmDialog(
     `数据库将改到：\n${dir}\n\n那里已有 kh.db 就直接改用，否则先复制一份过去。原目录的文件不会删除，重启后生效。`,
-    { title: '改数据库位置', danger: true },
+    { title: txt('settings.db.moveTitle'), danger: true, okText: '改位置' },
   );
   if (!ok) return;
   locBusy.value = true;
@@ -2068,7 +2181,7 @@ async function factoryConfirm() {
   }
   const ok = await confirmDialog(
     '最后一次确认：重启后数据库将被清空且没有备份，模型配置、全部会话与消息、用量记录、设置都找不回来。',
-    { title: '恢复出厂设置', danger: true },
+    { title: '恢复出厂设置', danger: true, okText: '清空数据库' },
   );
   if (!ok) return;
   factoryClicks.value = 3;
@@ -2151,7 +2264,7 @@ async function testTool(t) {
 </script>
 
 <style scoped>
-/* 全局提示词那一行：路径可能很长，省略号收，鼠标悬停看全 */
+/* 全局系统提示词那一行：路径可能很长，省略号收，鼠标悬停看全 */
 .gp-note { margin: 0 0 4px; line-height: 1.7; }
 .gp-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .gp-path {
@@ -2290,13 +2403,13 @@ pre.cu-err {
 /* 勾选项：方框和文字并排，整行可点 */
 .field.line { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
 .field.line span { font-size: 12px; color: var(--text-2); }
-/* 卡带检测：勾选框和它的数字输入同一行（数字不再带说明文字，下面那段 note 已经讲清了）。
+/* 自动中止死循环：勾选框和它的数字输入同一行（阈值没有单独的说明段，鼠标停上去看 title 就够）。
    输入框必须钉死 flex：全局 `input.k-input { width: 100% }` 会把它撑满整行，
    把旁边的文字挤成一字一行（就是截图里那个竖排）。 */
 .stall-line { justify-content: space-between; cursor: default; }
 .stall-line > .field.line { flex: 1 1 auto; min-width: 0; }
 .stall-line > .k-input { flex: 0 0 auto; }
-/* 自定义 Shell：输入框 + 那颗「用这个」贴在一起，路径长会截断（有 title 可看全） */
+/* 自定义 Shell：输入框 + 那颗「确认」贴在一起，路径长会截断（有 title 可看全） */
 .shell-custom { display: flex; align-items: flex-end; gap: 8px; }
 .shell-custom :deep(.k-input) { flex: 1 1 auto; min-width: 0; }
 .shell-custom .k-btn { flex: 0 0 auto; margin-bottom: 2px; }
@@ -2386,6 +2499,12 @@ h4.sub { margin: 16px 0 8px; font-size: 13px; color: var(--text-2); }
 }
 .btn.sm { padding: 4px 8px; font-size: 11px; }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
+/* FULL-SEND 那颗：常态红边红字，选中实心红 —— 和旁边三档一眼分得开 */
+.btn.ap-fs-btn { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
+/* 「调试」那两行：一颗键 + 一句说明，说明占剩下的宽度 */
+.dbg-row .btn i { margin-right: 6px; }
+.dbg-row .muted { flex: 1; min-width: 0; line-height: 1.5; }
+.btn.ap-fs-btn.primary { background: var(--danger, #e5484d); color: #fff; border-color: transparent; }
 .btn.danger { color: var(--danger); }
 
 /* 主题选择卡：预览条用当前主题自己的令牌，所以选中的那张一眼能看出效果 */

@@ -78,6 +78,19 @@ let win = null;
  */
 const FRAMELESS = true;
 
+/* ── 别让 Windows 的「遮挡判定」把我们的窗口当成没人看 ──────────────────────────
+   实测（同一台机器、同一份装机版，只换这一条开关）：
+     不带  → document.visibilityState = hidden、document.hidden = true（窗口明明在屏上、没最小化）
+     带上  → visible / false，rAF 3 秒 495 帧 = 165fps、p95 6ms
+   判成「没人看」之后 Chromium 会按后台页节流计时器与动画 —— 我们流式那条 30ms 合批、光标、
+   tok/s 全靠计时器，于是表现为「有个会话在回答就掉帧」。这条不是推测，是上面那组读数。
+   frameless + 自绘标题栏 + 多屏（左屏 workArea 是 -1600,293 1600x900）正是这套判据最容易翻车的形状。
+   这三条开关也是我这轮量性能时必须带才拿得到帧读数的同一套（_tmp_kh77/perf_probe.js）。
+   注意 disable-features 只能设一次，多个特性要逗号并在一起。 */
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 /** 顶栏「编辑」菜单认的几个命令（webContents 上的原生方法名）。只当白名单用，页面点不到别的。 */
 const EDIT_COMMANDS = {
   undo: 'undo',
@@ -305,6 +318,12 @@ function createWindow(url) {
       webviewTag: true,
     },
   });
+  /* 位置我们从不指定（只给宽高），是 Windows 按这扇窗上次的落点级联出来的 —— 拔过屏、换过分辨率之后
+     那个落点可能整扇在每块屏之外，看不见也抓不住。规则保守：露得住就不动他的习惯位置。 */
+  try {
+    const fixed = require('./winplace.js').placeBounds(win.getBounds(), screen.getAllDisplays());
+    if (fixed) { win.setBounds(fixed); log(`[desktop] 窗口落在所有屏幕之外，拉回 ${JSON.stringify(fixed)}`); }
+  } catch (e) { /* 读不到屏幕信息就别动它，别为这个不开窗 */ }
   win.loadURL(url);
 
   // 外链一律交给系统浏览器，别把窗口变成网页浏览器
@@ -1333,6 +1352,10 @@ if (!gotLock) {
         log(`[desktop] 缩放 ${what} → ${(f * 100).toFixed(0)}%`);
       } else if (act === 'reload') {
         w.webContents.reload();
+      } else if (act === 'devtools') {
+        // 「调试」板块那颗 DevTools 键：开的是**发信那一扇窗**自己的开发者工具（页面里开不了 F12）。
+        // 只开不关由 Electron 自己管（它自己就是 toggle），关窗口时 DevTools 跟着走。
+        w.webContents.toggleDevTools();
       } else {
         return { ok: false, error: `未知窗口动作 ${act}` };
       }
