@@ -103,3 +103,4 @@ MCP 接入见 [MCP.md](MCP.md)。
 
 本项目参考和使用了 https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget 的部分源码，并遵守其协议规范。
  感谢 Rainboow 对本项目的大力支持👍
+ 感谢 Mio 对本项目Linux下兼容性与漏洞修复工作的大力支持👍
