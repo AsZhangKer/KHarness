@@ -7,19 +7,36 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
+/**
+ * 桥引擎：接收 KHarness 推来的「审批 / ask_user 提问 / 继续」事件，手机端裁决后回执。
+ * 协议与参考项目 JsonBridge 完全一致（发现广播 + TCP 帧 + 握手配对 + event/reply）。
+ */
 object BridgeEngine {
     private const val MULTICAST_GROUP = "239.255.42.99"
     private const val DISCOVERY_PORT = 37020
     private const val MAX_EVENTS = 50
 
-    data class Event(val seq: Int, val text: String, val ts: Long)
+    /** 一条待处理事件（审批或提问） */
+    data class Pending(
+        val seq: Int,
+        val kind: String,        // "approval" | "question"
+        val id: String,          // KHarness 侧的事件 id
+        val title: String,       // 标题（工具名 / "提问"）
+        val body: String,        // 正文（审批原因 / 问题）
+        val options: List<String>, // 提问选项（审批为空）
+        val chatId: Long?,
+        val ts: Long
+    )
 
     data class UiState(
         val status: String = "idle",
         val sid: String? = null,
         val host: String? = null,
         val cid: String = "",
-        val events: List<Event> = emptyList()
+        /** 当前待处理事件（队首） */
+        val pending: Pending? = null,
+        /** 历史事件（已处理） */
+        val events: List<String> = emptyList()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -29,6 +46,7 @@ object BridgeEngine {
     private var discovery: DiscoveryListener? = null
     private var session: SenderSession? = null
     private var appContext: Context? = null
+    private val queue = ArrayDeque<Pending>()
 
     @Synchronized
     fun start(ctx: Context) {
@@ -83,14 +101,79 @@ object BridgeEngine {
     }
 
     private fun onEvent(seq: Int, payload: JSONObject) {
-        val text = payload.optString("text", payload.toString())
-        val ev = Event(seq = seq, text = text, ts = System.currentTimeMillis())
-        val list = (_state.value.events + ev).takeLast(MAX_EVENTS)
+        val kind = payload.optString("kind", "unknown")
+        if (kind != "approval" && kind != "question") {
+            // 未知类型：记历史但不进队列
+            appendHistory("未知事件 seq=$seq")
+            return
+        }
+        val id = payload.optString("id", "")
+        val title = when (kind) {
+            "approval" -> "审批 · ${payload.optString("tool", "")}"
+            else -> "AI 提问"
+        }
+        val body = when (kind) {
+            "approval" -> payload.optString("reason", payload.optString("tool", ""))
+            else -> payload.optString("question", "")
+        }
+        val options = mutableListOf<String>()
+        val opts = payload.optJSONArray("options")
+        if (opts != null) {
+            for (i in 0 until opts.length()) options.add(opts.optString(i))
+        }
+        val chatId = if (payload.has("chat_id")) payload.optLong("chat_id") else null
+        val item = Pending(
+            seq = seq, kind = kind, id = id, title = title, body = body,
+            options = options, chatId = chatId, ts = System.currentTimeMillis()
+        )
+        // 审批/提问入队，队首显示
+        queue.addLast(item)
+        if (_state.value.pending == null) _state.value = _state.value.copy(pending = queue.firstOrNull())
+    }
+
+    /** 批准（审批） */
+    fun approve() {
+        val p = _state.value.pending ?: return
+        sendReply(p, JSONObject().put("ok", true))
+        dismissPending(p)
+    }
+
+    /** 拒绝（审批） */
+    fun reject() {
+        val p = _state.value.pending ?: return
+        sendReply(p, JSONObject().put("ok", false))
+        dismissPending(p)
+    }
+
+    /** 回答提问（选选项或输入文字） */
+    fun answer(text: String) {
+        val p = _state.value.pending ?: return
+        if (p.kind != "question") return
+        sendReply(p, JSONObject().put("answered", true).put("answer", text))
+        dismissPending(p)
+    }
+
+    /** 取消提问 */
+    fun cancelQuestion() {
+        val p = _state.value.pending ?: return
+        if (p.kind != "question") return
+        sendReply(p, JSONObject().put("cancel", true))
+        dismissPending(p)
+    }
+
+    private fun dismissPending(p: Pending) {
+        queue.removeAll { it.seq == p.seq }
+        appendHistory("${if (p.kind == "approval") "审批" else "提问"}已处理：${p.title}")
+        _state.value = _state.value.copy(pending = queue.firstOrNull())
+    }
+
+    private fun appendHistory(text: String) {
+        val list = (_state.value.events + text).takeLast(MAX_EVENTS)
         _state.value = _state.value.copy(events = list)
     }
 
-    fun sendReply(seq: Int, payload: JSONObject) {
-        session?.sendReply(seq, payload)
+    private fun sendReply(p: Pending, payload: JSONObject) {
+        session?.sendReply(p.seq, payload)
     }
 
     @Synchronized
@@ -98,6 +181,7 @@ object BridgeEngine {
         discovery?.stop(); discovery = null
         session?.stop(); session = null
         scope?.cancel(); scope = null
+        queue.clear()
         _state.value = UiState(cid = _state.value.cid)
     }
 
