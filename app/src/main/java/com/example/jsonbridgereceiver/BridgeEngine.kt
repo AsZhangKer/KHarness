@@ -77,17 +77,23 @@ object BridgeEngine {
                 onError = { msg -> _state.value = _state.value.copy(status = "discovery: $msg") }
             )
         }
+
+        // 先用上次记住的电脑直连一次：手机在后台时组播包常被系统丢掉，
+        // 只靠发现广播会出现「服务活着却一直连不上」，事件就在空窗里被后端丢弃。
+        LastPeer.load(app)?.let { p ->
+            LogBus.i("engine", "直连上次的电脑 ${p.host}:${p.port}")
+            connectTo(p.host, p.port, p.sid, p.name)
+        }
     }
 
     private fun onDiscovered(found: DiscoveryListener.Found) {
         val app = appContext ?: return
-        val s = scope ?: return
         val cur = _state.value
 
-        val alreadyHere = cur.sid == found.sid && cur.host == found.host
-        val busy = cur.status == "connecting" || cur.status == "connected"
-        // 发现广播每秒一条：已在连接/已连接时直接跳过，避免日志被心跳刷屏
-        if (alreadyHere && busy) return
+        // 同一台电脑、且会话仍在跑（含正在退避重连）→ 不重建，避免和内部自动重连打架。
+        // 只有目标变了、或会话已停（如握手被拒）才重建。
+        val sameTarget = cur.sid == found.sid && cur.host == found.host
+        if (sameTarget && session?.isRunning() == true) return
 
         // 目标变化时立即记一条；同一目标的重试每 10 秒最多记一条（防重连风暴刷屏）
         val key = "${found.sid}@${found.host}"
@@ -98,28 +104,32 @@ object BridgeEngine {
             lastDiscoveryLogTs = now
         }
 
-        session?.stop()
+        LastPeer.save(app, LastPeer.Peer(found.host, found.tcpPort, found.sid, found.name))
+        connectTo(found.host, found.tcpPort, found.sid, found.name)
+    }
 
+    /** 建立（或切换）到指定电脑的会话；旧会话先停掉 */
+    private fun connectTo(host: String, port: Int, sid: String, name: String) {
+        val app = appContext ?: return
+        val s = scope ?: return
+        session?.stop()
         val identity = AppIdentity.get(app)
         val sess = SenderSession(
-            host = found.host,
-            port = found.tcpPort,
-            sid = found.sid,
+            host = host,
+            port = port,
+            sid = sid,
             cid = identity.cid,
             token = identity.token,
             scope = s,
             onEvent = { seq, payload -> onEvent(seq, payload) },
             onState = { st ->
+                // 状态变化记录（退避重连期间连接/断开会来回切，属正常）
                 LogBus.i("session", "连接状态 → $st")
                 _state.value = _state.value.copy(status = st)
             }
         )
         session = sess
-        _state.value = _state.value.copy(
-            status = "connecting",
-            sid = found.sid,
-            host = found.host
-        )
+        _state.value = _state.value.copy(status = "connecting", sid = sid, host = host)
         sess.start()
     }
 
@@ -229,6 +239,7 @@ object BridgeEngine {
         session?.stop(); session = null
         LogBus.w("engine", "重置配对，cid / token 将重新生成")
         AppIdentity.get(ctx).reset(ctx)
+        LastPeer.clear(ctx)     // 连记住的电脑也一起忘掉，重新走一次发现
         val identity = AppIdentity.get(ctx)
         _state.value = UiState(status = "idle", cid = identity.cid)
     }
