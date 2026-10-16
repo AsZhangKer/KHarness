@@ -48,6 +48,13 @@ object BridgeEngine {
     private var appContext: Context? = null
     private val queue = ArrayDeque<Pending>()
 
+    // 「发现电脑」日志节流：组播每秒一条，避免把有效日志刷掉
+    @Volatile
+    private var lastDiscoveryKey: String? = null
+
+    @Volatile
+    private var lastDiscoveryLogTs: Long = 0L
+
     @Synchronized
     fun start(ctx: Context) {
         if (scope != null) return
@@ -56,6 +63,7 @@ object BridgeEngine {
 
         val identity = AppIdentity.get(app)
         _state.value = _state.value.copy(cid = identity.cid)
+        LogBus.i("engine", "服务启动，cid=${identity.cid.take(8)}…")
 
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
@@ -76,7 +84,17 @@ object BridgeEngine {
 
         val alreadyHere = cur.sid == found.sid && cur.host == found.host
         val busy = cur.status == "connecting" || cur.status == "connected"
+        // 发现广播每秒一条：已在连接/已连接时直接跳过，避免日志被心跳刷屏
         if (alreadyHere && busy) return
+
+        // 目标变化时立即记一条；同一目标的重试每 10 秒最多记一条（防重连风暴刷屏）
+        val key = "${found.sid}@${found.host}"
+        val now = System.currentTimeMillis()
+        if (key != lastDiscoveryKey || now - lastDiscoveryLogTs > 10_000L) {
+            LogBus.i("engine", "发现电脑「${found.name}」@ ${found.host}:${found.tcpPort}")
+            lastDiscoveryKey = key
+            lastDiscoveryLogTs = now
+        }
 
         session?.stop()
 
@@ -89,7 +107,10 @@ object BridgeEngine {
             token = identity.token,
             scope = s,
             onEvent = { seq, payload -> onEvent(seq, payload) },
-            onState = { st -> _state.value = _state.value.copy(status = st) }
+            onState = { st ->
+                LogBus.i("session", "连接状态 → $st")
+                _state.value = _state.value.copy(status = st)
+            }
         )
         session = sess
         _state.value = _state.value.copy(
@@ -102,8 +123,10 @@ object BridgeEngine {
 
     private fun onEvent(seq: Int, payload: JSONObject) {
         val kind = payload.optString("kind", "unknown")
+        LogBus.i("engine", "收到事件 seq=$seq kind=$kind")
         if (kind != "approval" && kind != "question") {
             // 未知类型：记历史但不进队列
+            LogBus.w("engine", "未知事件类型 kind=$kind，已忽略")
             appendHistory("未知事件 seq=$seq")
             return
         }
@@ -173,6 +196,14 @@ object BridgeEngine {
     }
 
     private fun sendReply(p: Pending, payload: JSONObject) {
+        // 摘要：批准 / 拒绝 / 回答内容 / 取消
+        val brief = when {
+            payload.has("ok") -> if (payload.optBoolean("ok")) "批准" else "拒绝"
+            payload.has("answer") -> "回答: ${payload.optString("answer")}"
+            payload.has("cancel") -> "取消"
+            else -> "回执"
+        }
+        LogBus.i("engine", "发送回执 seq=${p.seq} · $brief")
         session?.sendReply(p.seq, payload)
     }
 
@@ -182,11 +213,13 @@ object BridgeEngine {
         session?.stop(); session = null
         scope?.cancel(); scope = null
         queue.clear()
+        LogBus.i("engine", "服务停止")
         _state.value = UiState(cid = _state.value.cid)
     }
 
     fun resetPairing(ctx: Context) {
         session?.stop(); session = null
+        LogBus.w("engine", "重置配对，cid / token 将重新生成")
         AppIdentity.get(ctx).reset(ctx)
         val identity = AppIdentity.get(ctx)
         _state.value = UiState(status = "idle", cid = identity.cid)

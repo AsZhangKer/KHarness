@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.JsonBridgeReceiver" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 深色无标题栏主题：与 Compose 深色界面一致，避免冷启动闪白 -->
+    <style name="Theme.JsonBridgeReceiver" parent="android:Theme.Material.NoActionBar" />
 </resources>
