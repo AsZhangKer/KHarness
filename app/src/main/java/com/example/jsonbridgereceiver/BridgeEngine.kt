@@ -136,6 +136,23 @@ object BridgeEngine {
     private fun onEvent(seq: Int, payload: JSONObject) {
         val kind = payload.optString("kind", "unknown")
         LogBus.i("engine", "收到事件 seq=$seq kind=$kind")
+        // 电脑端已裁决的回执：把对应 id 的卡片撤下。
+        // 没有这个分支时：人在电脑上点了批准/拒绝/回答，手机那张卡会一直挂着，点一下才发现已失效。
+        if (kind == "resolved") {
+            val rid = payload.optString("id", "")
+            val forKind = payload.optString("for", "")
+            val matched = queue.count { it.id == rid && (forKind.isEmpty() || it.kind == forKind) }
+            if (matched > 0) {
+                queue.removeAll { it.id == rid && (forKind.isEmpty() || it.kind == forKind) }
+                val label = if (forKind == "question") "提问" else "审批"
+                appendHistory("电脑端已处理该$label，本机卡片已撤下")
+                LogBus.i("engine", "电脑端已裁决 $forKind/$rid，撤下 $matched 张卡")
+                _state.value = _state.value.copy(pending = queue.firstOrNull(), queued = queue.size)
+            } else {
+                LogBus.i("engine", "电脑端已裁决 $forKind/$rid（本机无对应卡片）")
+            }
+            return
+        }
         if (kind != "approval" && kind != "question") {
             // 未知类型：记历史但不进队列
             LogBus.w("engine", "未知事件类型 kind=$kind，已忽略")
