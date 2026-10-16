@@ -33,8 +33,10 @@ object BridgeEngine {
         val sid: String? = null,
         val host: String? = null,
         val cid: String = "",
-        /** 当前待处理事件（队首） */
+        /** 当前待处理事件（队首，即界面上正在显示的那条） */
         val pending: Pending? = null,
+        /** 待处理事件总数（用于通知里的"共 N 条"） */
+        val queued: Int = 0,
         /** 历史事件（已处理） */
         val events: List<String> = emptyList()
     )
@@ -151,7 +153,10 @@ object BridgeEngine {
         )
         // 审批/提问入队，队首显示
         queue.addLast(item)
-        if (_state.value.pending == null) _state.value = _state.value.copy(pending = queue.firstOrNull())
+        _state.value = _state.value.copy(
+            pending = queue.firstOrNull(),
+            queued = queue.size
+        )
     }
 
     /** 批准（审批） */
@@ -187,7 +192,10 @@ object BridgeEngine {
     private fun dismissPending(p: Pending) {
         queue.removeAll { it.seq == p.seq }
         appendHistory("${if (p.kind == "approval") "审批" else "提问"}已处理：${p.title}")
-        _state.value = _state.value.copy(pending = queue.firstOrNull())
+        _state.value = _state.value.copy(
+            pending = queue.firstOrNull(),
+            queued = queue.size
+        )
     }
 
     private fun appendHistory(text: String) {

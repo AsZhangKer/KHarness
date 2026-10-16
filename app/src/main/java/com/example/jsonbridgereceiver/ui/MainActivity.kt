@@ -30,11 +30,17 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.jsonbridgereceiver.AppForeground
 import com.example.jsonbridgereceiver.BridgeEngine
 import com.example.jsonbridgereceiver.BridgeService
+import com.example.jsonbridgereceiver.KeepAlive
 import com.example.jsonbridgereceiver.LogBus
 import com.example.jsonbridgereceiver.LogEntry
+import com.example.jsonbridgereceiver.Notifier
 
 class MainActivity : ComponentActivity() {
 
@@ -63,6 +69,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** 回前台：标记为可见，并撤掉通知栏里的提醒（人已经在看了） */
+    override fun onStart() {
+        super.onStart()
+        AppForeground.onActivityStart()
+        BridgeService.onAppForeground(this)
+    }
+
+    /** 切后台：标记不可见；若仍有未处理事件，此刻补弹提醒（前台时被有意压掉的那些） */
+    override fun onStop() {
+        AppForeground.onActivityStop()
+        BridgeService.refreshAlertIfNeeded(this)
+        super.onStop()
     }
 }
 
@@ -99,6 +119,7 @@ fun ReceiverScreen() {
     var answerText by remember { mutableStateOf("") }
     var lastError by remember { mutableStateOf<String?>(null) }
     var showLogs by remember { mutableStateOf(false) }
+    var showKeepAlive by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -119,6 +140,10 @@ fun ReceiverScreen() {
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("后台常驻设置") },
+                                onClick = { showKeepAlive = true; menuOpen = false }
+                            )
                             DropdownMenuItem(
                                 text = { Text("启动服务") },
                                 onClick = { BridgeService.start(ctx); menuOpen = false }
@@ -189,6 +214,123 @@ fun ReceiverScreen() {
 
     if (showLogs) {
         LogDialog(onDismiss = { showLogs = false })
+    }
+
+    if (showKeepAlive) {
+        KeepAliveDialog(onDismiss = { showKeepAlive = false })
+    }
+}
+
+/**
+ * 后台常驻设置：电池优化白名单 + 厂商自启动管理入口。
+ * 两者状态实时读取（用户从系统设置返回后会重新组合），避免显示过期状态。
+ */
+@Composable
+private fun KeepAliveDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    // 用 resume 计数器强制在从系统设置返回时重新读取状态
+    var probe by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) probe++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val batteryOk = remember(probe) { KeepAlive.isIgnoringBatteryOptimizations(ctx) }
+    val notifOk = remember(probe) { Notifier.canPost(ctx) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("后台常驻设置") },
+        text = {
+            Column {
+                Text(
+                    "手机端需要在后台保持运行，才能及时收到电脑推来的审批与提问。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(14.dp))
+
+                SettingRow(
+                    title = "电池优化白名单",
+                    desc = if (batteryOk) "已放行，不会被系统冻结" else "未放行，锁屏后可能收不到提醒",
+                    ok = batteryOk,
+                    actionText = if (batteryOk) null else "去设置",
+                    onAction = { KeepAlive.requestIgnoreBatteryOptimizations(ctx) }
+                )
+                Spacer(Modifier.height(10.dp))
+                SettingRow(
+                    title = "通知权限",
+                    desc = if (notifOk) "已开启，新事件会弹提醒" else "未开启，收不到新事件提醒",
+                    ok = notifOk,
+                    actionText = if (notifOk) null else "去开启",
+                    onAction = { KeepAlive.openAppDetailSettings(ctx) }
+                )
+                Spacer(Modifier.height(10.dp))
+                SettingRow(
+                    title = "自启动管理",
+                    desc = "部分手机需手动允许本应用自启动（开机后自动恢复监听）",
+                    // 系统没有查询"是否已允许自启动"的 API，这里只能给入口、不能给状态，
+                    // 故用中性图标 rather than 绿勾，避免让用户误以为已经开好了
+                    ok = null,
+                    actionText = "去设置",
+                    onAction = { KeepAlive.openAutoStartSettings(ctx) }
+                )
+
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    "提示：从最近任务里划掉本应用不影响后台监听。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("完成") }
+        }
+    )
+}
+
+/** 一行设置项：状态图标 + 标题 + 说明 + 可选操作按钮。ok = null 表示该项无法探测状态，只给入口 */
+@Composable
+private fun SettingRow(
+    title: String,
+    desc: String,
+    ok: Boolean?,
+    actionText: String?,
+    onAction: () -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            when (ok) {
+                true -> Icons.Filled.CheckCircle
+                false -> Icons.Filled.Warning
+                null -> Icons.Filled.Info
+            },
+            contentDescription = null,
+            tint = when (ok) {
+                true -> ColConnected
+                false -> ColWarn
+                null -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (actionText != null) {
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onAction) { Text(actionText) }
+        }
     }
 }
 
