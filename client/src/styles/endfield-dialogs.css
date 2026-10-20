@@ -1,0 +1,509 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   终末地 · 弹窗（母本原文搬运）
+   ---------------------------------------------------------------------------
+   他 2026-10-20 的原话：「弹窗、按钮直接照搬，改改上面的内容就可以！别仿！别自己设计 css！」
+   ⇒ 本文件就是把四份母本 <style> 里的声明**逐字搬过来**，只做三处机械改动，不设计任何值：
+
+     CHANGE 1  作用域前缀：每条规则前加 `:root[data-theme='endfield']`（与 endfield-masters.css 同一约定）
+     CHANGE 2  外壳类名：母本的 .banner / .unlock / .dialog / .wrap → .efd-banner / .efd-dialog / .efd-panel / .efd-form
+               （母本这几个短名在 client 里已被别处占用；只换外壳名，面板与按钮的子件名一个没动）
+     CHANGE 3  外壳定位：母本是 `position:absolute; left:…rem; top:…rem`（它钉在一张 1920×1200 画布上），
+               弹窗要由父级 flex 居中 ⇒ 只把 left/top 归零、position 改 relative。
+               **宽度/高度/圆角/面色/描边/影/字号/坐标一个数都没改。**
+
+   缩放：母本自己的旋钮就是外壳上的 `--k`（默认 .1rem = 设计稿 1px），
+   本文件把它交给调用点用 px 传（`style="--k: 0.55px"`），母本的比例关系原样保留。
+
+   四份母本：
+     弹窗 · 普通长条横幅按钮框.html  →  .efd-banner（横幅框：三色段 + 三角 kicker + 阶梯斜纹 + 底部基线）
+     弹窗 · 危险解锁框.html          →  .efd-dialog（居中框：黄标头 + 挂锁 + 双勾选行）
+     弹窗 · 更多文字面板框.html      →  .efd-panel （面板框：深标头 + 点阵 + 阶梯字水印）
+     重命名对话框.html               →  .efd-form   （表单框：白卡 + 标题 + 胶囊输入 + 两颗按钮）
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   壳（CHANGE 2 / 3 落点）
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .efd-banner,
+:root[data-theme='endfield'] .efd-dialog,
+:root[data-theme='endfield'] .efd-panel,
+:root[data-theme='endfield'] .efd-form {
+  position: relative;
+  left: auto;
+  top: auto;
+  --k: 0.6px;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   一 · 横幅框（母本：WINDOW/弹窗 · 普通长条横幅按钮框.html）
+   面板宽 1920k 高 407k；按钮由母本 .p-cancel/.p-confirm 定位在底部基线上
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-banner .d1 {
+  position: relative;
+  left: auto;          /* 母本 .d1 带画布坐标 left:0;top:396u，弹窗里由父级 flex 居中 */
+  top: auto;
+  width: calc(var(--k) * 1920);
+  height: calc(var(--k) * 407);
+  background: #fffdfd;
+  color: #2b2b2d;
+  box-shadow: 0 0 calc(var(--k) * 60) #0008;
+}
+:root[data-theme='endfield'] .efd-banner .d1 > * { position: absolute; }
+
+:root[data-theme='endfield'] .efd-banner .l0 { left: 0; top: 0; width: 100%; height: calc(var(--k) * 1); background: #f1f1f1; }
+:root[data-theme='endfield'] .efd-banner .l1 { left: 0; top: 0; width: calc(var(--k) * 23); height: calc(var(--k) * 1); background: #999; }
+
+:root[data-theme='endfield'] .efd-banner .c1,
+:root[data-theme='endfield'] .efd-banner .c2,
+:root[data-theme='endfield'] .efd-banner .c3 { top: calc(var(--k) * -0.5); height: calc(var(--k) * 1.5); }
+:root[data-theme='endfield'] .efd-banner .c1 { left: calc(var(--k) * 23); width: calc(var(--k) * 150); background: #fff200; }
+:root[data-theme='endfield'] .efd-banner .c2 { left: calc(var(--k) * 173); width: calc(var(--k) * 75); background: #00d8ff; }
+:root[data-theme='endfield'] .efd-banner .c3 { left: calc(var(--k) * 248); width: calc(var(--k) * 70); background: #ff4dff; }
+
+:root[data-theme='endfield'] .efd-banner .tri {
+  left: calc(var(--k) * 23); top: calc(var(--k) * 15); width: calc(var(--k) * 10); height: calc(var(--k) * 9);
+  background: #fff200; clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+:root[data-theme='endfield'] .efd-banner .tag {
+  left: calc(var(--k) * 44); top: calc(var(--k) * 13);
+  font: 700 calc(var(--k) * 8)/1 var(--font); letter-spacing: calc(var(--k) * 1.8);
+  color: #cfcfcf; text-shadow: calc(var(--k) * 1) 0 #e6e6e6;
+}
+
+:root[data-theme='endfield'] .efd-banner .s0 { left: calc(var(--k) * 1392); top: calc(var(--k) * 1); width: calc(var(--k) * 528); height: calc(var(--k) * 23); }
+:root[data-theme='endfield'] .efd-banner .s1 { left: calc(var(--k) * 1343); top: calc(var(--k) * 1); width: calc(var(--k) * 22); height: calc(var(--k) * 21); }
+:root[data-theme='endfield'] .efd-banner .s2 { left: calc(var(--k) * 1368); top: calc(var(--k) * 24); width: calc(var(--k) * 22); height: calc(var(--k) * 21); }
+:root[data-theme='endfield'] .efd-banner .s3 { left: calc(var(--k) * 1392); top: calc(var(--k) * 49); width: calc(var(--k) * 22); height: calc(var(--k) * 21); }
+:root[data-theme='endfield'] .efd-banner .s0,
+:root[data-theme='endfield'] .efd-banner .s1,
+:root[data-theme='endfield'] .efd-banner .s2,
+:root[data-theme='endfield'] .efd-banner .s3 { background: repeating-linear-gradient(135deg, #cfcfcf 0 calc(var(--k) * 2), transparent calc(var(--k) * 2) calc(var(--k) * 4.5)); }
+
+:root[data-theme='endfield'] .efd-banner .ttl { left: calc(var(--k) * 360); top: calc(var(--k) * 94); font: 700 calc(var(--k) * 36)/1 var(--font); letter-spacing: calc(var(--k) * .6); }
+:root[data-theme='endfield'] .efd-banner .msg { left: 0; right: 0; top: calc(var(--k) * 186); text-align: center; font: 500 calc(var(--k) * 28)/1.5 var(--font); color: #444; }
+
+:root[data-theme='endfield'] .efd-banner .ln { top: calc(var(--k) * 334); height: calc(var(--k) * 1); background: #c9c9c9; }
+:root[data-theme='endfield'] .efd-banner .ln.a { left: 0; width: calc(var(--k) * 635); }
+:root[data-theme='endfield'] .efd-banner .ln.b { left: calc(var(--k) * 1281); right: 0; }
+:root[data-theme='endfield'] .efd-banner .ln.m { left: calc(var(--k) * 940); width: calc(var(--k) * 37); background: #444; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   二 · 居中框（母本：WINDOW/弹窗 · 危险解锁框.html）
+   面板 1206k × 439k，圆角 14k，黄标头 86.5k
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-dialog .u4 {
+  position: relative;
+  left: auto;          /* 母本 .u4 带画布坐标 left:357u;top:330u —— 不重置就会被推偏 214px（本轮实测） */
+  top: auto;
+  width: calc(var(--k) * 1206);
+  height: calc(var(--k) * 439);
+  border-radius: calc(var(--k) * 14);
+  overflow: hidden;
+  background: #dedddb;
+  color: #2b2b2d;
+  box-shadow: 0 0 calc(var(--k) * 60) #0008;
+}
+:root[data-theme='endfield'] .efd-dialog .u4 > * { position: absolute; }
+
+:root[data-theme='endfield'] .efd-dialog .u4 .hd { left: 0; top: 0; right: 0; height: calc(var(--k) * 86.5); background: #ffd42d; overflow: hidden; }
+:root[data-theme='endfield'] .efd-dialog .u4 .hd > * { position: absolute; }
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .lg {
+  left: calc(var(--k) * 41); top: calc(var(--k) * 12);
+  font: 700 calc(var(--k) * 6)/calc(var(--k) * 8) var(--font); letter-spacing: calc(var(--k) * 1); color: #8a6d00;
+}
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .lg::before { content: "▲"; margin-right: calc(var(--k) * 4); color: #5a4800; }
+:root[data-theme='endfield'] .efd-dialog .u4 .hd h1 {
+  left: calc(var(--k) * 41); top: calc(var(--k) * 25);
+  font: 700 calc(var(--k) * 28)/1 var(--font); color: #2b2b2d; letter-spacing: calc(var(--k) * 1);
+}
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .tag {
+  left: calc(var(--k) * 41); top: calc(var(--k) * 62.5); width: calc(var(--k) * 102); height: calc(var(--k) * 10);
+  border-radius: calc(var(--k) * 2); background: #333; color: #fff;
+  font: 700 calc(var(--k) * 6)/calc(var(--k) * 10) var(--font); letter-spacing: calc(var(--k) * 1); padding-left: calc(var(--k) * 5);
+}
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .tag::after { content: "▢▢"; position: absolute; right: calc(var(--k) * 5); top: 0; color: #aaa; letter-spacing: calc(var(--k) * 1); }
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .sh {
+  left: calc(var(--k) * 1132); top: calc(var(--k) * 10); width: calc(var(--k) * 59); height: calc(var(--k) * 52);
+  border: calc(var(--k) * 19) solid #ecc332; border-bottom: 0;
+  border-radius: calc(var(--k) * 32) calc(var(--k) * 32) 0 0;
+}
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .lk { left: calc(var(--k) * 1070); top: calc(var(--k) * 52.5); width: calc(var(--k) * 90); height: calc(var(--k) * 60); background: #ecc332; }
+
+:root[data-theme='endfield'] .efd-dialog .u4 .gc { background: #d3d2d0; opacity: .85; }
+:root[data-theme='endfield'] .efd-dialog .u4 .gc1 { left: calc(var(--k) * 10); top: calc(var(--k) * 140); width: calc(var(--k) * 140); height: calc(var(--k) * 200); clip-path: polygon(8% 0, 100% 12%, 92% 100%, 0 86%); }
+:root[data-theme='endfield'] .efd-dialog .u4 .gc2 { left: calc(var(--k) * 80); top: calc(var(--k) * 110); width: calc(var(--k) * 170); height: calc(var(--k) * 220); clip-path: polygon(0 8%, 88% 0, 100% 90%, 12% 100%); }
+:root[data-theme='endfield'] .efd-dialog .u4 .gc3 { left: calc(var(--k) * 200); top: calc(var(--k) * 190); width: calc(var(--k) * 120); height: calc(var(--k) * 150); clip-path: polygon(10% 0, 100% 18%, 88% 100%, 0 82%); }
+
+:root[data-theme='endfield'] .efd-dialog .u4 .ck { width: calc(var(--k) * 21); height: calc(var(--k) * 21); }
+:root[data-theme='endfield'] .efd-dialog .u4 .ck1 { left: calc(var(--k) * 391); top: calc(var(--k) * 179); }
+:root[data-theme='endfield'] .efd-dialog .u4 .ck2 { left: calc(var(--k) * 391); top: calc(var(--k) * 239); }
+:root[data-theme='endfield'] .efd-dialog .u4 .tx { left: calc(var(--k) * 432); font: 500 calc(var(--k) * 22)/1 var(--font); color: #444; }
+:root[data-theme='endfield'] .efd-dialog .u4 .tx1 { top: calc(var(--k) * 183); }
+:root[data-theme='endfield'] .efd-dialog .u4 .tx2 { top: calc(var(--k) * 243); }
+
+:root[data-theme='endfield'] .efd-dialog .u4 .dv { left: calc(var(--k) * 291); top: calc(var(--k) * 219); width: calc(var(--k) * 623); height: calc(var(--k) * 2); background: #777; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   三 · 面板框（母本：WINDOW/弹窗 · 更多文字面板框.html）
+   面板 1842k × 522k，圆角 8k，深标头 105k，点阵内容区
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-panel .b3 {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: calc(var(--k) * 1842);
+  height: calc(var(--k) * 522);
+  border-radius: calc(var(--k) * 8);
+  overflow: hidden;
+  background: #ebe9e9;
+  color: #2b2b2d;
+  box-shadow: 0 0 calc(var(--k) * 60) #0008;
+}
+:root[data-theme='endfield'] .efd-panel .b3 > * { position: absolute; }
+:root[data-theme='endfield'] .efd-panel .dots {
+  inset: 0;
+  background: radial-gradient(#00000010 calc(var(--k) * 1), transparent calc(var(--k) * 1.7)) 0 0/calc(var(--k) * 5) calc(var(--k) * 5);
+}
+:root[data-theme='endfield'] .efd-panel .hd { left: 0; top: 0; right: 0; height: calc(var(--k) * 105); background: #222; }
+:root[data-theme='endfield'] .efd-panel .gh {
+  left: calc(var(--k) * 536); top: calc(var(--k) * 32);
+  font: 900 calc(var(--k) * 130)/1 var(--font); letter-spacing: calc(var(--k) * 30);
+  transform: scaleX(1.5); transform-origin: left; color: #2f2f2f; white-space: nowrap;
+}
+:root[data-theme='endfield'] .efd-panel .hd h1 {
+  left: calc(var(--k) * 60); top: calc(var(--k) * 34);
+  font: 700 calc(var(--k) * 36)/1 var(--font); color: #fff; letter-spacing: calc(var(--k) * 1);
+}
+:root[data-theme='endfield'] .efd-panel .hd small {
+  left: calc(var(--k) * 60); top: calc(var(--k) * 78);
+  font: 700 calc(var(--k) * 9)/1 var(--font); letter-spacing: calc(var(--k) * 2); color: #ffe500;
+}
+:root[data-theme='endfield'] .efd-panel .lbl { left: calc(var(--k) * 463); top: calc(var(--k) * 168); width: calc(var(--k) * 157); height: calc(var(--k) * 11); background: #dcdada; border-radius: calc(var(--k) * 1); }
+:root[data-theme='endfield'] .efd-panel .lbl::after {
+  content: "// ITEM.BOX 03"; position: absolute; left: calc(var(--k) * 6); top: calc(var(--k) * 2);
+  font: 700 calc(var(--k) * 6)/calc(var(--k) * 7) var(--font); letter-spacing: calc(var(--k) * 1); color: #b3b1b1;
+}
+:root[data-theme='endfield'] .efd-panel .tl { left: calc(var(--k) * 463); height: calc(var(--k) * 2); background: #d4d2d2; }
+:root[data-theme='endfield'] .efd-panel .desc {
+  left: calc(var(--k) * 463); top: calc(var(--k) * 230); width: calc(var(--k) * 900);
+  font: 500 calc(var(--k) * 24)/1.7 var(--font); color: #444;
+}
+:root[data-theme='endfield'] .efd-panel .wt { right: calc(var(--k) * -30); top: calc(var(--k) * 200); width: calc(var(--k) * 350); height: calc(var(--k) * 320); clip-path: polygon(0 0, 100% 0, 100% 100%, 40% 100%); }
+:root[data-theme='endfield'] .efd-panel .wx {
+  right: calc(var(--k) * -10); top: calc(var(--k) * 340);
+  font: 900 calc(var(--k) * 64)/1 var(--font); letter-spacing: calc(var(--k) * 14);
+  transform: scaleX(1.18); transform-origin: right; white-space: nowrap;
+  background: repeating-linear-gradient(135deg, #d3d3d3 0 calc(var(--k) * 2), transparent calc(var(--k) * 2) calc(var(--k) * 4.5));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   四 · 表单框（母本：WINDOW/重命名对话框.html）
+   白卡 + 大标题 + 灰胶囊输入 + 两行提示 + 两颗按钮
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-form .form-group {
+  position: relative;
+  background: #fff;
+  padding: calc(var(--k) * 80) calc(var(--k) * 60);
+  border-radius: calc(var(--k) * 8);
+  width: calc(var(--k) * 1600);
+  display: flex; flex-direction: column; align-items: center;
+  gap: calc(var(--k) * 16);
+  text-align: center;
+  box-shadow: 0 0 calc(var(--k) * 60) #0008;
+}
+:root[data-theme='endfield'] .efd-form .form-title {
+  color: #000; font-size: calc(var(--k) * 36); font-weight: 700;
+  margin-bottom: calc(var(--k) * 14);
+}
+:root[data-theme='endfield'] .efd-form .scifi-input {
+  width: 100%; max-width: calc(var(--k) * 900);
+  height: calc(var(--k) * 70);
+  background-color: #e5e5e5;
+  border: none;
+  border-radius: 999rem;
+  text-align: center;
+  font-size: calc(var(--k) * 28); color: #333; font-weight: 500;
+  font-family: var(--font);
+  outline: none;
+  transition: background-color .2s;
+}
+:root[data-theme='endfield'] .efd-form .scifi-input:focus { background-color: #d5d5d5; }
+:root[data-theme='endfield'] .efd-form .form-helper { font-size: calc(var(--k) * 18); color: #999; }
+:root[data-theme='endfield'] .efd-form .form-actions {
+  display: flex; gap: calc(var(--k) * 32); margin-top: calc(var(--k) * 34);
+  justify-content: center; width: 100%;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   五 · 动作行：母本把两颗按钮钉在面板底边上（`.p-cancel` / `.p-confirm` 的 top 都是
+   「面板高 − 11~24k」那一档）。弹窗的按钮数由调用点决定（1~3 颗）⇒ 只把这一行放在
+   母本那条基线上并居中，按钮自身仍是母本 .ef-pill（--u:var(--k)，尺寸/解剖/材质原样）。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-actions {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--k) * 36);
+  z-index: 3;
+}
+/* 横幅框：母本 top 297k（基线 334k 之上），按钮骑在 .ln 那条线上 */
+:root[data-theme='endfield'] .efd-banner .efd-actions { top: calc(var(--k) * 297); }
+/* 居中框：母本 top 413.6k（面板 439k ⇒ 按钮压住下边缘） */
+:root[data-theme='endfield'] .efd-dialog .efd-actions { top: calc(var(--k) * 413.6); }
+/* 面板框：母本 top 511k（面板 522k ⇒ 同样压边） */
+:root[data-theme='endfield'] .efd-panel .efd-actions { top: calc(var(--k) * 511); }
+/* 动作行里的胶囊继承母本的缩放旋钮（母本：`.dialog .ef-pill{--u:var(--k)}`；
+   `.ef-pill--sm` 也要一起放宽，否则 masters 里那条 `--u:calc(--ef-port-u*.82)` 会用 app 档把它缩小一档） */
+:root[data-theme='endfield'] .efd-actions .ef-pill,
+:root[data-theme='endfield'] .efd-actions .ef-pill--sm { --u: var(--k); }
+/* 表单框的按钮走母本 .form-actions 的流式排布，不走绝对定位 */
+:root[data-theme='endfield'] .efd-form .efd-actions { position: static; left: auto; transform: none; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   六 · 内容宿主：母本里的内容是占位文字（.msg / .desc / .tx），真内容要能滚动。
+   只加 overflow 与一条按母本坐标算出的可用高度，不加任何面色/字号/间距。
+   横幅框：内容从 186k 起，基线在 334k ⇒ 可用 148k 减去两行留白。
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .efd-banner .msg { max-height: calc(var(--k) * 128); overflow: auto; }
+:root[data-theme='endfield'] .efd-dialog .u4 .tx { max-width: calc(var(--k) * 640); }
+:root[data-theme='endfield'] .efd-panel .desc {
+  height: calc(var(--k) * 232);       /* 230k 起 → 面板底 522k 减按钮区 60k */
+  overflow: auto;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   七 · tall：母本 .b3 是「522k 定高 + 全 absolute」的一张三行占位板。
+   真实弹窗里有表单、有列表，内容比母本那句占位话长得多 ⇒ 这一档只做**纵向生长**：
+     面板高 522k → auto（min-height 仍是母本 522k，短内容时长得和母本一模一样）；
+     内容区 .desc 与动作行改回文档流（左缩进仍是母本的 463k，右缩进取母本内容宽度的右沿 1363k）；
+     面宽、圆角、深标头高、点阵、字号、颜色一个值都不动。
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .efd-panel.tall .b3 {
+  height: auto;
+  min-height: calc(var(--k) * 522);
+  padding-bottom: calc(var(--k) * 70);
+  display: flex;
+  flex-direction: column;
+}
+:root[data-theme='endfield'] .efd-panel.tall .b3 > * { position: absolute; }
+:root[data-theme='endfield'] .efd-panel.tall .desc {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: auto;
+  height: auto;
+  max-height: none;
+  margin: calc(var(--k) * 230) calc(var(--k) * 60) 0 calc(var(--k) * 463);
+  overflow: visible;
+}
+:root[data-theme='endfield'] .efd-panel.tall .efd-actions {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  margin: calc(var(--k) * 24) auto calc(var(--k) * 4);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   八 · 两处必须补的接线（都是母本自身的缺口，不是设计）
+   ① 面板框 .b3 标头：母本给 .gh / h1 / small 各写了 left/top，**却没写 position**
+      ⇒ 在母本那一页上它们按文档流铺满整行、left/top 全失效（本轮实测 h1 宽 1200px）。
+      母本 .b3>* 只覆盖到直接孩子，管不到标头里的三个，这里照母本自己的写法补 position。
+   ② 动作行在 tall（文档流）档里是块级 flex，宽度会自动铺满 ⇒ 必须显式居中，
+      否则按钮全挤在左边（本轮实测 3 颗挤在面板左沿）。
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .efd-panel .hd > * { position: absolute; }
+:root[data-theme='endfield'] .efd-actions { justify-content: center; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   九 · 对比度收口（放在最后加载的文件里，选择器也比母本多一层 ——
+   母本那几条是同特异性、但加载在本文件之前，放在 endfield.css 里压不住）
+   ───────────────────────────────────────────────────────────────────────── */
+/* ① 黄标头上的 kicker：母本 #8a6d00 压在 #ffd42d 上 = 3.45（正文要求 4.5）⇒ 取它自己 ::before 用的 #5a4800（6.3） */
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .lg { color: #5a4800; }
+/* ② 设置页标签条：母本未选 #9b9b9b/#3d3d3d = 3.91、选中白/#8c8d91 = 3.32
+      ⇒ 未选取母本 --bar-light #c2c2c2（6.0）；选中取母本自己的浅灰页签 #f5f5f5 + #2c2c2c（12.8） */
+:root[data-theme='endfield'] .k-tabs .ui-announcement__tab { color: #c2c2c2; }
+:root[data-theme='endfield'] .k-tabs .ui-announcement__tab.is-active {
+  background: #f5f5f5;
+  color: #2c2c2c;
+  font-weight: 700;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   十 · 收口（他 2026-10-20 夜报的那一批：顶栏字号/右对齐、胶囊横线切字、标题被压、
+        按钮材质与位置、居中框内容溢出）
+   本文件是最后加载的一份 ⇒ 同特异性下这里的规则一定赢，母本那几份不用改。
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ① 板上的标题行：母本给 h1 只写了 left/top，没清掉浏览器的 `margin:.67em 0`
+      ⇒ 实测被压下 15.7px，正好撞进下面那行黄色编号里（他说的「回收站仨字被切了」是这个，
+      不是 overflow 裁的）。这里按母本写好的坐标把它们钉回原位。 */
+:root[data-theme='endfield'] .efd-panel .hd h1,
+:root[data-theme='endfield'] .efd-dialog .u4 .hd h1,
+:root[data-theme='endfield'] .efd-banner .ttl,
+:root[data-theme='endfield'] .efd-form .form-title {
+  margin: 0;
+}
+/* 同样理由：p 的上下 1em 白边会把 .desc / .msg 从母本坐标上顶开 */
+:root[data-theme='endfield'] .efd-panel .desc,
+:root[data-theme='endfield'] .efd-banner .msg {
+  margin: 0;
+}
+
+/* ② 胶囊里的横线：母本 __line 是「left:37.5u + 宽 119u」的绝对定位件。
+     上一版把它接进 flex 却没清 left ⇒ 线整体右移 37.5u，右端正好切进文字
+      （实测：线 603–716，标签 694–732，压字 22px）。
+     这里 left 归零、线宽仍取母本 119u，线与文字之间补上母本那道 37.5u 的缝
+     （母本：线右端 156.5u，两字标签左沿 194u）。标签因此回到母本的右对齐位（右沿 66u）；
+     字多时线按 flex-shrink 自己变短（「清空回收站」五字正是这一档），不需要另写规则。 */
+:root[data-theme='endfield'] button.ef-pill,
+:root[data-theme='endfield'] .ef-pill {
+  gap: calc(var(--u) * 37.5);
+}
+:root[data-theme='endfield'] .ef-pill__line {
+  left: 0;
+  width: calc(var(--u) * 119);
+  flex: 0 1 auto;
+}
+
+/* ③ 动作行的锚点：母本把两颗胶囊钉在 top 511k（板高 522k、胶囊 61.5k）
+      ⇒ 按钮骑在板的下边缘上，下沿露出 50.5k。上一版 tall 档把它改成文档流
+      ⇒ 整颗掉到板外（实测面板底 870、按钮 885），这里统一按「板的底边」锚定，
+      定高与增长两档共用同一套坐标。居中框同理（母本 top 413.6k ⇒ 下沿露出 36.1k）。 */
+:root[data-theme='endfield'] .efd-panel .efd-actions,
+:root[data-theme='endfield'] .efd-panel.tall .efd-actions {
+  position: absolute;
+  top: auto;
+  left: 50%;
+  bottom: calc(var(--k) * -50.5);
+  transform: translateX(-50%);
+  margin: 0;
+}
+:root[data-theme='endfield'] .efd-dialog .efd-actions {
+  top: auto;
+  bottom: calc(var(--k) * -36.1);
+}
+
+/* ④ 居中框的 tall 档（新建项目 / 新建会话 / 设置工作目录 / 模型池 / Shell 这一批）：
+      母本 .u4 是「439k 定高 + 全 absolute」的两行说明板，装不下表单 ⇒ 只让板纵向生长、
+      内容区改回文档流；宽度、圆角、黄标头、挂锁、字号一个数不动。
+      装饰用的灰片（.gc）与两行假勾选（.ck/.dv/.tx2）在真内容上只会糊在输入框底下 ⇒ 这一档隐掉。 */
+:root[data-theme='endfield'] .efd-dialog.tall .u4 {
+  height: auto;
+  min-height: calc(var(--k) * 439);
+}
+:root[data-theme='endfield'] .efd-dialog.tall .u4 .tx1 {
+  position: relative;
+  left: auto;
+  top: auto;
+  display: block;
+  width: auto;
+  max-width: none;
+  margin: calc(var(--k) * 118) calc(var(--k) * 60) calc(var(--k) * 96) calc(var(--k) * 60);
+}
+:root[data-theme='endfield'] .efd-dialog.tall .u4 .gc,
+:root[data-theme='endfield'] .efd-dialog.tall .u4 .ck,
+:root[data-theme='endfield'] .efd-dialog.tall .u4 .dv,
+:root[data-theme='endfield'] .efd-dialog.tall .u4 .tx2 {
+  display: none;
+}
+
+/* ⑤ 顶栏会话名：母本 36u（=18.7px）是按 1920 画布的顶栏量的，app 尺度下比其余六套主题
+      大两档；而且 line-height 也写的 36u ⇒ 行盒高度正好等于字高，j / g / y 这些字的
+      下伸部分被 .title > span 的 overflow:hidden 切掉（他说的「j、g 下半部分被切」）。
+      字号收到 13.5px（其余六套主题 .title 的档），行高放开到 1.5 留出下伸空间。 */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__name {
+  left: auto;
+  top: auto;
+  bottom: auto;
+  max-width: none;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* ⑦ 母本里那几个「微字」是按 1920 画布量的（6u/9u）。等比缩到弹窗尺度后只剩 4~6px，
+      等于一片糊 —— masters 的 SIZES 段本来按 10px 钉过，但被 endfield-dialogs.css 里
+      后加载的 calc(--k*6) 压掉了。在最后加载的这一份里把同一组数钉回来（只动字号，不动坐标）。 */
+:root[data-theme='endfield'] .efd-panel .hd small,
+:root[data-theme='endfield'] .efd-dialog .u4 .hd .lg,
+:root[data-theme='endfield'] .efd-banner .tag,
+:root[data-theme='endfield'] .efd-panel .lbl::after {
+  font-size: 10px;
+}
+
+/* ⑧ 面板框里那条 `// ITEM.BOX 03`（母本 .lbl，是它那张样板的占位标签，和「此处放置面板内容」
+      同一类）。缩到弹窗尺度就是一条灰杠压在内容上方，等于把标题切了一道 ⇒ 与上一轮去掉
+      解锁框那块黑签同一个处置：增长档（真实弹窗全都是）不画。定高档保持母本原样。 */
+:root[data-theme='endfield'] .efd-panel.tall .lbl {
+  display: none;
+}
+
+/* ⑥ 会话名与开关排回到 flex 流里（和其余六套主题同一套排法）。两件事：
+      · 母本把 .title-actions 钉在 right:692u（=359.8px，给右端那簇 680u 装饰让位），
+        可那簇装饰在 client 里是 display:none ⇒ 右边白留 360px（他说的「偏这么多」）。
+      · 钉成 absolute 还有第二个后果：left/right 同时给死 ⇒ 盒子宽度被算成定值（实测 207），
+        悬停展开 Plan/只读/提问/沉浸 时内容溢出到顶栏右边界之外、被右侧面板盖住 ——
+        图标就是这么「消失」的。
+      改回流内 + margin-left:auto：收起时右对齐到和其它主题同一个 14px 内距，
+      展开时由标题让位（标题本来就有省略号），再不会溢出。 */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__name {
+  position: relative;
+  margin-left: calc(var(--u) * 75 - 14px);   /* 母本名字左位 75u，扣掉顶栏自身 14px 内距 */
+  min-width: 0;
+}
+:root[data-theme='endfield'] .titlebar .title-actions {
+  position: relative;
+  left: auto;
+  right: auto;
+  margin-left: auto;
+}
+/* ⑩ 最右那颗 ">" 的悬停热区：它靠「padding + 等量负 margin」把命中范围撑大，
+      负的右 margin 会让整颗钮越过顶栏 14px 内距、压到右侧面板的标签条上（实测贴死）。
+      这里只撤掉右边那道负 margin（padding 留着，热区大小不变），按钮回到内距之内。 */
+:root[data-theme='endfield'] .titlebar .title-actions .ta-hot {
+  margin-right: 0;
+}
+
+/* ⑪ 胶囊右端那颗圆盘：母本是 32u 直径 / right 17u，跟着 --k 一起缩放。
+      endfield.css 里为了塞进 32px 高的 app 档把它钉成了 20px / right 8px 的死值 ⇒
+      到了弹窗档（k=.65~.8）圆盘偏小又偏右，文字与圆盘之间凭空多出 11px，
+      看着像"字没贴右"。这里按母本的比例还回去，只保留一个 20px 的下限，小档不至于缩没。 */
+:root[data-theme='endfield'] .ef-pill .ef-pill__ico {
+  top: 50%;
+  width: max(20px, calc(var(--u) * 32));
+  height: max(20px, calc(var(--u) * 32));
+  right: calc(var(--u) * 17);
+  margin-top: 0;
+  transform: translateY(-50%);
+}
+
+
+/* ⑫ 胶囊面料的斜纹：母本的纹理只落在右端 141u（.ef-pill__tex，一张跟着 --u 缩放的贴图），
+      面本身是平的。endfield.css 早前把那张贴图关掉、换成"整颗铺满"的 CSS 斜纹 —— 那是我方
+      自造的（他这次的原话是「直接搬示例中的按钮」）⇒ 贴图放回来，自造的那层撤掉。 */
+:root[data-theme='endfield'] .ef-pill .ef-pill__tex {
+  display: block;
+}
+:root[data-theme='endfield'] .ef-pill::after {
+  display: none;
+}
+
+/* ⑬ 面板框增长档的内容缩进：母本 .desc 的 left:463k 是给它自己那块「左边放标签/水印」的
+      样板排的；上一轮的 tall 档照抄了这个 463k，可那条占位标签（.lbl）现在已经不画了 ⇒
+      左边白空 300px、表单全挤在右半边（实测模型设置/回收站都这样）。
+      只把左右缩进拉平到母本自己的右缩进 60k（坐标换算，不引入新数值），纵向仍从 230k 起。 */
+:root[data-theme='endfield'] .efd-panel.tall .desc {
+  margin: calc(var(--k) * 230) calc(var(--k) * 60) 0 calc(var(--k) * 60);
+}
+
+/* ⑭ 点阵的格距：母本 5u 一格（k=1 时 5px）。弹窗档 k≈.65 ⇒ 一格 3.25px，点阵糊成一层网格、
+      整块面板像草稿纸（对比度没变，是密度不对）。给格距一个 5px 下限 —— 只动尺寸，点径与颜色照母本。 */
+:root[data-theme='endfield'] .efd-panel .dots {
+  background-size: max(5px, calc(var(--k) * 5)) max(5px, calc(var(--k) * 5));
+}
+/* 解锁框的内容区同理：母本 .tx 是 22u 的说明字，弹窗档下 22×.796=17.5px 偏大，
+   与面板框（14px 正文）不一致 ⇒ 收到同一档。 */

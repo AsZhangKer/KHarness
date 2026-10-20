@@ -3,8 +3,24 @@
   <Teleport to="body">
     <!-- 收起态：底部正中一颗小胶囊。hover 有点过冲的膨胀，点一下把窗口从下面顶上来 -->
     <Transition name="tdp">
+      <!-- 终末地：这颗直接搬母本 ai/WINDOW/整体 · hk设计 第 138–139 行的 .tabq（贴在输入区下沿
+           居中的一片小标签：22 高 / #3c3c3c / 上直下圆 10px）。母本第 140–143 行的 .term
+           （终端面板本身）按他点名的「终端的样式不要」⇒ 一行没搬，面板仍用原来那套。
+           定位仍走我们这套（fixed + 跟着输入框中线），所以外壳多挂一个 .td-slot 提供 position/left，
+           .tabq 只负责母本画的那部分。其余六套主题走下面那颗 .td-pill，一个字节没动。 -->
+      <div v-if="!st.open && ef" class="tabq td-slot" :style="{ left: pillLeft }">
+        <button
+          type="button"
+          :title="st.sessions.length ? `${st.sessions.length} 个终端会话，点开浮出终端窗口` : '打开终端（本地 cmd / PowerShell / Git Bash，远程 SSH shell，可开多个标签）'"
+          @click="term.toggle(true)"
+        >
+          <i class="fas fa-terminal"></i>
+          <span>终端</span>
+          <span v-if="st.sessions.length" class="td-pill-n">{{ st.sessions.length }}</span>
+        </button>
+      </div>
       <button
-        v-if="!st.open"
+        v-else-if="!st.open"
         class="td-pill"
         type="button"
         :style="{ left: pillLeft }"
@@ -142,6 +158,7 @@ import { promptDialog } from '../../stores/prompt';
 import { aiApi } from '../../api';
 import { toast } from '../../stores/toast';
 import { toastErr } from '../../utils/errText';
+import { themeState } from '../../stores/theme';
 import { useChatStore } from './chatStore';
 
 const st = term.state;
@@ -153,6 +170,8 @@ const bodyEl = ref(null);
 
 const ptyBlocked = computed(() => st.options && st.options.pty_ok === false);
 const fontList = computed(() => st.fonts || []);
+/** 终末地：收起那颗按母本 ai/WINDOW/整体 · hk设计 第 138–139 行的 .tabq 画；面板（.term）不搬 */
+const ef = computed(() => themeState.id === 'endfield');
 
 const menuPos = computed(() => {
   const m = st.menu || { x: 0, y: 0 };
@@ -430,6 +449,13 @@ watch(() => st.open, async (on) => {
 .td-pill:hover { transform: translateX(-50%) scale(1.09); color: var(--text); border-color: var(--accent); }
 .td-pill:active { transform: translateX(-50%) scale(0.94); transition-duration: 0.09s; }
 .td-pill i { font-size: 11px; }
+/* 终末地收起态的外壳：只做「钉在页面底边 + 跟着输入框中线」这一件事，
+   形状、面色、hover 全部由 endfield-masters.css 里母本的 .tabq / .tabq button 画（一行没改）。 */
+.td-slot {
+  position: fixed; bottom: 0; z-index: 69;
+  transform: translateX(-50%);
+  transform-origin: 50% 100%;
+}
 .td-pill-n {
   min-width: 16px; padding: 0 4px; line-height: 16px; height: 16px;
   border-radius: 999px; background: var(--bg-active); color: var(--text);
@@ -455,9 +481,19 @@ watch(() => st.open, async (on) => {
 .tdp-leave-active { transition: opacity 0.1s ease, transform 0.14s ease; }
 .tdp-enter-from { opacity: 0; transform: translate(-50%, 16px) scale(0.7); }
 .tdp-leave-to { opacity: 0; transform: translate(-50%, 8px) scale(0.92); }
-@media (prefers-reduced-motion: reduce) {
-  .td, .td-pill, .tdk-enter-active, .tdk-leave-active, .tdp-enter-active, .tdp-leave-active { transition: none; }
-}
+
+  html[data-motion='off'] .td,
+
+  html[data-motion='off'] .td-pill,
+
+  html[data-motion='off'] .tdk-enter-active,
+
+  html[data-motion='off'] .tdk-leave-active,
+
+  html[data-motion='off'] .tdp-enter-active,
+
+  html[data-motion='off'] .tdp-leave-active{ transition: none; }
+
 .td-grip { position: absolute; top: -2px; left: 0; right: 0; height: 7px; cursor: ns-resize; z-index: 3; }
 .td-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; min-height: 34px; flex-shrink: 0; }
 .td-tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; max-width: 55%; }
@@ -500,11 +536,12 @@ watch(() => st.open, async (on) => {
 }
 :root[data-theme='aurora-blue'] .td-tab,
 :root[data-theme='aurora-purple'] .td-tab { background: var(--bg-panel); }
-@media (prefers-reduced-motion: reduce) {
-  /* 关掉动画的人也不想要每帧重算的高斯模糊 */
-  :root[data-theme='aurora-blue'] .td,
-  :root[data-theme='aurora-purple'] .td { backdrop-filter: none; }
-}
+/* 关掉动画的人也不想要每帧重算的高斯模糊 */
+  
+  html[data-motion='off'] :root[data-theme='aurora-blue'] .td,
+
+  html[data-motion='off'] :root[data-theme='aurora-purple'] .td{ backdrop-filter: none; }
+
 .td-host { position: absolute; inset: 4px 8px 8px; overflow: hidden; }
 .td-empty { position: absolute; inset: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; text-align: center; padding: 0 24px; }
 .td-warn { padding: 6px 10px; font-size: 11px; color: var(--danger); border-top: 1px solid var(--border-soft); }

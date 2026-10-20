@@ -77,6 +77,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { recycleBin } from '../stores/recycle';
+import { confirmDialog } from '../stores/confirm';
+import { runningCount } from '../stores/running';
 import { settingsApi } from '../api';
 
 const router = useRouter();
@@ -157,6 +159,12 @@ const MENUS = computed(() => [
 ]);
 
 async function act(action, what) {
+  // 窗口容易手滑关掉：还有会话在回答中（或正在压缩上下文）时先问一句。
+  // 关闭按钮、菜单项、Ctrl+W 三条路都汇到这里，所以只写一处拦。
+  if (action === 'close' && runningCount() > 0) {
+    const ok = await confirmDialog('还有会话回答中，是否确认关闭？', { title: '关闭窗口', danger: true, okText: '确认关闭' });
+    if (!ok) return null;
+  }
   const res = await api.winCtl(action, what);
   if (res && typeof res.maximized === 'boolean') maximized.value = res.maximized;
   return res;
@@ -197,6 +205,7 @@ function onMove(e) {
 }
 
 let off = null;
+let offAskClose = null;
 onMounted(async () => {
   if (!show.value) return;
   measureBar();
@@ -208,12 +217,15 @@ onMounted(async () => {
     if (!s) return;
     maximized.value = !!s.maximized;
   });
+  // Ctrl+W 现在由主进程发问、由这里裁决（和那颗 X 同一句确认）
+  if (typeof api.onAskClose === 'function') offAskClose = api.onAskClose(() => act('close'));
   document.addEventListener('mousedown', onDocDown, true);
   window.addEventListener('mousemove', onMove, { passive: true });
   window.addEventListener('blur', () => { open.value = ''; });
 });
 onBeforeUnmount(() => {
   if (typeof off === 'function') off();
+  if (typeof offAskClose === 'function') offAskClose();
   document.removeEventListener('mousedown', onDocDown, true);
   window.removeEventListener('mousemove', onMove);
   window.removeEventListener('resize', measureBar);

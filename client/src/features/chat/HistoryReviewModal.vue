@@ -6,7 +6,7 @@
   撤销的二次确认在 ChatPage 的 onUndo 里，这里不重复问一遍。
 -->
 <template>
-  <KModal :open="!!hist" :title="titleText" width="820px" @close="$emit('close')">
+  <KModal :open="!!hist" :title="titleText" board="panel" tall code="HISTORY.REVIEW" ghost="HIST" width="820px" ef-width="1280" @close="$emit('close')">
     <div class="rv-meta">
       <span class="mono rv-path" :title="path">{{ path || hist?.undo_id || '' }}</span>
       <span v-if="hist?.tool" class="muted">{{ hist.tool }}</span>
@@ -31,7 +31,7 @@
     </div>
 
     <template #footer>
-      <button class="k-btn sm ghost" type="button" @click="$emit('close')">{{ txt('chat.agent.close') }}</button>
+      <KButton variant="ghost" size="sm" @click="$emit('close')">{{ txt('chat.agent.close') }}</KButton>
     </template>
   </KModal>
 </template>
@@ -39,6 +39,7 @@
 <script setup>
 import { computed } from 'vue';
 import KModal from '../../ui/KModal.vue';
+import KButton from '../../ui/KButton.vue';
 import { baseName, diffView } from '../../utils/diffview';
 import { langFromPath } from '../../utils/format';
 import { txt } from '../../copy';

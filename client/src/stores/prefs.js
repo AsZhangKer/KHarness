@@ -9,6 +9,7 @@ import { reactive } from 'vue';
 import { settingsApi } from '../api';
 import { configureSound } from '../utils/sound';
 import { toastErr } from '../utils/errText';
+import { bootMark } from '../utils/boot';
 
 const state = reactive({
   loaded: false,
@@ -47,6 +48,10 @@ const state = reactive({
   fullSend: false,
   // 多模型池（failover）：已半废弃，默认关，只有实验室里打开才有入口
   poolOn: false,
+  /* 开屏加载动画：默认开（他拍的）。注意这一条前端只是「显示 + 写回」，
+     真正决定首帧播不播的是服务端注入（server/index.js 的 indexHtml()）——
+     因为 uiPrefs 是异步拉的，等它回来再决定，最该盖的那段已经过去了。 */
+  bootPlate: true,
 });
 
 function bool(v, def) {
@@ -87,6 +92,7 @@ function apply(s) {
   state.supervisorOn = bool(s.supervisor_enabled, state.supervisorOn);
   state.fullSend = bool(s.fullsend_enabled, state.fullSend);
   state.poolOn = bool(s.pool_enabled, state.poolOn);
+  state.bootPlate = bool(s.boot_plate, state.bootPlate);
   configureSound({ enabled: state.sound, volume: state.volume });
   state.loaded = true;
 }
@@ -99,6 +105,9 @@ async function load(force = false) {
     // 拿不到就用默认值，不能把界面卡住；报错本身由拦截器提示过一次
     state.loaded = true;
   }
+  // 开屏板的里程碑之一（设置真读回来了）。放这里而不是 App.vue：
+  // 失败路径也算「这一步做过了」，否则板子会卡在 READING SETTINGS 等 fuse 收尾。
+  bootMark('prefs');
   return state;
 }
 
@@ -115,6 +124,7 @@ const FIELD_TO_KEY = {
   agentParallel: 'subagent_max_parallel',
   stallGuard: 'stall_guard_enabled', stallMin: 'stall_min_chars', toolMap: 'tool_capability_map',
   roundFold: 'round_tool_fold', fullSend: 'fullsend_enabled', poolOn: 'pool_enabled',
+  bootPlate: 'boot_plate',
 };
 
 async function save(patch) {

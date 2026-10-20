@@ -1,5 +1,5 @@
 <template>
-  <KModal :open="open" :title="editing ? '编辑远程连接' : '新建 SSH 连接'" width="560px" @close="close">
+  <KModal :open="open" :title="editing ? '编辑远程连接' : '新建 SSH 连接'" board="panel" tall code="HOST.BOX" ghost="SSH" width="560px" ef-width="1280" @close="close">
     <div class="form">
       <div class="row2">
         <KInput v-model="form.name" label="显示名" placeholder="例如：内网构建机" />
@@ -67,13 +67,9 @@
       </div>
     </div>
     <template #footer>
-      <button class="k-btn ghost sm" type="button" @click="close">取消</button>
-      <button v-if="hostId" class="k-btn sm" type="button" :disabled="testing" @click="test">
-        <i class="fas fa-plug"></i> 测试
-      </button>
-      <button class="k-btn primary sm" type="button" :disabled="busy" @click="save">
-        <i class="fas" :class="busy ? 'fa-circle-notch fa-spin' : 'fa-check'"></i> 保存
-      </button>
+      <KButton variant="ghost" size="sm" @click="close">取消</KButton>
+      <KButton v-if="hostId" size="sm" :disabled="testing" @click="test">测试</KButton>
+      <KButton variant="primary" size="sm" :disabled="busy" @click="save">保存</KButton>
     </template>
   </KModal>
 </template>
@@ -81,6 +77,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import KModal from '../../ui/KModal.vue';
+import KButton from '../../ui/KButton.vue';
 import KInput from '../../ui/KInput.vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import { aiApi } from '../../api';

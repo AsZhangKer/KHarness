@@ -14,15 +14,21 @@ const { db } = require('../database');
 const SELECT_CHAT = 'SELECT * FROM ai_chats WHERE id = ?';
 const SELECT_MSGS = 'SELECT * FROM ai_chat_messages WHERE chat_id = ? ORDER BY id ASC';
 const SELECT_TASKS = 'SELECT * FROM tasks WHERE chat_id = ? ORDER BY seq ASC, id ASC';
+// 工具往返部件（ai_chat_parts）：少了它们，恢复出来的会话「正文还在、工具结果全丢」，
+// 模型下一轮就会重复读文件、或者拿着半截信息继续 —— 而删除/恢复的语义是「原样拿回来」。
+const SELECT_PARTS = 'SELECT * FROM ai_chat_parts WHERE chat_id = ? ORDER BY id ASC';
 
-/** 一条会话的完整快照（消息 + 任务），会话不存在时回 null */
+/** 一条会话的完整快照（消息 + 任务 + 工具部件），会话不存在时回 null */
 function snapshotChat(chatId) {
   const chat = db.prepare(SELECT_CHAT).get(chatId);
   if (!chat) return null;
+  let parts = [];
+  try { parts = db.prepare(SELECT_PARTS).all(chatId); } catch (e) { parts = []; }   // 旧库还没建表
   return {
     chat,
     messages: db.prepare(SELECT_MSGS).all(chatId),
     tasks: db.prepare(SELECT_TASKS).all(chatId),
+    parts,
   };
 }
 
@@ -43,8 +49,13 @@ function push(kind, refId, title, path, payload) {
 function purgeChats(chatIds) {
   const delTask = db.prepare('DELETE FROM tasks WHERE chat_id = ?');
   const delMsg = db.prepare('DELETE FROM ai_chat_messages WHERE chat_id = ?');
+  const delParts = db.prepare('DELETE FROM ai_chat_parts WHERE chat_id = ?');
   const delChat = db.prepare('DELETE FROM ai_chats WHERE id = ?');
-  for (const id of chatIds) { delTask.run(id); delMsg.run(id); delChat.run(id); }
+  for (const id of chatIds) {
+    delTask.run(id); delMsg.run(id);
+    try { delParts.run(id); } catch (e) { /* 旧库无表 */ }
+    delChat.run(id);
+  }
 }
 
 /** 删除入口用：把会话快照进回收站再真删，返回回收站条目 id */
@@ -147,7 +158,14 @@ function restoreChatSnap(snap, opts = {}) {
   for (const t of snap.tasks || []) {
     insert('tasks', Object.assign({}, t, { chat_id: target, id: idFree('tasks', t.id) ? t.id : null }));
   }
-  return { id: target, messages, modelChanged: model.changed };
+  // 工具部件按原顺序塞回去。id 是自增主键、只在「顺序」上有意义（重放靠 ORDER BY id），
+  // 所以 id 被占了也无所谓 —— 按数组顺序插入就是原顺序。
+  let parts = 0;
+  for (const p of snap.parts || []) {
+    insert('ai_chat_parts', Object.assign({}, p, { chat_id: target, id: idFree('ai_chat_parts', p.id) ? p.id : null }));
+    parts++;
+  }
+  return { id: target, messages, modelChanged: model.changed, parts };
 }
 
 /** 恢复一条回收站记录：会话（或项目连同其会话）原样塞回去，id 还空着就用原来的 id */

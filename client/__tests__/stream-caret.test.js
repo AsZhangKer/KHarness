@@ -4,9 +4,11 @@
  * - #232：说完一段话去调工具，工具返回值栏上方还挂着一根光标，正文末尾又有一根（两根）。
  * - 第七十七轮：同一形状下他报「圆形光标没了」—— 因为当时判据换成了「最后一个条目是不是正文」，
  *   Agent 模式一整段工具执行期间一个光标都不显示。
- * 收敛后的口径：光标跟着「最后一条正文条目」，条目是工具卡时不许冒第二根。
- * 这条测试先把「几根光标、坐在哪儿」变成读数，再决定往哪儿修 —— 光读模板看不出来，
- * 因为模板里 caret 的判据单看永远只有一位成立。
+ * 第七十七轮曾收敛成「光标跟着最后一条正文条目」；**第八十三轮他重新拍过口径**：
+ * 看「最后一个可见条目」—— 正文就挂正文末尾，思考就挂进思考框（折叠则看不见），
+ * 工具卡/note/压缩卡则**一枚都不放**（那时模型在干活、不在写字，由 .phase 那行表示在跑）。
+ * 就是他现在还重申的这条：光标不该粘在「已经说完的那句话」末尾不动。
+ * 本文件按第八十三轮口径钉；第七十七轮的两条旧断言已在当轮就地改掉。
  */
 import { describe, it, expect } from 'vitest';
 import { createApp, h, nextTick, ref } from 'vue';
@@ -36,18 +38,18 @@ describe('流式光标', () => {
     unmount();
   });
 
-  it('说完话再调工具：光标跟着那段正文的末尾，工具卡上不许有光标', async () => {
+  it('说完话再调工具：光标退场（第八十三轮口径：模型在干活、不在写字）', async () => {
     const { host, tl, unmount } = await mountBusy([{ kind: 'text', text: '先说一段话' }]);
+    expect(carets(host)).toBe(1);
     // 和真流式一样往同一个数组上追加（store 里是 timeline.push，不是换数组引用）
     tl.value.push({ kind: 'step', type: 'tool', name: 'read_file', args: { path: 'a.txt' } });
     await nextTick();
     tl.value.push({ kind: 'step', type: 'result', name: 'read_file', output: '内容…' });
     await nextTick();
-    // 第七十七轮口径：工具执行期间这一轮还在跑，最后一个字仍是正文末尾那个「话」，光标要跟过去。
-    const firstBody = host.querySelector('.body-wrap .body');
-    expect(firstBody.querySelector('.caret-dot')).toBeTruthy();
-    // #232 那半句仍然成立：只有一根，工具卡那栏不冒第二根。
-    expect(carets(host)).toBe(1);
+    /* 第八十三轮他重新拍的口径：尾部一旦落成工具卡/note/压缩卡，光标就**退场**，
+       由下面那行 .phase 表示「在跑」。第七十七轮曾要求「跟到上面那段正文末尾」，
+       而他实际看到的就是那枚粘在已经说完的话后面、一直不动的圆点 —— 他报的「光标会卡在那」。 */
+    expect(carets(host)).toBe(0);
     expect(host.querySelector('.step .caret-dot, .result .caret-dot')).toBeNull();
     unmount();
   });

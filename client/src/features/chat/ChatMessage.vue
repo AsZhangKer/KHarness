@@ -41,7 +41,10 @@
              全都显示「思考中…」，直到整个回合结束才一起变「思考过程」（他第七十四轮报的那条）。 -->
         <details v-if="item.kind === 'reason' && item.text" class="reason" :open="!!(item.open || prefs.reasonOpen)">
           <summary><i :class="reasonLive(i) ? 'fas fa-circle-notch fa-spin' : 'fas fa-brain'"></i> {{ reasonLive(i) ? '思考中…' : '思考过程' }}</summary>
-          <pre>{{ item.text }}</pre>
+          <!-- 光标进思考框：正在输出的那段思考，圆点就跟在它的字后面。
+               折叠时这段 <pre> 不可见，圆点自然也就看不见了 —— 这正是「折叠则不显示」的实现方式
+               （所以**绝不能**把圆点放进 <summary>：那是折叠时唯一还露在外面的地方）。 -->
+          <pre>{{ item.text }}<span v-if="caretAt('reason', i)" class="caret-dot"></span></pre>
         </details>
 
         <!-- 一整组工具调用折叠成的一行（点开才铺开，正文之前不打扰） -->
@@ -143,12 +146,16 @@
             >
               <!-- 图片地址是服务端内存里的 30 分钟 token：重启或超时之后 <img> 会拿到 404。
                    以前留一个破图图标 + 「截图」两个字，看着像「AI 截了张打不开的图」；
-                   现在直接说明这张已被清理（他要的口径），也不再让它可点/可双击。 -->
+                   现在直接说明这张已被清理（他要的口径），也不再让它可点/可双击。
+                   这里**不写 loading="lazy"**（与下面用户附图同一口径）：懒加载的图在滚到附近之前
+                   尺寸是 0，一进视口才开始请求、解码、再把布局撑高；那一刻视口已经被顶上去，
+                   而原生懒加载的加载时机由浏览器决定，跟随底部根本抓不住它。
+                   改成进 DOM 就请求（decoding="async" 只让解码不阻塞主线程，不影响请求时机）。 -->
               <img
                 v-if="!deadShots[item.image_token]"
                 :src="`/api/ai/chat/image/${item.image_token}`"
                 alt=""
-                loading="lazy"
+                decoding="async"
                 @error="deadShots[item.image_token] = true"
               />
               <span v-else class="shot-dead">图片已被清理</span>
@@ -165,10 +172,10 @@
           class="body-wrap"
         >
           <div
-            class="body md"
+            class="body md ef-bubble"
             :class="{ clamped: prefs.longCollapse && !textOpen[i] && isLongText(item.text) }"
             @click="onMdClick"
-            v-html="caret(renderMarkdownCached(item.text), busy && i === lastTextIdx)"
+            v-html="caret(renderMarkdownCached(item.text), caretAt('text', i))"
           ></div>
           <button
             v-if="prefs.longCollapse && isLongText(item.text)"
@@ -182,9 +189,9 @@
           <i class="fas fa-circle-notch fa-spin"></i> {{ phaseLabel }}
         </div>
       </template>
-      <div v-if="!timeline.length" class="body md" v-html="renderMarkdownCached(content)"></div>
+      <div v-if="!timeline.length" class="body md ef-bubble" v-html="renderMarkdownCached(content)"></div>
     </template>
-    <div v-else class="body user-body">
+    <div v-else class="body user-body ef-bubble ef-bubble--self">
       <template v-for="(sg, i) in userSegments" :key="i">
         <button
           v-if="sg.at"
@@ -193,6 +200,26 @@
           :title="`点击复制：${sg.abs}${sg.hint || ''}`"
           @click="copyMention(sg.abs)"
         ><i class="fas fa-at"></i>{{ sg.name }}</button>
+        <div
+          v-else-if="sg.img"
+          class="step-shot user-shot"
+          :class="{ dead: deadShots[sg.img] }"
+          :role="deadShots[sg.img] ? null : 'button'"
+          :tabindex="deadShots[sg.img] ? -1 : 0"
+          :title="deadShots[sg.img] ? '' : '双击放大查看（滚轮缩放、拖动平移、Esc 关闭）'"
+          @dblclick="openShot(sg.img)"
+          @keydown.enter="openShot(sg.img)"
+        >
+          <!-- 地址是服务端内存里的 token（30 分钟、重启即清）：取不到就一句人话，别留破图。
+               不写 loading="lazy"：图就在自己那条消息里，且服务端是内存 token，懒加载省不下什么。 -->
+          <img
+            v-if="!deadShots[sg.img]"
+            :src="`/api/ai/chat/image/${sg.img}`"
+            alt=""
+            @error="deadShots[sg.img] = true"
+          />
+          <span v-else class="shot-dead">图片已被清理</span>
+        </div>
         <span v-else>{{ sg.text }}</span>
       </template>
     </div>
@@ -284,8 +311,7 @@ function joinPath(base, rel) {
   return (win ? `${stack.shift() || ''}${stack.length ? sep : ''}` : sep) + stack.join(sep);
 }
 
-const userSegments = computed(() => {
-  const text = String(props.content || '');
+function mentionSegments(text) {
   const segs = [];
   let last = 0;
   MENTION_RE.lastIndex = 0;
@@ -302,7 +328,40 @@ const userSegments = computed(() => {
   }
   if (last < text.length) segs.push({ text: text.slice(last) });
   return segs.length ? segs : [{ text }];
+}
+
+/**
+ * 附图标记 [[img:token]]。发送时拼进正文（ChatPage.onSend），服务端 buildUpstreamContent 认它、
+ * 模型真收到图 —— 但显示侧以前没人认，所以你发出去的图在自己气泡里只剩一对方括号。
+ * 这里按同一串正则把正文切开，图片段直接画成缩略图（地址和工具截图共用那颗内存 token）。
+ */
+const IMG_RE = /\[\[img:([a-f0-9]+)\]\]/g;
+
+function splitImageMarkers(text) {
+  const out = [];
+  let last = 0;
+  let m;
+  IMG_RE.lastIndex = 0;
+  while ((m = IMG_RE.exec(text))) {
+    const before = text.slice(last, m.index).replace(/\s+$/, '');
+    if (before) out.push(...mentionSegments(before));
+    out.push({ img: m[1] });
+    last = m.index + m[0].length;
+  }
+  const tail = text.slice(last).replace(/^\s+/, '');
+  if (tail) out.push(...mentionSegments(tail));
+  return out;
+}
+
+const userSegments = computed(() => {
+  const text = String(props.content || '');
+  return text.includes('[[img:') ? splitImageMarkers(text) : mentionSegments(text);
 });
+
+function openShot(token) {
+  if (deadShots[token]) return;
+  iv.openViewer({ url: `/api/ai/chat/image/${token}`, title: '附图 · 双击缩放' });
+}
 
 async function copyMention(abs) {
   try {
@@ -343,21 +402,30 @@ const timeline = computed(() => {
       item.kind === 'step' ? { kind: 'step', ...(item.ref || item), ref: item.ref || item } : item
     );
   } else {
-    // 重进会话这一路：库里只有 content / reasoning / steps 三份，顺序全靠 steps 里
-    // type:'text' 的那几条（第五十五轮 #241 起才存）。老消息没有这些条目，仍退回
-    // 「工具卡在前、整段正文在尾」的旧摆法。
+    /* 重进会话这一路：库里只有 content / reasoning / steps 三份。
+       顺序全靠 steps —— 从 #241 起正文段落存 `type:'text'`，从 #251 起思考也存
+       `type:'reason'` 并占它真实出现的位置，于是「思考 ↔ 正文」的交错可以原样还原。
+       `reasoning` 列是全回合拼成的一整块，只在 steps 里连一条 reason 段都没有时才拿来兜底
+       （老消息、或整回合只思考没正文的回合），否则它会以「整块顶在最前面」的形式
+       把前后两段正文强行分开 —— 他报的就是这个。 */
     const out = [];
-    if (props.reasoning && String(props.reasoning).trim()) {
-      out.push({ kind: 'reason', text: String(props.reasoning) });
-    }
     let hasSeg = false;
+    let hasReasonSeg = false;
     for (const s of props.steps || []) {
+      if (s && s.type === 'reason') {
+        hasReasonSeg = true;
+        if (s.text) out.push({ kind: 'reason', text: String(s.text) });
+        continue;
+      }
       if (s && s.type === 'text') {
         hasSeg = true;
         if (s.text) out.push({ kind: 'text', text: String(s.text) });
         continue;
       }
       out.push({ kind: 'step', ...s, ref: s });
+    }
+    if (!hasReasonSeg && props.reasoning && String(props.reasoning).trim()) {
+      out.unshift({ kind: 'reason', text: String(props.reasoning) });
     }
     if (!hasSeg && props.content) out.push({ kind: 'text', text: props.content });
     items = out;
@@ -380,19 +448,44 @@ const timeline = computed(() => {
 });
 
 /**
- * 该给哪一段正文挂光标：**时间线里最后一条「正文」**，不是「最后一个条目」。
- * 差别的形状就是他天天看的那个：Agent 说完一段话去调工具，条目尾部变成工具卡 ——
- * 按「最后一个条目」判，整段工具执行期间一个光标都没有（他报的「圆形光标没了」），
- * 而那段时间里屏幕上最后一个他看得懂的字，正是上面那段正文的末尾。
- * 一条正文都还没有（只在思考 / 上来就调工具）时不放光标，由那行 `.phase` 表示在跑。
+ * 生成中那枚圆点该落在哪 —— **只有一个位置**：正在输出的那一段。
+ *
+ * 三个分支（他第八十三轮重新拍的口径，替换掉之前「钉在最后一段正文上」那套）：
+ *   · 尾部是正文 → 挂在它末尾（正常在写字）
+ *   · 尾部是思考 → 挂进思考框的内容末尾；思考框折叠着就看不见（＝不显示）
+ *   · 尾部是工具卡 / note / 压缩卡 → **不放**（那时模型在干活、不在写字），由下面那行 `.phase` 表示在跑
+ *
+ * 为什么把旧口径换掉：旧的是「时间线里最后一条**正文**」，本意是「工具执行期间也得有个光标」。
+ * 但它的实际形状是他天天看到的那样 —— 一段话说完了、接着去调工具，那枚圆点还粘在已经说完的
+ * 那句话末尾，看上去像卡住了（他报的「光标会卡在那」）。他明确要求：这种情况应该消失，
+ * 或者在思考时进思考框。所以判据从「最后一条正文」改成「最后一个可见条目」。
+ *
+ * 「可见」= 没被 hide（调用行与结果行配对后调用行隐藏）、也没被长回合的向上折叠藏起来。
  */
-const lastTextIdx = computed(() => {
-  for (let i = timeline.value.length - 1; i >= 0; i--) {
-    const it = timeline.value[i];
-    if (it.kind === 'text' && it.text) return i;
+const caretSlot = computed(() => {
+  if (!props.busy) return null;
+  // 只有正在流式输出的那条消息才带 timeline（chatStore 实时往 in push）；重进会话走的是
+  // content/reasoning/steps 重建那条路，timeline 是 null，天然不该有光标在闪。
+  if (!Array.isArray(props.timeline) || !props.timeline.length) return null;
+  const tl = timeline.value || [];
+  for (let i = tl.length - 1; i >= 0; i--) {
+    const it = tl[i];
+    if (!it) continue;
+    if (it.kind === 'step' && it.hide) continue;   // 与结果配对的调用行：不渲染
+    if (hiddenByFold(i)) continue;                 // 折起来的那些根本不进 DOM
+    // 工具卡 / note / 压缩卡：模型在干活不在写字 —— 光标退场，交给 .phase 那行
+    if (it.kind === 'step') return null;
+    if (it.kind === 'text') return it.text ? { kind: 'text', i } : null;
+    if (it.kind === 'reason') return String(it.text || '').trim() ? { kind: 'reason', i } : null;
   }
-  return -1;
+  return null;
 });
+
+/** 该给这一条挂光标吗（模板里两处共用同一个判据，免得两条路各判各的） */
+function caretAt(kind, i) {
+  const s = caretSlot.value;
+  return !!s && s.kind === kind && s.i === i;
+}
 
 /**
  * 「这一段思考还在输出吗」。
@@ -614,32 +707,42 @@ function diffLines(s) {
 
 function iconOf(s) {
   if (s.type === 'note') return 'fas fa-circle-info';
-  if (s.type === 'compress') return s.phase === 'failed' ? 'fas fa-triangle-exclamation' : s.phase === 'start' ? 'fas fa-circle-notch fa-spin' : 'fas fa-compress';
+  if (s.type === 'compress') {
+    if (s.phase === 'failed') return 'fas fa-triangle-exclamation';
+    if (s.phase === 'cancelled') return 'fas fa-ban';
+    if (s.phase === 'start') return 'fas fa-circle-notch fa-spin';
+    return 'fas fa-compress';
+  }
   if (s.type === 'result') return s.error ? 'fas fa-circle-xmark' : 'fas fa-circle-check';
   return 'fas fa-wrench';
 }
 
 const fmtTok = (n) => (Number(n) >= 1000 ? `${(Number(n) / 1000).toFixed(1)}k` : String(Number(n) || 0));
 
-/** 压缩卡的一行话：进行中 / 完成（前后对比）/ 跳过 / 失败（带原因） */
+/** 压缩卡的一行话：进行中 / 完成（前后对比）/ 跳过 / 失败（带原因）/ 已取消 */
 function compressLine(s) {
   const pct = s.percent != null ? `${s.percent}%` : '';
   if (s.phase === 'start') {
     const src = s.from ? `，窗口来自${s.from}` : '';
     // 手动压缩没有「80% 这条线」，写成已达 80% 就是假话；自动压缩才用下面那句。
-    if (s.manual) return txt('chat.msg.compressManual', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src });
-    // 阈值由后端随卡片带过来（改了设置也不说假话）。缺字段就不报数 ——
-    // 以前在这里兜一个 80，于是把设置改成 60 之后流式期间仍显示「已达 80%」（刷新才变对）。
-    if (!s.threshold) return txt('chat.msg.compressAutoNoThr', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src });
-    return txt('chat.msg.compressAuto', {
-      used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src,
-      thr: s.threshold,
-    });
+    const base = s.manual
+      ? txt('chat.msg.compressManual', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src })
+      : (!s.threshold
+        ? txt('chat.msg.compressAutoNoThr', { used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src })
+        : txt('chat.msg.compressAuto', {
+          used: fmtTok(s.used), limit: fmtTok(s.limit), pct, src,
+          thr: s.threshold,
+        }));
+    // 已用时：摘要是一发「发出去就等」的请求，没有这个数字，界面上分不出「在跑」还是「卡死」
+    const secs = Number(s.elapsed_ms) > 0 ? Math.round(Number(s.elapsed_ms) / 1000) : 0;
+    return secs >= 2 ? `${base} · 已用时 ${secs}s（可取消）` : base;
   }
+  if (s.phase === 'cancelled') return `已取消压缩：${s.message || '历史保持原样'}`;
   if (s.phase === 'done') {
-    // 压完锚点作废、要等下一次上游回执才重新校准 → 这个「剩多少」在没锚点时只是正文口径，标清楚
-    const uncal = s.after_basis && s.after_basis !== 'anchor' ? '（待下一轮校准）' : '';
-    return `已压缩：归档 ${s.archived || 0} 条消息、摘要 ${s.chars || 0} 字，上下文 ${fmtTok(s.used)} → ${fmtTok(s.after)} tok${uncal}（窗口 ${fmtTok(s.limit)}）`;
+    // 「压完是多少」现在直接就是库里量得出来的下一发大小（摘要 + 保留的消息 + 固定开销），
+    // 不需要像以前那样标「待下一轮校准」—— 那是「锚点 + 之后新增」那套口径的遗留，
+    // 而那个数在锚点还没被回执校准过时只是正文口径，才需要提醒。
+    return `已压缩：归档 ${s.archived || 0} 条消息、摘要 ${s.chars || 0} 字，上下文 ${fmtTok(s.used)} → ${fmtTok(s.after)} tok（窗口 ${fmtTok(s.limit)}）`;
   }
   if (s.phase === 'skipped') return `无需压缩：${s.message || '最近交互已保留'}`;
   return `压缩失败：${s.message || '未知错误'}（继续用原上下文回答）`;

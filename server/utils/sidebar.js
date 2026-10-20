@@ -18,7 +18,8 @@ const agentsMd = require('./agentsmd');
 
 /** 侧栏用的 AGENTS.md 段：只按工作目录就近取（侧栏没有「项目根」这个概念） */
 function agentsBlockFor(cwd) {
-  const block = agentsMd.promptBlock(agentsMd.collect('', cwd));
+  // vars 带上 cwd：AGENTS.md 里的 {cwd}/{time}/{date}/{os} 在这一刻展开（见 agentsmd.js）
+  const block = agentsMd.promptBlock(agentsMd.collect('', cwd), agentsMd.promptVars(cwd));
   return block ? `\n\n${block}` : '';
 }
 
@@ -377,6 +378,10 @@ async function runTurn({ threadId, content, model, cwd, onEvent = () => {}, sign
     messages.push({
       role: 'assistant',
       content: r.content || '',
+      // 必须带 reasoning_content：带 tool_calls 的 assistant 缺这个字段会被思考模式上游整包 400
+      // （详见 utils/protocols.js 的 assistantToolCallMessage）。子智能体只跑只读工具，
+      // 思考不回传不影响行为，给空串即可。
+      reasoning_content: String(r.reasoning || ''),
       tool_calls: r.toolCalls.map((c) => ({
         id: c.id, type: 'function',
         function: { name: c.name, arguments: JSON.stringify(c.args || {}) },

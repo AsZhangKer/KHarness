@@ -343,9 +343,17 @@ function createWindow(url) {
      它在输入框里本来就能用，抢过来反而会把「在非编辑区按 Ctrl+A」这类原生行为改掉。 */
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown' || input.altKey || !(input.controlKey || input.metaKey)) return;
+    /* 输入法合成中（候选词还没上屏）一个组合键都不抢。
+       这条是桌面端独有的链路：这里 preventDefault 会让 Chromium 不再补发 compositionend，
+       页面那个输入框的 v-model 标记就永久卡在 composing（打字没反应、粘贴照旧、只能重启）。
+       网页端没有 before-input-event，所以那个症状只在打包的桌面端出现。
+       详见 client/src/utils/ime.js 与 client/__tests__/ime-composition.test.js。 */
+    if (input.isComposing) return;
     const wc = win.webContents;
     const k = String(input.key || '').toLowerCase();
-    if (k === 'w') { e.preventDefault(); win.close(); return; }
+    // 关闭不自己动手：发一句让页面裁决（它还知道有没有会话正在回答中），页面问完人再调 winCtl('close')。
+    // 菜单项与那颗 X 本来就都在页面里，这样三条路用的是同一句确认，不会出现「按钮拦、快捷键不拦」。
+    if (k === 'w') { e.preventDefault(); wc.send('kh:ask-close'); return; }
     if (k === 'r') { e.preventDefault(); wc.reload(); return; }
     if (k === '=' || k === '+') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() + ZOOM_STEP)); bviewResync(); return; }
     if (k === '-') { e.preventDefault(); wc.setZoomFactor(clampZoom(wc.getZoomFactor() - ZOOM_STEP)); bviewResync(); return; }

@@ -1,5 +1,5 @@
 <template>
-  <KModal :open="open" title="上下文导入 / 导出" width="560px" @close="$emit('close')">
+  <KModal :open="open" title="上下文导入 / 导出" board="panel" tall code="CONTEXT.BOX" ghost="CTX" width="560px" ef-width="1280" @close="$emit('close')">
     <section class="blk">
       <h4><i class="fas fa-file-export"></i> 导出会话</h4>
       <label class="field">

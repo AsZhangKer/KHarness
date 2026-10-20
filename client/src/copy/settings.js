@@ -25,6 +25,18 @@ export default {
   'settings.whale.note': '若取消勾选，配置将被保存',
   'settings.whale.on': '娱乐挂件已开启',
   'settings.whale.off': '娱乐挂件已关闭，配置已保留',
+  // 界面动效：降级不再由系统的「减少动效」自动决定（第八十一轮：Linux 桌面一关动画，这里全站静帧且无从反悔）
+  'settings.motion.label': '界面动效',
+  'settings.motion.note': '过渡、弹窗动画与滚动动画。关闭后界面立即停止这些动画。',
+  'settings.motion.offFail': '动效开关没写进本地配置，本次启动仍然有效',
+
+  /* 开屏加载动画。说明那句是实打实的边界：开关写进服务端，
+     而服务端是在把 index.html 发出去的那一刻就把值注进页面里的（server/index.js），
+     所以「这一次」已经播过了，改完要下一次启动才看得到差别 —— 预览那颗键就是补这一脚的。 */
+  'settings.boot.label': '开屏加载动画',
+  'settings.boot.note': '关闭后从下一次启动生效',
+  'settings.boot.preview': '预览',
+  'settings.boot.previewTitle': '重新载入窗口，播放一次',
 
   /* ---- 第七十一轮：他给的文案对照表整页落地 ----
      说明段凡是他标「留空」的都直接删掉了（不留一个空 <p>），
@@ -41,7 +53,7 @@ export default {
   'settings.agents.note': '项目根若有 AGENTS.md 将会与其一同作为系统提示词。',
 
   'settings.stall.label': '自动中止死循环',
-  'settings.roundFold.label': '工具返回值落盘（部分模型出现反复读取问题）',
+  'settings.roundFold.label': '工具结果裁剪（超出预算保留头尾，全文落盘可重读）',
 
   'settings.approval.note': '此处规定为缺省值',
   'settings.secret.newLabel': '新规则',

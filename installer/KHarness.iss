@@ -6,13 +6,16 @@
 ; 安装包交给 Inno Setup 压（lzma2/fast + 独立压缩进程，一两分钟）。
 ;
 ; 出包：  "D:\Inno Setup 6\ISCC.exe" installer\KHarness.iss
-; 产物：  release-new\KHarness-Setup-1.3.5.exe
+; 产物：  release-new\KHarness-Setup-1.3.8d.exe
 ;
 ; 装的是「程序本体」；用户数据一律在 %APPDATA%\KHarness（kh.db、日志、端口文件），
 ; 卸载故意不去碰它（和以前 NSIS 的 deleteAppDataOnUninstall=false 一致）。
 
 #define MyAppName "KHarness"
-#define MyAppVersion "1.3.5"
+; 注意这个 d 是「自用测试版」的标志，要和正式版区分开：
+;   d 版 → pack-prep 带 --dev（version.json 的 packaged:false）→ 界面显示 v1.3.8d、带「调试」板块
+;   正式版 → pack-prep 不带参数（packaged:true）→ v1.3.8，且安装包文件名不带 d
+#define MyAppVersion "1.4.5d"
 #define AppPublisher "KHarness"
 ; 相对本 .iss 文件所在目录解析
 #define UnpackedDir "..\release-new\win-unpacked"

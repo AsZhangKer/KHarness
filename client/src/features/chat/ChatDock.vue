@@ -175,11 +175,16 @@
           <div class="row" :title="turnNote"><span class="muted">{{ turnWord }}输出</span><span>{{ fmt(usage.completion_tokens) }} tok</span></div>
           <div class="row" :title="turnNote"><span class="muted">缓存</span><span>{{ fmt(usage.cached_tokens) }} tok</span></div>
           <div class="row" :title="turnNote"><span class="muted">思考</span><span>{{ fmt(usage.reasoning_tokens) }} tok</span></div>
-          <div class="row" title="当前上下文占用 / 窗口上限（以上游实测为锚点，和上面四格不是一把尺）"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
+          <div class="row" :title="ctxTitle"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
           <div class="actions">
-            <button class="btn" type="button" :disabled="pressing" :title="pressing ? '摘要生成中，消息流里那张卡片会跟着阶段变' : '把较早的历史压成一段摘要'" @click="$emit('press')">
-              <i v-if="pressing" class="fas fa-circle-notch fa-spin"></i>
-              {{ pressing ? '正在压缩…' : '压缩上下文' }}
+            <button
+              class="btn"
+              type="button"
+              :title="pressing ? '点一下取消这次压缩（历史原样保留）' : '把较早的历史压成一段摘要'"
+              @click="$emit(pressing ? 'cancel-press' : 'press')"
+            >
+              <i class="fas" :class="pressing ? 'fa-xmark' : 'fa-compress'"></i>
+              {{ pressing ? '取消压缩' : '压缩上下文' }}
             </button>
             <button class="btn" type="button" @click="ctxOpen = true">设定窗口</button>
           </div>
@@ -336,8 +341,8 @@
     <KModal :open="ctxOpen" title="设定上下文窗口" @close="ctxOpen = false">
       <KInput v-model="ctxLimit" label="context limit（token）" type="number" block />
       <template #footer>
-        <button class="btn" type="button" @click="ctxOpen = false">取消</button>
-        <button class="btn" type="button" @click="saveCtx">确定</button>
+        <KButton variant="ghost" @click="ctxOpen = false">取消</KButton>
+        <KButton variant="primary" @click="saveCtx">确定</KButton>
       </template>
     </KModal>
 
@@ -383,6 +388,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { txt } from '../../copy';
 import KTabs from '../../ui/KTabs.vue';
 import KModal from '../../ui/KModal.vue';
+import KButton from '../../ui/KButton.vue';
 import KInput from '../../ui/KInput.vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import ComputerUsePanel from './ComputerUsePanel.vue';
@@ -421,7 +427,12 @@ const props = defineProps({
   loadedSkills: { type: Array, default: () => [] },
   insertItems: { type: Array, default: () => [] },
   contextUsed: { type: Number, default: 0 },
+  // 下一发真正要发的那一包（不含本轮工具结果）：用来解释「峰值」与真实值的差
+  contextNext: { type: Number, default: 0 },
+  contextLive: { type: Number, default: 0 },
   contextLimit: { type: Number, default: 0 },
+  /** 用户亲手设的那个窗口：分母可能是 min(设定, 实测能力)，两者不同时 title 里说清楚 */
+  contextConfigured: { type: Number, default: 0 },
   /** 手动压缩在跑：那颗按钮要禁用 + 转圈（一次摘要要等上游几十秒，没反馈就像点死了） */
   pressing: { type: Boolean, default: false },
   /** 实验室「Git 版本预览」开关（来自 localStorage，随请求一起发给后端） */
@@ -430,7 +441,7 @@ const props = defineProps({
   dockW: { type: Number, default: 300 },
 });
 
-const emit = defineEmits(['undo', 'update-task', 'press', 'set-context', 'clear-insert', 'remove-insert', 'git-action', 'open-agent', 'review']);
+const emit = defineEmits(['undo', 'update-task', 'press', 'cancel-press', 'set-context', 'clear-insert', 'remove-insert', 'git-action', 'open-agent', 'review']);
 
 /* ---- 工作区变更预览 ---- */
 const chg = ref({ is_repo: false, branch: '', files: [], stat: '' });
@@ -634,6 +645,25 @@ watch(() => [store.state.chatId, props.cwd], () => {
 const ctxOpen = ref(false);
 const ctxLimit = ref(0);
 
+/**
+ * 上下文那一格的说明文字。
+ *
+ * 显示的那个数 = 「下一发真正要发的那一包」（不含本轮工具结果）：
+ * 生成中不涨、回合结束不掉，始终是同一个数 —— 这就是「不再过山车」。
+ * 而生成中那一发可能大得多（刚读进来的文件都在里面），压缩判定正是按它算的，
+ * 所以整包明显更大时把那个数一并说出来，用户才不会在「才 9%」的时候被一次压缩搞懵。
+ */
+const ctxTitle = computed(() => {
+  const conf = Number(props.contextConfigured) || 0;
+  // 分母比设定值小只有一种原因：上游真的以「输入超长」拒过某一包（实测天花板），
+  // 那是既成事实而不是推断（不再从「历史最大一发」反推能力）。
+  const tail = (conf > 0 && conf > props.contextLimit)
+    ? `
+你设的窗口 ${fmt(conf)} tok，已被上游实测上限 ${fmt(props.contextLimit)} tok 封顶（撞过一次输入超长才会这样；改大不会再有第二次）`
+    : '';
+  return '当前上下文占用 / 窗口上限（按「下一次请求要发出去的那一包」计，含历史工具结果；和上面四格不是一把尺）' + tail;
+});
+
 /* 后台任务：切到该页才拉，页内每 5s 自动刷新。
    按会话取（他第七十四轮报的「后台任务串会话」）：整张表所有会话共用时，
    A 起的 dev server 会列进 B 的面板、B 还能一颗键杀掉它。 */
@@ -830,9 +860,11 @@ function fmt(n) {
   return formatTokens(n || 0);
 }
 
-// 打开「设定窗口」时回填当前窗口值，否则每次都要重填
+// 打开「设定窗口」时回填**你自己设的那个数**（props.contextConfigured），不是分母。
+// 分母可能是被上游实测天花板封顶后的值（撞过超长才会），拿它回填等于把你的设置
+// 悄悄改小 —— 用户一按确定就丢掉了原来那个数。
 watch(ctxOpen, (v) => {
-  if (v) ctxLimit.value = Number(props.contextLimit) || 0;
+  if (v) ctxLimit.value = Number(props.contextConfigured) || Number(props.contextLimit) || 0;
 });
 
 function saveCtx() {
@@ -1204,5 +1236,5 @@ section h4 .refresh { margin-left: auto; }
 @keyframes sup-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 .sup-manual { margin-top: 12px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
 .sup-manual > summary { cursor: pointer; font-size: 11.5px; color: var(--text-3); }
-@media (prefers-reduced-motion: reduce) { .s-caret { animation: none; } }
+ html[data-motion='off'] .s-caret{ animation: none; } 
 </style>

@@ -171,24 +171,25 @@ describe('设置页与挂载条件', () => {
   });
 
   it('挂载只跟 plan_mode 走：关着时 tools 清单里没有计划工具，也没有它们的说明', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8');
+    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
     const def = src.slice(src.indexOf('function activeAgentTools('), src.indexOf('function activeAgentTools(') + 260);
     expect(def).toMatch(/AGENT_TOOLS\.concat\(toolgate\.definitions\(\)\)\.concat\(planOn \? plantools\.PLAN_TOOLS : \[\]\)/);
-    // 主循环那几处一律传 planMode，漏一处就等于「Plan 关着的会话也发工具表」
-    expect((src.match(/activeAgentTools\(planMode\)/g) || []).length).toBe(6);
+    // 至少 6 处；关键是「不许出现不带参数的调用」——漏传 planMode 就等于 Plan 关着也发工具表
+    expect((src.match(/activeAgentTools\(planMode\)/g) || []).length).toBeGreaterThanOrEqual(6);
+    expect((src.match(/activeAgentTools\(\s*\)/g) || []).length).toBe(0);
     expect((src.match(/allToolSchemas\(planMode\)/g) || []).length).toBe(2);
     expect(src).toMatch(/buildCapabilityMap\(planMode\)/);
   });
 
   it('执行层在 toolgate 之前分派，且写完表立刻推 t:tasks 给右侧面板', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8');
+    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
     const head = src.slice(src.indexOf('  try {\n    // Plan 模式的计划任务工具'), src.indexOf('  try {\n    // Plan 模式的计划任务工具') + 600);
     expect(head.indexOf('plantools.PLAN_NAMES.has(name)')).toBeLessThan(head.indexOf('toolgate.isGateTool(name)'));
     expect(src).toMatch(/plantools\.PLAN_NAMES\.has\(name\) && !result\.error\) send\(\{ t: 'tasks', tasks: getTasks\(chatId\) \}\)/);
   });
 
   it('提示词不再教标签，改教工具，并且明说标签已废弃', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8');
+    const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
     const block = src.slice(src.indexOf('if (planMode) {\n    lines.push'), src.indexOf('const apiNotes = toolgate.promptNotes()'));
     expect(block).toContain('plan_write');
     expect(block).toContain('plan_update');

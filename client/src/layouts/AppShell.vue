@@ -184,9 +184,9 @@ function goBack() {
   from { opacity: 0; transform: translateX(12px); }
   to { opacity: 1; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .page-anim { animation: none; }
-}
+
+  html[data-motion='off'] .page-anim{ animation: none; }
+
 .nav-link.active {
   /* 底色交给滑动的胶囊，这里只改文字色，否则选中态会有两块背景 */
   color: var(--text);

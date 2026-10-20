@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { db } = require('../database');
 const remote = require('./remote');
+const shellprobe = require('./shellprobe');
 const procguard = require('./procguard');
 
 const IS_WIN = process.platform === 'win32';
@@ -65,17 +66,6 @@ tameConptyConsoleList();
 
 const sessions = new Map();   // id -> session
 
-function which(cmd) {
-  try {
-    const { execFileSync } = require('child_process');
-    const out = execFileSync(IS_WIN ? 'where' : 'which', [cmd], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
-    const first = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-    return first || '';
-  } catch (e) {
-    return '';
-  }
-}
-
 /** 设置里选的默认 Shell（'' = 系统默认） */
 function settingShell() {
   try { return (db.prepare("SELECT value FROM settings WHERE key = 'agent_shell'").get()?.value || '').trim(); }
@@ -122,20 +112,31 @@ function expandVars(p) {
  */
 function localShells() {
   const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+  const fallback = IS_WIN ? (process.env.COMSPEC || path.join(sysRoot, 'System32\\cmd.exe')) : (process.env.SHELL || '/bin/bash');
   const out = [];
-  out.push({ id: 'auto', label: '跟随设置里的终端', file: settingShell() || (IS_WIN ? (process.env.COMSPEC || path.join(sysRoot, 'System32\\cmd.exe')) : (process.env.SHELL || '/bin/bash')), detected: true });
+  out.push({ id: 'auto', label: '跟随设置里的终端', file: settingShell() || fallback, detected: true });
+  /* 系统终端统一走 shellprobe（和 Agent Shell 下拉同一份实现）。
+     以前这里 spawn `where`/`which`，Flatpak 沙箱里根本没有 which，异常被 catch 吞成空串
+     → bash/zsh/sh 全部「未检测到」；Git Bash 也只认 %ProgramFiles% 那一份，
+     安装器默认的「仅为我安装」(%LOCALAPPDATA%\Programs\Git) 扫不到。 */
+  const found = shellprobe.probeShells();
+  const byKind = (k) => (found.find((s) => s.kind === k) || {}).file || '';
+  const byBase = (re) => (found.find((s) => re.test(path.basename(s.file))) || {}).file || '';
   if (IS_WIN) {
-    out.push({ id: 'cmd', label: 'CMD', file: process.env.COMSPEC || path.join(sysRoot, 'System32\\cmd.exe'), detected: fs.existsSync(process.env.COMSPEC || path.join(sysRoot, 'System32\\cmd.exe')) });
-    const ps5 = path.join(sysRoot, 'System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-    out.push({ id: 'powershell', label: 'PowerShell 5', file: ps5, detected: fs.existsSync(ps5) });
-    out.push({ id: 'pwsh', label: 'PowerShell 7', file: which('pwsh') || which('pwsh.exe'), detected: !!which('pwsh') });
-    const bash = [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'), which('bash')]
-      .find((p) => p && fs.existsSync(p));
+    const cmd = byKind('cmd');
+    out.push({ id: 'cmd', label: 'CMD', file: cmd || fallback, detected: !!cmd });
+    const ps5 = byBase(/^powershell\.exe$/i);
+    out.push({ id: 'powershell', label: 'PowerShell 5', file: ps5, detected: !!ps5 });
+    const pwsh = byBase(/^pwsh(\.exe)?$/i);
+    out.push({ id: 'pwsh', label: 'PowerShell 7', file: pwsh, detected: !!pwsh });
+    // 优先取路径里带 Git 的那份 bash（Git Bash 会去 spawn 自己的 usr\bin\bash，语意才完整）
+    const bash = (found.find((s) => s.kind === 'bash' && /git/i.test(s.file)) || {}).file || byKind('bash');
     out.push({ id: 'gitbash', label: 'Git Bash', file: bash || '', detected: !!bash });
-    out.push({ id: 'wsl', label: 'WSL', file: which('wsl') || which('wsl.exe'), detected: !!which('wsl') });
+    const wsl = byKind('wsl');
+    out.push({ id: 'wsl', label: 'WSL', file: wsl, detected: !!wsl });
   } else {
-    for (const [id, label, bin] of [['bash', 'Bash', 'bash'], ['zsh', 'Zsh', 'zsh'], ['sh', 'Sh', '/bin/sh']]) {
-      const f = which(bin) || (fs.existsSync(bin) ? bin : '');
+    for (const [id, label, bin] of [['bash', 'Bash', 'bash'], ['zsh', 'Zsh', 'zsh'], ['sh', 'Sh', 'sh']]) {
+      const f = (found.find((s) => path.basename(s.file).toLowerCase() === bin) || {}).file || '';
       out.push({ id, label, file: f, detected: !!f });
     }
   }

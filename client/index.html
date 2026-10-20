@@ -6,8 +6,299 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KHarness</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer" />
+    <!-- 开屏配置由服务端在发出这份 HTML 时替换（见 server/index.js 的 indexHtml()）。
+         没被替换时它就是个字符串 "__KH_BOOT__"，下面的驱动把它当「没有配置」→ 按默认播；
+         vite dev（5173）走的就是这条路，开发时照样能看到板子。 -->
+    <script>window.__KH_BOOT__ = "__KH_BOOT__";</script>
+    <style>
+      /* ===================== 开屏加载板 =====================
+         结构 1:1 借第三方主题 dsh-theme-endfield 的启动版（作者自己项目里的 MIT 件），
+         几何也照它从参考帧量出来的比值走：竖轨 10px、读数贴在轨道右 26px、品牌块锚在右边距
+         max(64px,12%) 而不是锚左起点、字号 clamp(26px, min(5.2vh,4.8vw), 64px) 按视口短轴缩放。
+         配色固定黑黄，**不读主题 token**：这块板在主题样式还没到之前就得画出来
+         （tokens.css 在 549KB 那个 chunk 之前还没生效），跟着主题走会闪一下没定义的颜色。
+         文案换 KHARNESS，状态行不再写 "Connecting/Updating" 这种和真实进度无关的话（见下面的 MILESTONES）。 */
+      #kh-boot {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        background: #101110;
+        color: #f5f5f0;
+        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        font-feature-settings: "tnum" 1;
+        overflow: hidden;
+        /* 关键：绝不吞鼠标。板子在放的时候底下那层一直能用，
+           万一哪天收尾卡住，用户也不会被自己的应用锁在外面。 */
+        pointer-events: none;
+        opacity: 1;
+      }
+      #kh-boot[hidden] { display: none; }
+      /* 淡出与扫光都由 JS 逐帧写 opacity/width，不用 CSS transition：
+         endfield 那边实测过某些渲染器里 transition 干脆不发事件、宽度死在起始值，
+         屏上会留一条没吃完的黄桩；我们在 Electron 里也有同类前科（窗口被遮挡时 rAF 被节流）。
+         JS 驱动跟着进度一起停摆一起走，停摆到点了还有 fuse / kill 两层兜底。 */
+      .kb-tex {
+        position: absolute; inset: 0; opacity: 0.55;
+        background-image:
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 4px),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.010) 0 1px, transparent 1px 120px);
+      }
+      .kb-track { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: rgba(255, 245, 0, 0.10); }
+      .kb-fill  { position: absolute; left: 0; top: 0; width: 10px; height: 0%; background: #fff500; }
+      /* 读数跟着填充前沿往下走：top 由 JS 每帧按同一个 eased 值算，
+         纯 CSS 百分比会在快到底时把整组推出屏幕（钳位也在 JS 里做，那里知道它真实多高）。 */
+      .kb-meter { position: absolute; left: 26px; top: 0; will-change: top; }
+      .kb-tick { display: block; width: 4px; height: 15px; background: #fff500; }
+      .kb-pct {
+        display: block; margin-top: 7px; color: #fff500;
+        font-size: 39px; font-weight: 700; line-height: 1; letter-spacing: -0.01em;
+        font-variant-numeric: tabular-nums;
+      }
+      .kb-status { display: block; margin-top: 12px; color: #666; font-size: 11px; letter-spacing: 0.02em; }
+      .kb-wipe { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: #fff500; opacity: 0; }
+      /* ---- 右侧那一叠品牌块：内部左对齐、整体靠右放，这两件事同时成立才是那个味道 ---- */
+      #kh-boot { --kb-word: clamp(26px, min(5.2vh, 4.8vw), 64px); --kb-gap: max(64px, 12%); }
+      .kb-brand { position: absolute; right: var(--kb-gap); top: 50%; transform: translateY(-50%); }
+      .kb-kicker { display: block; font-size: var(--kb-word); }
+      .kb-kicker::before {
+        content: 'KHARNESS';
+        display: block; margin-bottom: 0.5em; color: #f5f5f0;
+        /* 纯比值在矮屏上会算到 4px 糊成一片，9px 是还认得出字的下限 */
+        font-size: max(9px, 0.155em); font-weight: 600; letter-spacing: 0.26em; white-space: nowrap; opacity: 0.95;
+      }
+      .kb-word {
+        display: block; color: #f5f5f0; font-size: var(--kb-word); font-weight: 900;
+        /* 0.80 不是笔误：参考稿量的是「墨迹到墨迹」的 1.10 行距，
+           而 line-height 覆盖的是整个 em 框（900 字重的 Arial 大约是 cap 高的 1.38 倍），
+           直接写 1.10 会排成肉眼可见的松散 1.52 墨距。 */
+        line-height: 0.8; letter-spacing: 0.01em; white-space: nowrap;
+        margin-left: -0.055em;   /* 抵掉字形左边距，让墨边压在节奏线上 */
+      }
+      .kb-detail { display: block; position: relative; margin-top: 1.9em; font-size: var(--kb-word); }
+      .kb-chev { position: absolute; left: -0.26em; top: 0.02em; width: 0.12em; height: 0.24em; }
+      .kb-chev::before, .kb-chev::after {
+        content: ''; position: absolute; left: 0; width: 0.10em; height: 0.10em;
+        border-left: 0.028em solid #fff500; border-bottom: 0.028em solid #fff500; transform: rotate(-45deg);
+      }
+      .kb-chev::before { top: 0; }
+      .kb-chev::after { top: 0.09em; }
+      .kb-sub::before {
+        content: 'SINGLE USER · 127.0.0.1';
+        display: block; color: #8a8d88;
+        font-size: max(9px, 0.135em); font-weight: 500; letter-spacing: 0.12em; white-space: nowrap;
+      }
+      /* 版本号：真值从服务端注入的 cfg.v 来，取不到就整行不留（见下面的 JS） */
+      .kb-seq { display: block; margin-top: 0.24em; color: #6a6d68; font-size: max(9px, 0.115em); letter-spacing: 0.18em; white-space: nowrap; }
+      .kb-squares { display: grid; grid-template-columns: repeat(6, 0.115em); gap: 0.04em; margin-top: 0.30em; }
+      .kb-squares i { display: block; height: 0.05em; background: #2e302d; }
+      .kb-squares i[data-on] { background: #fff500; }
+      .kb-tag { display: block; font-size: var(--kb-word); }
+      .kb-tag::before {
+        content: '本地优先的单用户智能体工作台';
+        display: block; margin-top: 1.05em; color: #f5f5f0;
+        font-size: max(10px, 0.22em); font-weight: 500; letter-spacing: 0.06em; white-space: nowrap;
+      }
+      @media (max-width: 1100px) { #kh-boot { --kb-gap: max(48px, 9%); } }
+      @media (max-width: 760px) { #kh-boot { --kb-gap: max(28px, 5%); } }
+    </style>
   </head>
   <body>
+    <div id="kh-boot" hidden aria-hidden="true" translate="no">
+      <div class="kb-tex"></div>
+      <div class="kb-track"></div>
+      <div class="kb-fill"></div>
+      <div class="kb-meter">
+        <span class="kb-tick"></span>
+        <span class="kb-pct">0%</span>
+        <span class="kb-status">STARTING</span>
+      </div>
+      <div class="kb-brand">
+        <span class="kb-kicker"></span>
+        <span class="kb-word">LOCAL</span>
+        <span class="kb-word">AGENT</span>
+        <span class="kb-detail">
+          <span class="kb-chev"></span>
+          <span class="kb-sub"></span>
+          <span class="kb-seq"></span>
+          <span class="kb-squares"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i><i></i></span>
+        </span>
+        <span class="kb-tag"></span>
+      </div>
+      <div class="kb-wipe"></div>
+    </div>
+    <script>
+      /* ===================== 开屏板的驱动 =====================
+         为什么写在这里而不是 client/src 里：板子要盖住的那段空档，正是「HTML 到了、
+         549KB 的 ChatPage chunk 还没到」这段时间。写成 Vue 组件等于等 bundle 到位才开始播，
+         最该盖的那半秒反而漏掉了。所以这段必须是内联的、不依赖任何构建产物的 ES5 级脚本。
+         （它单独放不进 index.html 也没法测：构建后才会有的 hashed 文件在这里还没出生。） */
+      (function () {
+        var cfg = (typeof window.__KH_BOOT__ === 'object' && window.__KH_BOOT__) ? window.__KH_BOOT__ : { on: true };
+        var el = document.getElementById('kh-boot');
+        if (!el) return;
+        // 浏览器独立窗口（?kh=browser）是附属小窗，给它播开机动画只会闪一下莫名黑屏
+        var bare = /[?&]kh=/.test(location.search);
+        if (cfg.on === false || bare) { el.parentNode.removeChild(el); window.__khBoot = null; return; }
+        if (cfg.v) { var seq = el.querySelector('.kb-seq'); if (seq) seq.textContent = String(cfg.v).toUpperCase(); }
+
+        var fill = el.querySelector('.kb-fill');
+        var meter = el.querySelector('.kb-meter');
+        var pct = el.querySelector('.kb-pct');
+        var status = el.querySelector('.kb-status');
+
+        /* 里程碑 = 真实做到哪了。权重之和 100，最后一条到齐才允许进收尾。
+           状态行直接写「还在等谁」，不用 Connecting/Updating 那种和进度无关的漂亮话。
+           最后一条是 route 而不是「会话列表到手」：停在设置页刷新时 ChatPage 根本不会挂载，
+           拿会话树当必要里程碑的话，那种启动就只能干等 fuse 收尾（五秒黑屏）。
+           而 route 恰好就是最重的那件真事——ChatPage 那个 549KB 的 chunk 就是路由组件本身。 */
+        var MILESTONES = [
+          { id: 'module', w: 25, wait: 'LOADING MODULES' },  // main.js 跑到了（bundle 到位）
+          { id: 'app', w: 25, wait: 'RENDERING' },           // 首屏 mounted 完成
+          { id: 'prefs', w: 20, wait: 'READING SETTINGS' },  // uiPrefs 从服务端读回
+          { id: 'route', w: 30, wait: 'OPENING VIEW' }       // 首个路由落地（懒加载的页面块到了）
+        ];
+        var DURATION = 1600;      // 时间兜底曲线走完的时长
+        var TIME_CAP = 90;        // 里程碑没齐时，时间线最多走到这儿（不让假进度谎报 100%）
+        var HOLD_MS = 220;        // 100% 停一拍，让人真读得到 100%
+        var WIPE_MS = 520;        // 黄从轨道向右涨满屏
+        var EXIT_MS = 620;        // 整版淡出
+        var FUSE_MS = 5000;       // 到点无论做到哪儿都收尾：宁可板子早走，不可把应用盖住
+        var done = {};            // id -> true
+        var finished = false, removed = false;
+        var raf = null, tick = null, fuse = null, exitT = null, kill = null;
+        var t0 = performance.now ? performance.now() : Date.now();
+        var now = function () { return (performance.now ? performance.now() : Date.now()); };
+
+        /* 版本固定黑黄，字距与字号全靠比值，窄窗只挪右边距（--kb-word 自己按短轴缩，不用逐断点覆写） */
+        function milestoneValue() {
+          var v = 0;
+          for (var i = 0; i < MILESTONES.length; i++) if (done[MILESTONES[i].id]) v += MILESTONES[i].w;
+          return v;
+        }
+        function allDone() {
+          for (var i = 0; i < MILESTONES.length; i++) if (!done[MILESTONES[i].id]) return false;
+          return true;
+        }
+        function waitingFor() {
+          for (var i = 0; i < MILESTONES.length; i++) if (!done[MILESTONES[i].id]) return MILESTONES[i].wait;
+          return 'READY';
+        }
+        function ease(t) { return 1 - Math.pow(1 - t, 3); }   // easeOutCubic：起步快、收尾稳
+
+        /* 时间兜底线：就算一个里程碑都没报上来，屏上也会往前走 —— 但它封顶在 TIME_CAP。
+           「没齐就不可能出现 100」是这块板子的底线，所以这条封顶值只在这里算一次。 */
+        function timedValue() {
+          return Math.min(TIME_CAP, Math.round(ease(Math.min(1, (now() - t0) / DURATION)) * 100));
+        }
+        function step() {
+          if (finished || removed) return;
+          // 里程碑到齐才允许真的 100%，也才允许开始收尾
+          if (allDone()) { finish(); return; }
+          render(Math.max(milestoneValue(), timedValue()), waitingFor());
+          raf = window.requestAnimationFrame ? requestAnimationFrame(step) : null;
+        }
+        function render(value, label) {
+          var e = value / 100;
+          if (fill) fill.style.height = (e * 100).toFixed(2) + '%';
+          if (pct) { var s = value + '%'; if (pct.textContent !== s) pct.textContent = s; }
+          if (status && label && status.textContent !== label) status.textContent = label;
+          if (meter) placeMeter(e);
+        }
+        /* 读数贴在填充前沿。先量后放：空的 meter 比带百分比/状态的两行矮得多，
+           先缓存高度再写字会算出 overflow；SAFE_BOTTOM 是给最后一行留的落地余量。 */
+        function placeMeter(e) {
+          var plateH = el.clientHeight || el.getBoundingClientRect().height || 0;
+          var meterH = Math.ceil(meter.getBoundingClientRect().height);
+          var GAP = 10, SAFE_BOTTOM = 64;
+          meter.style.bottom = 'auto';
+          var raw = e * plateH + GAP;
+          var maxTop = Math.max(0, plateH - meterH - SAFE_BOTTOM);
+          var top = Math.min(raw, maxTop);
+          var rect = meter.getBoundingClientRect(), plateRect = el.getBoundingClientRect();
+          if (rect.bottom > plateRect.bottom - SAFE_BOTTOM) top = Math.max(0, top - (rect.bottom - (plateRect.bottom - SAFE_BOTTOM)));
+          meter.style.top = top.toFixed(1) + 'px';
+        }
+
+        /* 收尾：黄从轨道向右涨满屏 → 整版淡出 → 摘掉。
+           两相都由 JS 逐帧写，理由见上面样式区那条注释。
+           要动效的人给全套，嫌动效的人（prefers-reduced-motion）直接拿走板子，不放花字。 */
+        function finish() {
+          if (finished) return;
+          finished = true;
+          /* 到齐才写 100% / READY。fuse 那条路也走这里：超时收尾时数字仍停在诚实的封顶值上，
+             状态行继续写「还在等谁」——宁可让人看见「它承认没做完」，也不在那一秒谎报完成。 */
+          render(allDone() ? 100 : Math.max(milestoneValue(), timedValue()),
+                 allDone() ? 'READY' : waitingFor());
+          cancelClocks();
+          if (removed) return;
+          var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (reduce || !window.requestAnimationFrame) { destroy(); return; }
+          /* 先停在 100% 一拍再动手：扫光一起来数字就没人看得见了，
+             没有这 220ms，"读到了 100%"这件事其实没发生。 */
+          var startFlourish = function () {
+            if (removed) return;
+            var wipe = el.querySelector('.kb-wipe');
+            var plateW = el.clientWidth || 0, RAIL = 10;
+            var f0 = now();
+            var flourish = function () {
+              if (removed) return;
+              var ms = now() - f0;
+              var wt = Math.min(1, ms / WIPE_MS);
+              if (wipe) { wipe.style.opacity = '1'; wipe.style.width = (RAIL + ease(wt) * Math.max(0, plateW - RAIL)).toFixed(1) + 'px'; }
+              var fadeMs = ms - WIPE_MS;
+              if (fadeMs > 0) { el.setAttribute('data-kb-exit', ''); el.style.opacity = Math.max(0, 1 - fadeMs / EXIT_MS).toFixed(3); }
+              if (ms >= WIPE_MS + EXIT_MS) { destroy(); return; }
+              raf = requestAnimationFrame(flourish);
+            };
+            flourish();   // 先同步画一帧，免得扫光从一个空白帧起步
+            if (window.setTimeout) exitT = setTimeout(destroy, WIPE_MS + EXIT_MS + 400);
+          };
+          if (window.setTimeout) fuse = setTimeout(startFlourish, HOLD_MS);
+          else startFlourish();
+        }
+        function cancelClocks() {
+          if (raf !== null && window.cancelAnimationFrame) cancelAnimationFrame(raf);
+          raf = null;
+          if (tick !== null) clearInterval(tick);
+          tick = null;
+          if (fuse !== null) clearTimeout(fuse);
+          fuse = null;
+        }
+        /* 摘板子 + 放掉所有句柄。幂等：两条时钟、fuse、kill 都可能走到这儿。 */
+        function destroy() {
+          if (removed) return;
+          removed = true;
+          cancelClocks();
+          if (exitT !== null) clearTimeout(exitT);
+          exitT = null;
+          if (kill !== null) clearTimeout(kill);   // 唯一一颗「不在 cancelClocks 里清」的定时器，见下面注释
+          kill = null;
+          if (el.parentNode) el.parentNode.removeChild(el);
+          window.__khBoot = null;
+        }
+
+        el.hidden = false;
+        step();
+        /* 第二颗粗时钟：rAF 在被遮挡的窗口/挂起的标签页里会停摆（我们在 Electron 上实测过
+           「窗口一被挡帧就没了」），全屏黑版最怕的就是这个 —— 所以进度按墙钟算，
+           两条时钟喂同一个幂等的 step()，谁先到都只画当下这一帧该有的值。 */
+        tick = setInterval(step, 60);
+        fuse = setTimeout(function () { finished = false; finish(); }, FUSE_MS);
+        /* 最后一道硬闸：连收尾本身都卡住（渲染器被挂起时逐帧也能整个停住）也得把板子摘了。
+           它故意不归 cancelClocks() 管 —— finish() 会先调 cancelClocks() 停掉进度时钟，
+           要是这里一起清掉，卡住的花字就永远没人收尾。 */
+        kill = setTimeout(destroy, FUSE_MS + WIPE_MS + EXIT_MS + 800);
+
+        window.__khBoot = {
+          // 报点入口：见 client/src/utils/boot.js（那边是带守卫的包装）
+          mark: function (id) { if (!done[id] && !removed) { done[id] = true; } },
+          state: function () {
+            return { value: pct ? parseInt(pct.textContent, 10) : 100, done: done, finished: finished, removed: removed, milestones: MILESTONES.length };
+          },
+          finish: function () { finished = false; finish(); }
+        };
+      })();
+    </script>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

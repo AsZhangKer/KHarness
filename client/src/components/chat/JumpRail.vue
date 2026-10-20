@@ -153,11 +153,11 @@ function clip(s, n) {
   white-space: pre-wrap;
 }
 /* 系统里关了动画的人：波浪只留宽度和颜色，不做缩放、也不逐级延迟 */
-@media (prefers-reduced-motion: reduce) {
-  .dot {
+
+  html[data-motion='off'] .dot{
     width: calc(12px + var(--w, 0) * 4px);
     transform: none;
     transition: width 0.12s linear, background 0.12s linear;
   }
-}
+
 </style>

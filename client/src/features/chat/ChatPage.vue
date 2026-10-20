@@ -34,8 +34,17 @@
     <div class="resizer" title="拖动调宽" @mousedown.prevent="startDrag('rail')"></div>
 
     <section class="main">
-      <header ref="titlebarEl" class="titlebar">
-        <div ref="titleEl" class="title">
+      <!-- 顶栏 = 母本 ai/MESSAGE_BOX/聊天框顶栏与消息框.html 的 .ef-chat-head：
+           左侧两道穿框的青色竖条 + 幽灵线稿 + 会话名，底部一条双色 strip，右端一整簇装饰。
+           装饰件（__bar/__ghost/__strip/__deco 与里面两张 svg）逐字搬母本 body 第 73–109 行。 -->
+      <header ref="titlebarEl" class="titlebar" :class="{ 'ef-chat-head': ef }">
+        <template v-if="ef">
+          <i class="ef-chat-head__bar ef-chat-head__bar--1"></i><i class="ef-chat-head__bar ef-chat-head__bar--2"></i>
+          <svg class="ef-chat-head__ghost" viewBox="0 0 330 90" fill="none" stroke="#505050" stroke-width="1.3" aria-hidden="true">
+            <path d="M18 3L96 49M33 53H84M12 16L56 44"/><path d="M122 24V34H195V6M205 3V53H262V33H224"/><path d="M290 8L298 16L294 22V53H322M300 3L312 3"/>
+          </svg>
+        </template>
+        <div ref="titleEl" class="title" :class="{ 'ef-chat-head__name': ef }">
           <template v-if="store.activeProject.value">
             <span class="muted">{{ store.activeProject.value.name }} / </span>
           </template>
@@ -52,6 +61,39 @@
           </div>
           <span v-if="store.state.cwd" class="cwd muted" :title="store.state.cwd"> · {{ store.state.cwd }}</span>
         </div>
+        <template v-if="ef">
+          <i class="ef-chat-head__strip"></i>
+          <div class="ef-chat-head__deco" aria-hidden="true">
+          <i class="ef-chat-head__cell" style="left:0;top:0;width:calc(var(--u)*32);height:calc(var(--u)*33)"></i>
+          <i class="ef-chat-head__cell" style="left:0;top:calc(var(--u)*66);width:calc(var(--u)*32);height:calc(var(--u)*33)"></i>
+          <i class="ef-chat-head__cell" style="left:calc(var(--u)*32);top:calc(var(--u)*33);width:calc(var(--u)*31.5);height:calc(var(--u)*33)"></i>
+          <div class="ef-chat-head__field">
+            <svg viewBox="0 0 481 91" preserveAspectRatio="none">
+              <defs><pattern id="efHeadDp" width="26.7" height="26.2" patternUnits="userSpaceOnUse" x="191.65" y="14.4"><circle cx="13.35" cy="13.1" r="2.1" fill="#2a98b8"/></pattern></defs>
+              <rect x="191.65" y="14.4" width="240" height="78.6" fill="url(#efHeadDp)"/>
+              <g fill="#1993fd"><rect x="139" y="0" width="12" height="49"/><rect x="139" y="0" width="51" height="9"/></g>
+              <path d="M143.5 5L186 47" stroke="#1993fd" stroke-width="12.5" fill="none"/>
+              <circle cx="326.5" cy="94" r="35" fill="#3a3a3a"/><circle cx="326.5" cy="34" r="28" fill="#3a3a3a"/>
+              <g fill="#19cffd"><rect x="288" y="63.5" width="76" height="2.6"/><rect x="288" y="70" width="76" height="3"/><rect x="288" y="82.5" width="76" height="3"/></g>
+              <circle cx="394.8" cy="89.3" r="31" fill="none" stroke="#3a3a3a" stroke-width="5"/>
+              <circle cx="393" cy="35" r="28.5" fill="none" stroke="#3a3a3a" stroke-width="5"/><circle cx="393" cy="35" r="20.5" fill="#3a3a3a"/>
+            </svg>
+          </div>
+          <i class="ef-chat-head__stripe" style="left:calc(var(--u)*506);width:calc(var(--u)*2)"></i>
+          <i class="ef-chat-head__stripe" style="left:calc(var(--u)*515);width:calc(var(--u)*4)"></i>
+          <i class="ef-chat-head__stripe" style="left:calc(var(--u)*525);width:calc(var(--u)*4)"></i>
+          <i class="ef-chat-head__stripe" style="left:calc(var(--u)*535);width:calc(var(--u)*7)"></i>
+          <div class="ef-chat-head__tail">
+            <svg viewBox="0 0 136 91" preserveAspectRatio="none" stroke="#3c3c3c" stroke-width="1.5" fill="none">
+              <path d="M30.5 5.5h11M36 0v11M30.5 87.5h11M36 82v11"/>
+              <g stroke="none" fill="#3c3c3c"><rect x="64.5" y="26" width="28.5" height="4.5"/><rect x="64.5" y="78" width="28.5" height="4" fill="#5a5c5c"/>
+              <rect x="64.5" y="33.5" width="28.5" height="1.8" opacity=".85"/><rect x="64.5" y="37.4" width="28.5" height="1.8" opacity=".78"/><rect x="64.5" y="41.3" width="28.5" height="1.8" opacity=".7"/>
+              <rect x="64.5" y="45.2" width="28.5" height="1.8" opacity=".62"/><rect x="64.5" y="49.1" width="28.5" height="1.8" opacity=".54"/><rect x="64.5" y="53" width="28.5" height="1.8" opacity=".46"/>
+              <rect x="64.5" y="56.9" width="28.5" height="1.8" opacity=".38"/><rect x="64.5" y="60.8" width="28.5" height="1.8" opacity=".3"/><rect x="64.5" y="64.7" width="28.5" height="1.8" opacity=".22"/><rect x="64.5" y="68.6" width="28.5" height="1.8" opacity=".15"/></g>
+            </svg>
+          </div>
+        </div>
+        </template>
         <div
           ref="titleActionsEl"
           class="title-actions"
@@ -88,6 +130,16 @@
           </div>
           <button class="icon-btn narrow-only" type="button" title="侧栏面板" @click.stop="toggleDrawer('dock')">
             <i class="fas fa-panel-right"></i>
+          </button>
+          <!-- 手机审批/回答桥：末位常驻开关（不折进 ta-fold）。开着 = 手机能批准/回答/继续 -->
+          <button
+            class="toggle-btn"
+            :class="{ on: lanbridgeOn }"
+            type="button"
+            :title="lanbridgeOn ? (lanbridgeConnected ? '手机审批桥已连接，手机可批准/回答/继续' : '手机审批桥已开启，等待手机连接…') : '手机审批桥（局域网内用手机批准 AI 操作、回答提问）'"
+            @click="toggleLanbridge"
+          >
+            <i class="fas" :class="lanbridgeOn ? (lanbridgeConnected ? 'fa-mobile-screen-button' : 'fa-mobile-screen') : 'fa-mobile-screen'"></i><span>手机</span>
           </button>
           <!-- 热区用「padding + 等量负 margin」撑出来：命中范围比按钮大一圈，
                但布局盒和原来一样大，不会把右边距撑开。按钮本身还是它自己的孩子，照常可点。 -->
@@ -222,6 +274,10 @@
         :thinking-levels="thinkingLevels"
         :git-branch="gitBranch"
         :git-branches="gitBranches"
+        :git-remote-branches="gitRemoteBranches"
+        :git-dirty="gitDirty"
+        :git-ahead="gitAhead"
+        :git-behind="gitBehind"
         :git-enabled="gitOk"
         :approval-mode="store.state.approvalMode"
         :approval-explicit="store.state.approvalExplicit"
@@ -230,7 +286,10 @@
         :question="store.currentQuestion.value"
         :queue-length="store.queued.value.length"
         :context-used="store.state.contextUsed"
+        :context-next="store.state.contextNext"
+        :context-live="store.state.contextLive"
         :context-limit="store.state.contextLimit"
+        :context-configured="store.state.contextConfigured"
         :first-token-ms="store.state.firstTokenMs"
         :tok-per-sec="store.state.tokPerSec"
         @send="onSend"
@@ -273,13 +332,17 @@
       :loaded-skills="store.state.loadedSkills"
       :insert-items="store.state.insertItems"
       :context-used="store.state.contextUsed"
+      :context-next="store.state.contextNext"
+      :context-live="store.state.contextLive"
       :context-limit="store.state.contextLimit"
+      :context-configured="store.state.contextConfigured"
       :pressing="store.state.pressing"
       :lab-git="!!labFlags.gitPreview"
       :dock-w="dockW"
       @undo="onUndo"
       @update-task="onUpdateTask"
       @press="store.pressChat"
+      @cancel-press="store.cancelPress"
       @set-context="store.setContext"
       @clear-insert="store.clearInserts"
       @remove-insert="store.removeInsert"
@@ -320,7 +383,7 @@
     />
 
     <!-- 模型设置 -->
-    <KModal :open="modelSettingsOpen" title="模型设置" width="520px" @close="modelSettingsOpen = false">
+    <KModal :open="modelSettingsOpen" title="模型设置" board="panel" tall code="MODEL.SETTINGS" ghost="MODEL" width="520px" ef-width="1200" @close="modelSettingsOpen = false">
       <div class="form">
         <KInput v-model.number="modelForm.temperature" label="温度 (0–2)" type="number" block />
         <KInput v-model.number="modelForm.frequency_penalty" label="频率惩罚" type="number" block />
@@ -347,13 +410,13 @@
         <p class="muted">{{ txt('chat.ctx.compressHint') }}</p>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="modelSettingsOpen = false">取消</button>
-        <button class="k-btn primary sm" type="button" @click="saveModelParams">保存</button>
+        <KButton variant="ghost" size="sm" @click="modelSettingsOpen = false">取消</KButton>
+        <KButton variant="primary" size="sm" @click="saveModelParams">保存</KButton>
       </template>
     </KModal>
 
     <!-- 回收站 -->
-    <KModal :open="recycleOpen" title="回收站" width="560px" @close="recycleOpen = false">
+    <KModal :open="recycleOpen" title="回收站" board="panel" tall code="RECYCLE.BOX" ghost="RECYCLE" width="560px" ef-width="1200" @close="recycleOpen = false">
       <p class="muted" style="margin-bottom:10px">
         会话与项目删除后会移动至此处，可手动恢复或彻底删除；注意：此处文件不会自动清理。
       </p>
@@ -383,19 +446,18 @@
         <button class="k-btn sm danger" type="button" @click="removeRow(it)">永久删除</button>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="recycle.refresh()">刷新</button>
-        <button class="k-btn ghost sm" type="button" @click="recycleOpen = false">关闭</button>
-        <button
-          class="k-btn danger sm"
-          type="button"
+        <KButton variant="ghost" @click="recycle.refresh()">刷新</KButton>
+        <KButton variant="ghost" @click="recycleOpen = false">关闭</KButton>
+        <KButton
+          variant="danger"
           :disabled="!recycleRows.length"
           @click="clearRecycle"
-        >清空回收站</button>
+        >清空回收站</KButton>
       </template>
     </KModal>
 
     <!-- 技能选择 -->
-    <KModal :open="store.state.skillsPicker" title="加载技能到本会话" width="560px" @close="store.state.skillsPicker = false">
+    <KModal :open="store.state.skillsPicker" title="加载技能到本会话" board="panel" tall code="SKILL.BOX" ghost="SKILL" width="560px" ef-width="1200" @close="store.state.skillsPicker = false">
       <div class="skill-list">
         <label v-for="s in skillList" :key="s.name" class="skill-item" :class="{ on: skillsChecked.includes(s.name) }">
           <input class="k-check" v-model="skillsChecked" type="checkbox" :value="s.name" />
@@ -407,14 +469,14 @@
         <p v-if="!skillList.length" class="muted">暂无可用技能，可在设置导入。</p>
       </div>
       <template #footer>
-        <button class="btn" type="button" @click="skillsChecked = skillList.map((s) => s.name)">全选</button>
-        <button class="btn" type="button" @click="skillsChecked = []">清空</button>
-        <button class="btn" type="button" @click="applySkills">应用</button>
+        <KButton variant="ghost" @click="skillsChecked = skillList.map((s) => s.name)">全选</KButton>
+        <KButton variant="ghost" @click="skillsChecked = []">清空</KButton>
+        <KButton variant="primary" @click="applySkills">应用</KButton>
       </template>
     </KModal>
 
     <!-- 新建项目（remote_id 非空时是「新建远端项目」，路径填远端绝对路径） -->
-    <KModal :open="projModal" :title="projTitle" width="480px" @close="projModal = false">
+    <KModal :open="projModal" :title="projTitle" width="480px" tall @close="projModal = false">
       <div class="form">
         <KInput v-model="projForm.name" label="项目名称" block placeholder="例如：my-project" />
         <div class="path-row">
@@ -447,13 +509,13 @@
         </div>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="projModal = false">取消</button>
-        <button class="k-btn primary sm" type="button" @click="submitProject">{{ projForm.editingId ? '保存' : '创建' }}</button>
+        <KButton variant="ghost" size="sm" @click="projModal = false">取消</KButton>
+        <KButton variant="primary" size="sm" @click="submitProject">{{ projForm.editingId ? '保存' : '创建' }}</KButton>
       </template>
     </KModal>
 
     <!-- 会话右键「设置工作目录」：自由会话的目录出口（以前只有 /dir 一条命令） -->
-    <KModal :open="cwdModal" title="设置工作目录" width="480px" @close="cwdModal = false">
+    <KModal :open="cwdModal" title="设置工作目录" width="480px" tall @close="cwdModal = false">
       <div class="form">
         <div class="muted hint-line">会话：{{ cwdForm.title }}</div>
         <div class="path-row">
@@ -477,13 +539,13 @@
         </div>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="cwdModal = false">取消</button>
-        <button class="k-btn primary sm" type="button" @click="submitCwd">确认</button>
+        <KButton variant="ghost" size="sm" @click="cwdModal = false">取消</KButton>
+        <KButton variant="primary" size="sm" @click="submitCwd">确认</KButton>
       </template>
     </KModal>
 
     <!-- 新建会话 -->
-    <KModal :open="chatModal" title="新建会话" width="480px" @close="chatModal = false">
+    <KModal :open="chatModal" title="新建会话" width="480px" tall @close="chatModal = false">
       <div class="form">
         <KInput v-model="chatForm.title" label="会话名称" block placeholder="新会话" />
         <label class="field">
@@ -492,8 +554,8 @@
         </label>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="chatModal = false">取消</button>
-        <button class="k-btn primary sm" type="button" @click="submitChat">创建</button>
+        <KButton variant="ghost" size="sm" @click="chatModal = false">取消</KButton>
+        <KButton variant="primary" size="sm" @click="submitChat">创建</KButton>
       </template>
     </KModal>
 
@@ -501,7 +563,7 @@
     <RemoteHostModal :open="hostModal" :host="hostEditing" @close="hostModal = false" />
 
     <!-- 模型池 -->
-    <KModal :open="store.state.poolPicker" title="模型池（先点优先）" width="560px" @close="store.state.poolPicker = false">
+    <KModal :open="store.state.poolPicker" title="模型池（先点优先）" width="560px" tall @close="store.state.poolPicker = false">
       <div class="pool-list">
         <button
           v-for="(m, i) in store.state.models"
@@ -517,12 +579,12 @@
         </button>
       </div>
       <template #footer>
-        <button class="btn" type="button" @click="poolOrder = []">重置</button>
-        <button class="btn" type="button" @click="applyPool">应用</button>
+        <KButton variant="ghost" @click="poolOrder = []">重置</KButton>
+        <KButton variant="primary" @click="applyPool">应用</KButton>
       </template>
     </KModal>
     <!-- 首次启动选 Shell -->
-    <KModal :open="shellOpen" title="选择命令执行用的 Shell" width="480px" @close="skipShell">
+    <KModal :open="shellOpen" title="选择命令执行用的 Shell" width="480px" tall @close="skipShell">
       <p class="muted">Agent 跑命令（run_command / 后台任务）会用这个 Shell。没装的就点不了，之后也能在「设置 → 常规」改。</p>
       <div class="shell-list">
         <button
@@ -538,7 +600,7 @@
         </button>
       </div>
       <template #footer>
-        <button class="k-btn ghost sm" type="button" @click="skipShell">先用系统默认</button>
+        <KButton variant="ghost" size="sm" @click="skipShell">先用系统默认</KButton>
       </template>
     </KModal>
 
@@ -607,14 +669,17 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from './chatStore';
-import { aiApi } from '../../api';
+import { aiApi, settingsApi } from '../../api';
 import { toast } from '../../stores/toast';
+import { motionState } from '../../stores/motion';
 import { txt } from '../../copy';
 import { toastErr, errReport, copyText } from '../../utils/errText';
 import { confirmDialog } from '../../stores/confirm';
 import { promptDialog } from '../../stores/prompt';
 import { recycleBin } from '../../stores/recycle';
 import KModal from '../../ui/KModal.vue';
+import KButton from '../../ui/KButton.vue';
+import { themeState } from '../../stores/theme';
 import AgentsEditor from '../../ui/AgentsEditor.vue';
 import ContextDialog from './ContextDialog.vue';
 import KInput from '../../ui/KInput.vue';
@@ -667,8 +732,20 @@ const immersive = ref(false);
 const titlebarEl = ref(null);
 const titleEl = ref(null);
 const titleActionsEl = ref(null);
+// 母本顶栏那批装饰件（竖条/线稿/strip/右端装饰簇）只在终末地下渲染：
+// 六套原主题里它们没有样式，两张大 svg 会按固有尺寸直接杵在标题栏上。
+const ef = computed(() => themeState.id === 'endfield');
 const { compact: barTight, remeasure: remeasureTitlebar } = useBarOverflow(titlebarEl, {
-  need: () => (titleEl.value?.scrollWidth || 0) + rowNeed(titleActionsEl.value, 6) + 16,
+  /**
+   * 顶栏换成母本 .ef-chat-head 后，右端那簇装饰（.ef-chat-head__deco，680u 宽）是钉死在板右沿的，
+   * 开关排只能排在它左边 ⇒ 可用宽度得把这一簇连缝一起扣掉，否则会晚一步才降级、标题压到装饰上。
+   * 扣的量直接量装饰件本身，不写死数字（母本换档 --u 时它自己跟着变）。
+   */
+  need: () => {
+    const deco = titlebarEl.value?.querySelector('.ef-chat-head__deco');
+    const reserved = deco ? deco.offsetWidth + 12 : 0;
+    return (titleEl.value?.scrollWidth || 0) + rowNeed(titleActionsEl.value, 6) + 16 + reserved;
+  },
 });
 watch(
   () => [store.chatTitle.value, store.state.cwd, store.activeProject.value?.name],
@@ -929,6 +1006,29 @@ const history = computed(() => store.historyFromMessages());
 let labFlags = {};
 try { labFlags = JSON.parse(localStorage.getItem('nu_labs') || '{}') || {}; } catch { labFlags = {}; }
 
+// 局域网手机审批/回答桥：顶栏那颗「手机」开关。状态从后端读（settings.lanbridge_enabled），
+// 开关即存即生效（settingsApi.update → 后端 sync() 立即启停，不用重启）。
+const lanbridgeOn = ref(false);
+const lanbridgeConnected = ref(false);
+async function loadLanbridge() {
+  try {
+    const st = await settingsApi.lanbridge();
+    lanbridgeOn.value = !!st?.enabled;
+    lanbridgeConnected.value = !!st?.connected;
+  } catch { /* 老后端没这条路由：保持关 */ }
+}
+async function toggleLanbridge() {
+  lanbridgeOn.value = !lanbridgeOn.value;
+  try {
+    await settingsApi.update({ lanbridge_enabled: lanbridgeOn.value ? 1 : 0 });
+    toast(lanbridgeOn.value ? '已开启手机审批桥（手机装好 App 后同一局域网自动配对）' : '已关闭手机审批桥', lanbridgeOn.value ? 'success' : 'info', 3000);
+    loadLanbridge();
+  } catch (e) {
+    lanbridgeOn.value = !lanbridgeOn.value;
+    toastErr(e, '切换失败');
+  }
+}
+
 // 小鲸鱼互动挂件：全局单例，离开聊天页只隐藏不销毁
 let whale = null;
 // 「设置 → 外观」里的总开关（settings.whale_widget.enabled）。null = 这次会话还没读到配置。
@@ -956,6 +1056,7 @@ onMounted(async () => {
   // 先按现状贴一次底，别等下面四个请求：它们跑完之前那一屏停在会话顶部（他就是从这儿进来的）。
   if (id || store.state.messages.length) scrollBottomAfterSettle();
   await Promise.all([store.refreshTree(), store.refreshModels(), remote.refresh(), store.loadGlobalApproval()]);
+  loadLanbridge();
   // 直接以 /chat/:id 打开（或刷新）时没人滚过：切会话那条路只在路由参数变化时跑，
   // 首屏就停在最上面。和切会话同一套「跟到内容长齐」。
   if (id) { await store.openChat(id); scrollBottomAfterSettle(); }
@@ -1004,6 +1105,9 @@ const flashMsgId = ref(null);
 /** 轨迹跳进来时消息可能还在异步加载，轮询几次再定位 */
 function scrollToMsg(id, tries = 20) {
   revealed.value = store.state.messages.length;   // 要找的那条可能在折叠区里：先全放出来
+  // 这一路是「我们把上面全摊开、再平滑滚到中间」：整个过程都不许自动贴底，
+  // 否则摊开的那一刻就被拽到了底部、scrollIntoView 也白滚（每次重试都续一次窗口）
+  suppressAutoFollow(1500);
   nextTick(() => {
     const el = document.getElementById(`msg-${id}`);
     if (el) {
@@ -1032,6 +1136,15 @@ const showDown = ref(false);
 // 是否跟随到底部（用户上翻即关闭，点「回到底部」或切会话重新打开）
 const pinnedToBottom = ref(true);
 let scrollAnimActive = false;   // 惯性滚到底正在进行（这段时间不认 scroll 事件的用户意图）
+/**
+ * 我们自己动了内容或位置的那一瞬间（展开更早的历史、轨迹跳转定位）：短暂关掉自动贴底。
+ * 声明放在这里而不是 ResizeObserver 旁边 —— scrollToMsg 会被 immediate 的 watch 在 setup 期间
+ * 就调到，那时下面的 let 还在 TDZ 里。
+ */
+let followSuppressUntil = 0;
+function suppressAutoFollow(ms = 800) {
+  followSuppressUntil = Date.now() + ms;
+}
 let programmaticScrollUntil = 0;  // 这一瞬间内的 scroll 事件可能是我们自己滚出来的（见 onStreamScroll）
 let programmaticTop = -1;         // 那一下写下去的 scrollTop 原值：位置一离开它就不是我们干的了
 
@@ -1091,7 +1204,7 @@ function scrollBottomAnimated() {
   if (scrollAnim) cancelAnimationFrame(scrollAnim);
   releaseScrollAnimListeners();
   const from = el.scrollTop;
-  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduced = !motionState.on;   // 只认设置-外观那颗「界面动效」开关（以前跟系统，桌面关了动画这里就静默没滚动了）
   pinnedToBottom.value = true;
   showDown.value = false;
   // 目标是「滚动过程中的最新底部」而不是点下去那一瞬的底部：流式还在吐字时底部一直在长
@@ -1127,24 +1240,18 @@ onUnmounted(stopScrollAnim);
 /**
  * 切会话之后落到最底部。
  * 光在切换那一刻滚一次不够：内容是分帧长齐的（「只展开最近两轮」的折叠要渲染后才算得准，
- * 代码块还要等 highlight.js 动态 import 回来换一次高度）——那一刻量到的 scrollHeight 是错的，
- * 所谓「滚到底」只滚到半路，看着就像默认停在最上方。所以切换后的一小段窗口里，
- * 消息区一变高就重新贴底（ResizeObserver），窗口一过就撒手，免得把「展开更早 N 条」也拽回底部。
+ * 代码块还要等 highlight.js 动态 import 回来换一次高度）——那一刻量到的 scrollHeight 是错的。
+ * 以前这件事靠下面那个 ResizeObserver 里的一段 1.2s（硬上限 6s）时间窗兜着，
+ * 现在那条观察是**常驻**的（见 streamRo），所以这里只需要把跟随打开、立刻贴一次底。
  */
-let followBottomUntil = 0;
-let followHardStop = 0;
 function scrollBottomAfterSettle() {
-  const now = Date.now();
-  followBottomUntil = now + 1200;
-  // 窗口能续期，但有绝对上限：从设置页回来时 mermaid / hljs 会在长齐之后再改一次高度，
-  // 固定 1200ms 常常在那之前就撒手，于是「回来停在最上面」又出现了。
-  followHardStop = now + 6000;
   scrollBottom(true);
 }
-/** 用户自己点开折叠（历史 / 本轮更早）时这段跟随必须立刻作废，否则会被拽回底部 */
+/** 用户自己点开折叠（历史 / 本轮更早）时这段跟随必须立刻作废，否则刚摊开的内容会被拽回底部。
+ *  （抑制窗口的变量与 suppressAutoFollow 声明在 pinnedToBottom 那一带，
+ *   因为 scrollToMsg 会在 setup 期间就被 immediate 的 watch 调到。） */
 function stopFollowBottom() {
-  followBottomUntil = 0;
-  followHardStop = 0;
+  suppressAutoFollow();
 }
 /** 一次给一批（不是全摊开）：全量展开时上面几百条一起渲染，点一下就是一次长任务 */
 function openHistory() {
@@ -1164,19 +1271,46 @@ function collapseHistory() {
   revealed.value = 0;
 }
 
+/**
+ * 跟随底部：只要人还贴着底，内容一变高就贴回去。
+ *
+ * 旧版这里是把「跟随」限在切会话后的一小段时间窗里（followBottomUntil 1.2s / 硬上限 6s），
+ * 窗口一过 RO 就撒手 —— 于是**异步**长高的东西全落在窗口之外：AI 截图 / 粘贴附图里的 <img>
+ * 解码完成、mermaid 出图、代码高亮换行、图片 404 换成占位文字……内容在底部凭空长高 220px，
+ * 视口被顶上去。更糟的是这时 pinnedToBottom 仍是 true（scrollTop 一个字节都没动过，
+ * 连 scroll 事件都没发），所以「回到底部」那颗键也不亮，看着就是「跟随莫名其妙坏了」。
+ *
+ * 现在的判据只有一条：**scrollTop 没动、内容却变高了 ⇒ 长出来的那截在视口下方 ⇒ 贴底**。
+ * scrollTop 跟着变了（浏览器的滚动锚定替我们保住了视觉位置）⇒ 长在了上方或中间
+ * （点开一组工具调用、展开一段 diff）⇒ 贴底等于把人拽走，不干。
+ * 「我们自己往上面塞内容」那几条路（展开更早 N 条、轨迹跳转）另有 suppressAutoFollow 兜着。
+ */
 let streamRo = null;
+let roReady = false;    // 首次回调只用来落账基线（那时 scrollTop 还是上一个会话留下的）
+let roLastH = 0;
+let roLastTop = 0;
 onMounted(() => {
   const el = streamEl.value;
   const inner = el && el.querySelector('.stream-inner');
   if (el && inner && typeof ResizeObserver !== 'undefined') {
     streamRo = new ResizeObserver(() => {
-      if (!pinnedToBottom.value || Date.now() > followBottomUntil) return;
-      // 只跟「底下长出来的」：往上加内容（展开更早的轮次）会让 gap 一下子变大，这时候贴底是帮倒忙
-      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (gap > 400) return;
+      const h = el.scrollHeight;
+      const top = el.scrollTop;
+      if (!roReady) { roReady = true; roLastH = h; roLastTop = top; return; }
+      const grew = h - roLastH;
+      const moved = top - roLastTop;
+      roLastH = h;
+      roLastTop = top;
+      if (grew <= 0) return;               // 只跟「往下长」：内容变短/收起不用管
+      if (!pinnedToBottom.value) return;   // 人已经上翻去看历史了
+      if (Date.now() < followSuppressUntil) return;
+      if (moved > 2) return;               // 长在视口上面（滚动锚定把 scrollTop 顶下来了）
       el.scrollTop = el.scrollHeight;
       showDown.value = false;
-      if (Date.now() < followHardStop) followBottomUntil = Date.now() + 600;
+      roLastTop = el.scrollTop;            // 这一下是我们自己滚的，别算进下一轮的 moved
+      // 紧跟着那个 scroll 事件是我们造成的，不能被 onStreamScroll 读成「用户上翻」而关掉跟随
+      programmaticScrollUntil = Date.now() + 120;
+      programmaticTop = el.scrollTop;
     });
     streamRo.observe(inner);
   }
@@ -1605,7 +1739,9 @@ watch(
     modelForm.frequency_penalty = store.state.frequency_penalty;
     modelForm.presence_penalty = store.state.presence_penalty;
     modelForm.thinkingLevel = store.state.thinkingLevel || 'medium';
-    modelForm.contextLimit = store.state.contextLimit;
+    // 回填「你亲手设的那个数」，不是分母（分母可能是 min(设定, 实测能力)）。
+    // 用分母回填的话，一保存就把 100 万写成实测的三十几万 —— 他两次报的「我设的窗口自己变了」。
+    modelForm.contextLimit = store.state.contextConfigured || store.state.contextLimit;
     modelForm.censoredWords = store.state.censoredWords;
   }
 );
@@ -1636,18 +1772,32 @@ async function onGitAction(action) {
       const br = action.slice(9);
       await aiApi.gitCheckout({ branch: br, ...at() });
       toast(`已切换分支 ${br}`, 'success');
+    } else if (action.startsWith('checkout-remote:')) {
+      // 远端分支：本地还没有同名分支，从它建一条带跟踪的本地分支（这是以前完全没有的能力）
+      const full = action.slice(16);
+      const short = full.replace(/^[^/]+\//, '');
+      await aiApi.gitCheckout({ branch: short, from: full, ...at() });
+      toast(`已从 ${full} 建出 ${short}`, 'success');
+    } else if (action === 'new-branch') {
+      const name = await promptDialog({ title: '新分支名', value: '', confirmText: '创建并切换' });
+      if (!name || !String(name).trim()) return;
+      await aiApi.gitCheckout({ branch: String(name).trim(), create: true, ...at() });
+      toast(`已新建并切到 ${String(name).trim()}`, 'success');
+    } else if (action === 'pull') {
+      const r = await aiApi.gitPull(at());
+      toast(r?.message || '已拉取', 'success');
     } else if (action === 'commit') {
       const msg = (await promptDialog({ title: '提交说明', value: 'update', confirmText: '提交' })) || 'update';
       await aiApi.gitCommit({ message: msg, ...at() });
       toast('已提交', 'success');
     } else if (action === 'push') {
-      await aiApi.gitPush(at());
-      toast('已推送', 'success');
+      const r = await aiApi.gitPush(at());
+      toast(r?.message || '已推送', 'success');
     } else if (action === 'commit-push') {
       const msg = (await promptDialog({ title: '提交说明', value: 'update', confirmText: '提交并推送' })) || 'update';
       await aiApi.gitCommit({ message: msg, ...at() });
-      await aiApi.gitPush(at());
-      toast('已提交并推送', 'success');
+      const r = await aiApi.gitPush(at());
+      toast(r?.message || '已提交并推送', 'success');
     }
     await loadGit();
   } catch (e) {
@@ -1660,18 +1810,36 @@ async function loadGit() {
     const info = await aiApi.gitStatus({ path: store.state.cwd || undefined, chat_id: store.state.chatId || undefined });
     gitBranch.value = info?.branch || '';
     gitBranches.value = info?.branches || [];
+    gitRemoteBranches.value = info?.remote_branches || [];
+    gitDirty.value = Number(info?.dirty_count) || 0;
+    gitAhead.value = Number(info?.ahead) || 0;
+    gitBehind.value = Number(info?.behind) || 0;
     gitOk.value = !!(info?.is_repo && info?.branch);
   } catch {
     gitBranch.value = '';
     gitBranches.value = [];
+    gitRemoteBranches.value = [];
+    gitDirty.value = 0;
+    gitAhead.value = 0;
+    gitBehind.value = 0;
     gitOk.value = false;
   }
 }
 
 const gitBranch = ref('');
 const gitBranches = ref([]);
+const gitRemoteBranches = ref([]);
+const gitDirty = ref(0);
+const gitAhead = ref(0);
+const gitBehind = ref(0);
 const gitOk = ref(false);
+// 切会话/切项目都要重读：cwd 变了仓库就变了。另外切回窗口时也刷一次 ——
+// 用户很可能刚在外部终端里提交/切过分支，界面不该一直显示旧状态。
+function onWinFocus() { if (gitOk.value) loadGit(); }
 watch(() => store.state.cwd, loadGit, { immediate: true });
+watch(() => store.state.chatId, loadGit);
+onMounted(() => window.addEventListener('focus', onWinFocus));
+onUnmounted(() => window.removeEventListener('focus', onWinFocus));
 
 function onMenu(payload) {
   menu.value = payload;
@@ -2280,9 +2448,11 @@ function applyPool() {
 .title-actions.expanded .ta-expand { color: var(--text); }
 .ta-expand i { transition: transform 0.22s var(--ease, ease); }
 .title-actions.expanded .ta-expand i { transform: rotate(180deg); }
-@media (prefers-reduced-motion: reduce) {
-  .ta-fold, .ta-expand i { transition: none; }
-}
+
+  html[data-motion='off'] .ta-fold,
+
+  html[data-motion='off'] .ta-expand i{ transition: none; }
+
 .title {
   position: relative;
   display: flex;

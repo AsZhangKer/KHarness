@@ -82,7 +82,7 @@ const backdrop = computed(() => themeMeta().backdrop || '');
   from { transform: translate3d(0, 0, 0) scale(1.1); }
   to { transform: translate3d(-7vw, 9vh, 0) scale(0.95); }
 }
-@media (prefers-reduced-motion: reduce) {
-  .aurora { animation: none; }
-}
+
+  html[data-motion='off'] .aurora{ animation: none; }
+
 </style>

@@ -139,6 +139,32 @@ function createSchema() {
       FOREIGN KEY (chat_id) REFERENCES ai_chats(id) ON DELETE CASCADE
     );
 
+    -- 会话消息的「部件」（第一百一十五轮，照 opencode 的 message parts 落地）。
+    --
+    -- 为什么要这张表：以前工具调用与工具结果只活在内存里的 upstreamMsgs 里，回合结束即消失，
+    -- 于是模型下一轮真的「忘了刚读的文件」，用量口径也被迫在「下一发」与「这一发」之间二选一 ——
+    -- 显示要么虚高要么塌回去。现在工具往返和正文一样落库、一样参与下一发的装配。
+    --
+    -- turn_id = 这一部件所属回合的**用户消息行 id**（回合开始时就已经存在，所以不需要等回合结束
+    -- 才有归属；跑崩了也不会留下一堆认领不到主人的孤儿部件）。
+    -- 顺序靠自增 id：同一回合内 tool_call → tool_result → tool_call 必须严格按这个顺序重放，
+    -- 否则上游会收到「tool 结果在 assistant 调用之前」这种非法序列。
+    CREATE TABLE IF NOT EXISTS ai_chat_parts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL,
+      turn_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('text', 'tool_call', 'tool_result')),
+      call_id TEXT DEFAULT '',
+      name TEXT DEFAULT '',
+      payload TEXT DEFAULT '',
+      meta TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chat_id) REFERENCES ai_chats(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_chat_parts_turn ON ai_chat_parts(turn_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_chat_parts_chat ON ai_chat_parts(chat_id);
+
     -- 回收站：删掉的会话/项目先把整份数据快照进这里，再真删 —— 所以「恢复」是真能把消息拿回来的，
     -- 不是只留一条找不回来的墓碑。payload：kind=chat 时 {chat,messages,tasks}，kind=project 时 {project,chats:[…]}。
     CREATE TABLE IF NOT EXISTS ai_trash (
@@ -292,6 +318,43 @@ const MIGRATIONS = [
   // 锚点被下一次真实回执校准回小值、或生成期那份整包估算过期时，界面用量不能往回缩；
   // 只有压缩（手动/自动）和撤回消息才允许把它降下来。
   'ALTER TABLE ai_chats ADD COLUMN ctx_high_water_tokens INTEGER DEFAULT 0',
+  // 上下文账第八十二轮续：`estimateTokens` 那把尺和真实 tokenizer 差多少，没人知道，也不该猜。
+  // 于是把「上一发的本地整包估算」与「同一发的上游真实回执」配成一对存下来 —— 比值就是这把尺的校准系数。
+  // ctx_overhead_est 同理：每次真发请求前顺手量一次「system 提示词 + 工具 schema」那部分的本地估算
+  // （不含任何工具结果），这样即使一条回执都没拿到，用量也不至于退回「只剩正文」那种离谱的小值。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_est_calib REAL DEFAULT 0',
+  'ALTER TABLE ai_chats ADD COLUMN ctx_overhead_est INTEGER DEFAULT 0',
+  // 「正文之外那坨」的**真实值**：拿上游回执的 prompt_tokens 减去「历史 + 本发工具结果」的估算得来。
+  // ctx_overhead_est 是本地那把尺量出来的（system + 工具 schema），量级对但绝对值有偏差；
+  // ctx_overhead_tokens 是「整包 − 当时正文」倒推的混合量（含工具结果，虚高好几倍，已降级为历史数据）。
+  // 这一列是第三种：真实回执做锚、本地估算做差 —— 既不是纯估算，也不含工具结果。
+  // 用量显示优先读它，退回 est，再退回全机参照值。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_overhead_real INTEGER DEFAULT 0',
+  // 「上游实测出来的真实天花板」：只有当上游**真的以输入超长拒了一整包**时才写，
+  // 值就是那一发的整包大小（本地估 × 校准系数）—— 它既然被拒，真实上限必定低于它。
+  //
+  // 为什么必须有这一列：模型的 max_context 常常是 0（一百多个模型全是 0，探测接口又探不到），
+  // 于是窗口落到全局 default_context_limit，而它被设成了 1000000。60% 的自动压缩线就落在
+  // 60 万 token —— 绝大多数真实模型根本装不下，压缩**永远不触发**，历史只能靠截断静默丢，
+  // 表现就是「模型刚说完就忘」。有了这列，resolveContextWindow 会取
+  // min(配置窗口, 实测天花板)，压缩线随之落到真实量级上，下一次就不会再撞墙。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_ceiling_tokens INTEGER DEFAULT 0',
+  // 整包校准尺（第一百零七轮）：`ctx_est_calib` 只用「没有工具结果的那一发」校准（那样才不把
+  // 工具结果的估偏算进正文的尺子里），但生成期「这一发整包」恰恰就是工具结果占大头 —— 拿正文那把尺
+  // 去量它，实测低估 2.4 倍（真库 chat 73：本地估 82k，上游真实 prompt 194k）。于是压缩判定
+  // 永远到不了 60%，真包一路涨到上游拒收，再被超长自救静默裁掉 —— 这就是「没压缩上下文也自己变小」。
+  // 这一列是**整包**的校准尺（每一发都参与，含工具轮），只用于「生成期这一包」和压缩判定。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_pkg_calib REAL DEFAULT 0',
+  // 真实见过的最大 prompt_tokens（上游回执）。用来给「全局默认」那个手填的假窗口封顶：
+  // 出厂 default_context_limit = 1000000，而真实模型装不下，拿它当分母等于压缩永不触发。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_peak_prompt INTEGER DEFAULT 0',
+  // 锚点配套的「正文估算」（第一百一十二轮，参考 opencode / deepseek-harness 的 token meter）：
+  // 用量只回答一个问题 —— 下一发有多大。而「下一发」= 最近一次上游实测的 prompt（真 token）
+  // + 自那一刻起本地新增的正文（估算）。所以光有锚点不够，还得记住**记锚点那一刻的正文有多大**，
+  // 否则「新增量」无从算起。这一列配 ctx_anchor_tokens 使用：
+  //   used = ctx_anchor_tokens + 尺 × (正文现在 − ctx_anchor_body) + 尺 × 未入库输出
+  // 两个参照（真锚点 + 估算增量）各管一段，误差只随「增量」放大，不随整段历史放大。
+  'ALTER TABLE ai_chats ADD COLUMN ctx_anchor_body INTEGER DEFAULT 0',
   // Agent / 只读 两个开关的会话级持久化（第六十二轮）：-1 = 这条会话从没手动开关过，跟随全局默认；
   // 0/1 = 用户在这条会话上显式选过。以前它们只有前端 localStorage 一份（nu_agent/nu_readonly），
   // 于是「切会话把别的会话的开关也改了」，刷新也只有一份全局值。
@@ -462,6 +525,48 @@ function fixFreeChatDefaultCwd() {
   } catch (e) { /* 修不上也不能拦启动 */ }
 }
 
+/**
+ * 上下文用量口径重定（第一百轮）：显示值从「锚点 / 高水位 / 生成期整包三者取大」
+ * 改成「下一发真正要发出去的那一包」（= system 提示词 + 工具 schema + 摘要 + 未归档消息）。
+ *
+ * 问题是旧库里存着的 `ctx_high_water_tokens` 全是在旧口径下算出来的，而且它**只涨不落**：
+ * 生成期那份含工具结果的整包估算把峰值钉在了几十万 token（实测装机版真库 chat 63 是 259794，
+ * 按新口径只有 29213；chat 73 是 203013 对 41866）。新口径仍然靠高水位保证「同一条会话内不往回缩」，
+ * 所以这些旧假峰值会继续顶在显示上，看着就跟没修一样。
+ *
+ * 一次性清零即可：高水位会被新口径在第一次读数时按真值重新抬起来（打开会话那次 GET 就会抬）。
+ * 只跑一次（settings 打标记），否则用户以后压出来的正常峰值会被下次启动抹掉。
+ */
+function rebaseContextHighWater() {
+  try {
+    const marked = db.prepare("SELECT value FROM settings WHERE key = 'ctx_high_water_rebased'").get();
+    if (marked && String(marked.value) === '1') return;
+    const res = db.prepare('UPDATE ai_chats SET ctx_high_water_tokens = 0').run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('ctx_high_water_rebased', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+    if (res.changes) console.log(`[fixup] ${res.changes} 条会话的上下文高水位按新口径重定（旧值是「含工具结果那一发」的假峰值，会顶住显示不让它动）`);
+  } catch (e) { /* 补不上也不拦启动 */ }
+}
+
+/**
+ * 上下文口径重定（第一百一十五轮）：工具往返入库之后，锚点改成「整包」语义。
+ *
+ * 旧锚点的配套值 `ctx_anchor_body` 是「库内正文估算」（不含 system 与工具 schema），
+ * 而新公式里的锚点是「那一发整包的本地估算」（含两者）。语义不同直接混用会让
+ * used 多算一整坨开销（实测约 13k）。
+ *
+ * 处理：一次性把锚点清零 —— 下一条消息会把真值重新记上，中间这一小段退回「整包 × 尺」，
+ * 那是量级正确的。只跑一次（settings 打标记），否则以后正常的锚点会被下次启动抹掉。
+ */
+function rebaseContextAnchors() {
+  try {
+    const marked = db.prepare("SELECT value FROM settings WHERE key = 'ctx_anchor_pkg_based'").get();
+    if (marked && String(marked.value) === '1') return;
+    const res = db.prepare('UPDATE ai_chats SET ctx_anchor_tokens = 0, ctx_anchor_body = 0').run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('ctx_anchor_pkg_based', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+    if (res.changes) console.log(`[fixup] ${res.changes} 条会话的上下文锚点按「整包」口径重定（旧值是只算正文的旧口径，混用会多算一整坨开销）`);
+  } catch (e) { /* 补不上也不拦启动 */ }
+}
+
 function initDatabase() {
   if (initialized) return;
   createSchema();
@@ -471,7 +576,100 @@ function initDatabase() {
   insertDefaultData();
   backfillThinkingSupport();
   fixFreeChatDefaultCwd();
+  rebaseContextHighWater();
+  rebaseContextAnchors();
+  unbakeChatContextLimit();
+  // 第二遍（第一百一十轮）：上一遍跑完之后，用户那条会话又被老版本建会话时抄进了 1000000，
+  // 于是它仍然卡在「会话自己设的窗口」那条分支上、压缩线落在 60 万永远够不着（真库 chat 73）。
+  // 同一个动作按新标记再跑一次；行为不变（仍然取到同一个数），差别只是又能走「实测峰值封顶」那条路。
+  unbakeChatContextLimit('ctx_chat_limit_unbaked2');
+  backfillPeakPrompt();
+  recleanContextOverheadReal();
   initialized = true;
+}
+
+/**
+ * 「正文之外那坨」的存量脏值修复（第一百一十轮）。
+ *
+ * 病：`ctx_overhead_real` 以前**每一发**都反推一次，包括带工具结果的那几发 ——
+ * 反推式里被减掉的「本发工具结果」是几十万 token，它的估算偏差全漏进「剩下的差」里，
+ * 于是同一个会话的开销在 9k 与 47k 之间来回跳，界面就是「6% 掉到 3%」。
+ * 真库 chat 73 存着 47244，而它第一发请求的真实 prompt 只有 13633。
+ *
+ * 修法分两步：代码侧改成「只由干净样本反推」（见 calibrateEstimate），这里把**已经写坏的值**清掉，
+ * 让那几条会话按新口径从下一发干净轮重新学。判据故意给得宽（真值/估算本来就有 ±30% 的差，
+ * val 与 est 的比值落在 0.5~2 之间算正常），只清明显跑飞的。只跑一次（settings 打标记）。
+ */
+function recleanContextOverheadReal() {
+  try {
+    const marked = db.prepare("SELECT value FROM settings WHERE key = 'ctx_overhead_real_reclean'").get();
+    if (marked && String(marked.value) === '1') return;
+    const rows = db.prepare('SELECT id, ctx_overhead_real AS r, ctx_overhead_est AS e FROM ai_chats WHERE ctx_overhead_real > 0').all();
+    let n = 0;
+    const upd = db.prepare('UPDATE ai_chats SET ctx_overhead_real = 0 WHERE id = ?');
+    for (const x of rows) {
+      const r = Number(x.r) || 0, e = Number(x.e) || 0;
+      // 没有本地估算可比时不动（无从判断真假），只清「和同一发量出来的估算差 2 倍以上」的
+      if (e > 0 && (r > e * 2 || r < e * 0.5)) { upd.run(x.id); n++; }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('ctx_overhead_real_reclean', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+    if (n) console.log(`[fixup] ${n} 条会话的「正文之外开销」实测值被工具轨迹带偏过，已清零重学（显示会从下一发干净轮回到真值）`);
+  } catch (e) { /* 补不上也不拦启动 */ }
+}
+
+/**
+ * 用库里自己的历史回填「见过最大的那一发」（第一百一十轮）。
+ *
+ * `ctx_peak_prompt` 是 resolveContextWindow 推断窗口的唯一依据（窗口 = 峰值 × 1.5、压缩线 = 峰值 × 0.9），
+ * 但这一列是后来才加的：老会话的历史全在 `usage_log` 里，列里只记着「加列之后」那个小值。
+ * 不回填的后果是窗口被算小、压缩线提前 —— 在明明还装得多的模型上做有损摘要。
+ * 真库 chat 73：列里 141,678，usage_log 里真实最大 382,656（窗口该是 573,984 而不是 212,517）。
+ *
+ * 只往上抬，绝不往下改（它的语义是「历史最大」）。只跑一次（settings 打标记）。
+ */
+function backfillPeakPrompt() {
+  try {
+    const marked = db.prepare("SELECT value FROM settings WHERE key = 'ctx_peak_prompt_backfilled'").get();
+    if (marked && String(marked.value) === '1') return;
+    const res = db.prepare(`
+      UPDATE ai_chats
+         SET ctx_peak_prompt = (SELECT MAX(prompt_tokens) FROM usage_log WHERE usage_log.chat_id = ai_chats.id)
+       WHERE COALESCE(ctx_peak_prompt, 0) < (SELECT MAX(prompt_tokens) FROM usage_log WHERE usage_log.chat_id = ai_chats.id)
+    `).run();
+    db.prepare(`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'`).run('ctx_peak_prompt_backfilled');
+    if (res.changes) console.log(`[fixup] ${res.changes} 条会话的「历史最大一发」按 usage_log 回填（窗口与压缩线据此重算，避免提前做有损摘要）`);
+  } catch (e) { /* 补不上也不拦启动 */ }
+}
+
+/**
+ * 「新建会话把全局默认窗口抄进了会话行」这件事的收尾（第一百零七轮）。
+ *
+ * 历史行为：新建会话时 `context_limit = default_context_limit`（出厂 1000000）。抄进去之后
+ * `resolveContextWindow` 永远命中「会话自己设的」那条分支 —— 于是「按实测峰值给手填的假窗口封顶」
+ * 那条路**永远走不到**：窗口一直是 100 万，压缩线落在 60 万 token，真实的包（实测 24 万）永远够不着，
+ * 压缩从不触发；真包一路涨到上游拒收，再被超长自救静默裁掉 —— 用户看到的就是
+ * 「没压缩，上下文自己变小」「AI 忘记刚读过的工具结果」。
+ *
+ * 一次把等于全局默认的那些会话行改回 0（= 跟随默认）。行为上**没有变化**（仍然取到同一个数），
+ * 差别只是现在能走「实测峰值封顶」那条路了。只跑一次（settings 打标记），
+ * 否则用户以后正正经经手填的那个数会被下次启动抹掉。
+ */
+function unbakeChatContextLimit(marker = 'ctx_chat_limit_unbaked') {
+  try {
+    const marked = db.prepare('SELECT value FROM settings WHERE key = ?').get(marker);
+    if (marked && String(marked.value) === '1') return;
+    /* 第一百一十三轮：**不再真的清值**，只打标记。
+     *
+     * 它当年要解决的问题是「新建会话把全局默认 1000000 抄进会话行，于是那条会话永远卡在
+     * 『会话自己设了窗口』这条分支上，压缩线落在永远到不了的 60 万」。这个问题的**根**现在由
+     * resolveContextWindow 的分母解决了（分母 = min(你设的, 实测能力)，抄进去多少都不影响压缩线）。
+     *
+     * 而它这个动作本身是有害的：它分不清「出厂时抄的默认值」和「用户刚刚亲手填的同一个数」，
+     * 一律清成 0 —— 用户两次报「我设的 1000000 自己没了」，这就是其中一条路径。
+     * 从此以后：会话窗口就是用户设的那个数，一个字节都不动。
+     */
+    db.prepare(`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'`).run(marker);
+  } catch (e) { /* 补不上也不拦启动 */ }
 }
 
 /**
@@ -505,4 +703,6 @@ module.exports = {
   dataHome: { path: dbPath, importResult },
   dbFile, copyDbTo,
   markFactoryReset: sqlitefile.markFactoryReset,
+  // 测试用：旧库高水位的一次性重定（纯逻辑，单独钉住「只跑一次」这条约定）
+  rebaseContextHighWater,
 };

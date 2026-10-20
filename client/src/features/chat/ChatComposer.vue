@@ -1,5 +1,5 @@
 <template>
-  <div class="composer">
+  <div class="composer" :class="{ dock: ef }">
     <Transition name="pop">
       <div v-if="apHead" class="approval" :class="apHead.level">
         <div class="ap-head">
@@ -111,7 +111,7 @@
     <!-- 运行信息横条：常驻一行，没数据也写 0.0（以前一为空整条就消失，看着像功能坏了）。
          顺带显示当前模型的「提供商 / 模型真实 ID」—— 与下拉里那个展示名区分开，
          出问题时一眼能看出到底在调哪个上游、请求体里发的到底是哪个 model_id。 -->
-    <div class="meta-bar">
+    <div class="meta-bar" :class="{ info: ef }">
       <span class="mb-item mb-model" :title="`展示名：${modelName || '—'}（下拉里显示的就是它）`">
         <i class="fas fa-plug"></i> {{ modelTag }}
       </span>
@@ -120,10 +120,19 @@
       <span class="mb-dot">·</span>
       <span class="mb-item" :title="txt('chat.meta.speed')">{{ tokPerSecText }} tok/s</span>
       <span class="mb-dot">·</span>
-      <span class="mb-item" title="已用 / 窗口上限（以上游实测为锚点）">上下文 {{ ctxPct }}%（{{ ctxUsedText }} / {{ ctxLimitText }} tok）</span>
+      <span class="mb-item" title="已用 / 窗口上限（口径：下一发真正发出去的那一包 = 摘要 + 未归档消息 + system/工具 schema）">{{ ctxMetaText }}</span>
     </div>
 
-    <div class="box">
+    <!-- 终末地：这一层只当「五段外框」（.ef-chat-frame：1.5px 框线 + 顶边缺口 + 三色条），
+         卡片本身交给里面的 .comp（母本 ai/WINDOW/整体 · hk设计.html 第 129–131 行）；
+         其余六套主题仍是 .ui-chat-input 那一层卡片。 -->
+    <div class="box" :class="ef ? 'ef-chat-frame' : 'ui-chat-input'">
+      <!-- 五段外框的三色条：三条 64×2（品红/青/黄，两条带切角、各带同色辉光）。
+           值与画法出处 = 样式库 design/endfield/tokens.css §⑪ 第 618–634 / 653–701 行，
+           由 D:/tmp/ef_port.js 按行号切进 endfield-masters.css（.ef-chat-frame / .ef-tri-bars）。
+           六套原主题里这个 span 没有任何样式规则 ⇒ 零尺寸、不可见，只有终末地会画出来。
+           （母本那条 232×10 的下沉折线要一段 svg，样式库里也只留了令牌没落画法 ⇒ 暂不画。） -->
+      <span class="ef-tri-bars" aria-hidden="true"><i></i><i></i><i></i></span>
       <!-- 上边缘的调高把手：平时不占地方，鼠标进了输入框才显出这条小横条 -->
       <div
         class="c-grip"
@@ -179,8 +188,12 @@
         </div>
       </Transition>
 
-      <div v-if="attachments?.length" class="attach-row">
-        <div v-for="(a, i) in attachments" :key="a.token || i" class="attach">
+      <!-- 母本的输入卡片：.comp = 白卡（2px 白边 / r24 / #f1efef / focus 一圈黄），
+           里面依次是 .chips（附件）、textarea、.cbar（工具行）。
+           六套原主题下这层只是个无样式的块级 div，排布与改前一致。 -->
+      <div class="comp-wrap" :class="{ comp: ef }">
+      <div v-if="attachments?.length" class="attach-row" :class="{ chips: ef }">
+        <div v-for="(a, i) in attachments" :key="a.token || i" class="attach" :class="{ chip: ef }">
           <img
             v-if="a.isImage"
             :src="a.url"
@@ -194,6 +207,7 @@
         </div>
       </div>
       <textarea
+        :class="ef ? 'ta' : ['ui-chat-input__field', { 'is-grown': taGrown }]"
         ref="ta"
         v-model="draft"
         rows="3"
@@ -204,11 +218,11 @@
         @click="syncMention"
         @paste="onPaste"
       ></textarea>
-      <div ref="barEl" class="bar" :class="{ tight }">
-        <button class="icon-btn" type="button" title="上传文件" @click="$emit('upload')">
+      <div ref="barEl" class="bar" :class="[ef ? 'cbar' : '', { tight }]">
+        <button :class="ef ? 'rnd' : ['icon-btn', 'ui-chat-input__btn']" type="button" title="上传文件" @click="$emit('upload')">
           <i class="fas fa-plus"></i>
         </button>
-        <button class="icon-btn" type="button" title="模型设置" @click="$emit('model-settings')">
+        <button :class="ef ? 'rnd' : ['icon-btn', 'ui-chat-input__btn']" type="button" title="模型设置" @click="$emit('model-settings')">
           <i class="fas fa-sliders"></i>
         </button>
         <KDropdown
@@ -261,12 +275,22 @@
           </template>
         </KDropdown>
 
-        <div class="ctx-ring" :title="`上下文 ${ctxPct}%`" aria-label="上下文用量">
+        <!-- 用量环：终末地用母本那颗（.ring = conic-gradient 圆盘 + 内缩 3px 的同色心 + 8.5px 百分数），
+             其余六套仍是我们自己那对 SVG circle。 -->
+        <span v-if="ef" class="sp" aria-hidden="true"></span>
+        <div
+          v-if="ef"
+          class="ring"
+          :style="{ '--p': ctxPct }"
+          :title="ctxMetaText"
+          aria-label="上下文用量"
+        ><span>{{ ctxRingText }}</span></div>
+        <div v-else class="ctx-ring" :title="ctxMetaText" aria-label="上下文用量">
           <svg viewBox="0 0 36 36" class="ring">
             <circle class="ring-bg" cx="18" cy="18" r="15" />
             <circle class="ring-fg" cx="18" cy="18" r="15" :style="ringStyle" />
           </svg>
-          <span class="ring-num">{{ ctxPct }}%</span>
+          <span class="ring-num">{{ ctxRingText }}</span>
         </div>
 
         <KDropdown
@@ -285,8 +309,8 @@
         </KDropdown>
 
         <button
-          class="send"
           type="button"
+          :class="ef ? 'rnd' : ['send', 'ui-chat-input__btn', { 'ui-chat-input__btn--stop': busy }]"
           :disabled="!busy && !draft.trim()"
           :title="busy ? '停止' : '发送'"
           @click="busy ? $emit('stop') : submit()"
@@ -294,16 +318,18 @@
           <i class="fas" :class="busy ? 'fa-stop' : 'fa-arrow-up'"></i>
         </button>
       </div>
+      </div><!-- /.comp-wrap（终末地下即母本的 .comp 白卡；六套原主题无样式） -->
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import { useBarOverflow, rowNeed } from '../../ui/useBarOverflow.js';
 import { aiApi } from '../../api';
 import { uiPrefs } from '../../stores/prefs';
+import { themeState } from '../../stores/theme';
 import { imeKey, isImeComposing } from '../../utils/ime';
 import { imageViewer as iv } from '../../stores/viewer';
 import { txt } from '../../copy';
@@ -323,6 +349,10 @@ const props = defineProps({
   thinkingLevels: { type: Array, default: () => [] },
   gitBranch: { type: String, default: '' },
   gitBranches: { type: Array, default: () => [] },
+  gitRemoteBranches: { type: Array, default: () => [] },
+  gitDirty: { type: Number, default: 0 },
+  gitAhead: { type: Number, default: 0 },
+  gitBehind: { type: Number, default: 0 },
   gitEnabled: { type: Boolean, default: false },
   approvalMode: { type: String, default: 'default' },
   /** 这条会话是否显式覆盖过审批模式（决定要不要给「跟随全局」出口，也写进 title 说明来源） */
@@ -334,7 +364,13 @@ const props = defineProps({
   question: { type: Object, default: null },
   queueLength: { type: Number, default: 0 },
   contextUsed: { type: Number, default: 0 },
+  // 下一发真正要发的那一包（不含本轮工具结果）。显示的是峰值保持口径，
+  // 两者差得明显时要把真实值一并说出来 —— 否则看起来就像「百分比自己掉了」。
+  contextNext: { type: Number, default: 0 },
+  contextLive: { type: Number, default: 0 },
   contextLimit: { type: Number, default: 0 },
+  /** 用户亲手设的那个窗口（分母可能是 min(设定, 实测能力)，两者不同时 title 里要说清楚） */
+  contextConfigured: { type: Number, default: 0 },
   /** 首个正文字节的延迟（ms）：圆环旁边那个时间显示的就是它（不是整轮耗时） */
   firstTokenMs: { type: Number, default: 0 },
   tokPerSec: { type: Number, default: 0 },
@@ -363,13 +399,36 @@ const emit = defineEmits([
   'clear-queue',
 ]);
 
+/** 终末地主题下这一整块换成母本 ai/WINDOW/「整体 · hk设计」的 .dock 皮（其余六套主题不动）。 */
+const ef = computed(() => themeState.id === 'endfield');
+
 /**
  * 工具行（.bar）的窄屏降级：整行放不下时把文字收掉只剩图标（tight）。
  * 判定按「这一行实际需要多宽 vs 现在有多宽」实测，不用视口断点 ——
  * 模型名长短、有没有分支按钮都会改变需要的宽度，断点猜不准。见 ui/useBarOverflow.js。
  */
 const barEl = ref(null);
-const { compact: tight, remeasure: remeasureBar } = useBarOverflow(barEl, { need: (el) => rowNeed(el, 8) });
+/**
+ * 这一排「真正需要多宽」。
+ * 为什么不能直接用 rowNeed：模型那颗胶囊现在允许被压窄（终末地 `.bar > .k-dropdown`
+ * 是 flex:0 1 auto），压窄后它的 offsetWidth 就不再是「它需要多宽」了 —— 直接求和会漏报，
+ * 于是明明挤不下却判定放得下：该让位的其他标签一个都不让，模型名被压成省略号，
+ * 而别处还空着一大片（实测 1440 宽那档垫片空 174px 却把名字卡在 140px，就是这个死档位）。
+ * 所以量的时候把那颗胶囊的「自然宽」还原回去：整行宽 − 标签现宽 + 标签内容宽（scrollWidth）。
+ */
+function barNeed(el) {
+  const base = rowNeed(el);
+  const span = el.querySelector('.bar-txt');
+  if (!span) return base;
+  // 只有「上限已经撤掉」的主题（终末地）才按自然宽算。
+  // 其余六套的 .bar-txt 还钉着 220px 硬上限 —— 那是它们**能达到**的最大宽度，
+  // 按文字自然宽（可能 300px+）去算会让它们误判成"放不下"、一直停在降级态，
+  // 等于顺手改了另外六套的外观。它们维持原口径。
+  const capped = getComputedStyle(span).maxWidth;
+  if (capped && capped !== 'none') return base;
+  return base - span.offsetWidth + span.scrollWidth;
+}
+const { compact: tight, remeasure: remeasureBar } = useBarOverflow(barEl, { need: barNeed });
 watch(
   () => [props.modelName, props.gitBranch, props.gitEnabled, props.thinkingLevel, props.approvalMode],
   remeasureBar,
@@ -386,17 +445,45 @@ function onPaste(e) {
   }
 }
 
+/**
+ * Git 菜单。以前只有「12 条本地分支 + 提交/推送/提交并推送」，两处真的没法用：
+ *   · 工作区有未提交改动时 `git checkout` 必被 git 拒绝，而错误原样抛出来 —— AI 会话的工作区
+ *     几乎总是脏的，等于「切分支永远失败」。现在菜单里直接标明「有改动，切前先提交」，后端也会先拦。
+ *   · 只列本地分支 → 别人刚推上来的分支看不到，更没法从它建本地跟踪分支。现在远端分支单独一组。
+ * 另外补了新建分支与拉取（不先拉就推，很容易被 non-fast-forward 顶回来）。
+ */
 const gitItems = computed(() => {
-  const branchOpts = (props.gitBranches || []).map((b) => ({
-    value: `checkout:${b}`,
-    label: `分支： ${b}${b === props.gitBranch ? '（当前）' : ''}`,
-  }));
-  return [
-    ...branchOpts.slice(0, 12),
-    { value: 'commit', label: '提交' },
-    { value: 'push', label: '推送' },
-    { value: 'commit-push', label: '提交并推送' },
-  ];
+  const cur = props.gitBranch || '';
+  const locals = props.gitBranches || [];
+  const dirty = Number(props.gitDirty) || 0;
+  const ahead = Number(props.gitAhead) || 0;
+  const behind = Number(props.gitBehind) || 0;
+  const ab = [ahead ? `领先 ${ahead}` : '', behind ? `落后 ${behind}` : ''].filter(Boolean).join(' · ');
+  const dirtyHint = dirty ? `${dirty} 处改动` : '';
+  const items = [];
+  // 当前分支：置灰只作参照，右侧顺手把「领先/落后」摆出来（推送前该不该先拉一眼就知道）
+  if (cur) items.push({ value: 'cur', label: `当前：${cur}`, disabled: true, hint: ab || undefined });
+  const others = locals.filter((b) => b && b !== cur);
+  // 远端分支：已经有同名本地分支的就不重复列（那条已经能直接切）
+  const remoteOnly = (props.gitRemoteBranches || [])
+    .filter((b) => b && !/\/HEAD$/.test(b))
+    .filter((r) => !locals.includes(r.replace(/^[^/]+\//, '')));
+  if (others.length || remoteOnly.length) {
+    items.push({ sep: true, value: 'sep-branch' });
+    for (const b of others.slice(0, 20)) {
+      items.push({ value: `checkout:${b}`, label: b, hint: dirty ? '有改动' : undefined });
+    }
+    for (const r of remoteOnly.slice(0, 10)) {
+      items.push({ value: `checkout-remote:${r}`, label: r, hint: '从远端建本地分支' });
+    }
+  }
+  items.push({ sep: true, value: 'sep-act' });
+  items.push({ value: 'new-branch', label: '新建分支…' });
+  items.push({ value: 'commit', label: '提交', disabled: !dirty, hint: dirtyHint || '没有改动' });
+  items.push({ value: 'commit-push', label: '提交并推送', disabled: !dirty, hint: dirtyHint || '没有改动' });
+  items.push({ value: 'pull', label: '拉取', hint: behind ? `落后 ${behind}` : undefined });
+  items.push({ value: 'push', label: ahead ? `推送（${ahead} 个提交）` : '推送', hint: cur && !ab ? '首次推送会自动设为跟踪' : undefined });
+  return items;
 });
 
 const approvalItems = computed(() => [
@@ -457,9 +544,28 @@ const ticker = setInterval(() => {
 }, 1000);
 onUnmounted(() => clearInterval(ticker));
 
+/**
+ * 有没有可用的窗口（= 分母）。
+ * 没有分母就没有百分比可言 —— 界面不该假装一个 0%（那会让人以为「上下文空着」，
+ * 而真实情况是「压根没设窗口，占用多少完全不知道」）。窗口来自
+ * 「会话设定 → 模型上限 → 全局默认 → 上游实测天花板」，由服务端解析后随 usage 帧下来。
+ */
+const hasCtxWindow = computed(() => Number(props.contextLimit) > 0);
 const ctxPct = computed(() => {
-  if (!props.contextLimit) return 0;
+  if (!hasCtxWindow.value) return 0;
   return Math.min(100, Math.round((props.contextUsed / props.contextLimit) * 100));
+});
+/** 环里那个数字：没窗口时给「—」，不写 0% */
+const ctxRingText = computed(() => (hasCtxWindow.value ? `${ctxPct.value}%` : '—'));
+/** 信息横条那一格（有窗口给「x%（已用 / 窗口）」，没窗口只报已用） */
+const ctxMetaText = computed(() => {
+  if (!hasCtxWindow.value) return `上下文 未设窗口（已用 ${ctxUsedText.value} tok）`;
+  const head = `上下文 ${ctxPct.value}%（${ctxUsedText.value} / ${ctxLimitText.value} tok）`;
+  // 分母被压到比设定值小，只有一种原因：上游真的以「输入超长」拒过某一包（实测天花板）。
+  // 这是既成事实，不是推断 —— 所以要写明，否则会以为「我设的 100 万去哪了」。
+  const conf = Number(props.contextConfigured) || 0;
+  const tightened = conf > 0 && conf > props.contextLimit;
+  return tightened ? `${head}｜已按上游实测上限封顶（设定 ${conf.toLocaleString('en-US')}）` : head;
 });
 
 /* ---- 输入框上方那条信息横条（速率与上下文有数就显示；首字没出过字显示「—」，不写 0.0s）---- */
@@ -538,6 +644,20 @@ function sizeTa() {
   el.style.height = 'auto';
   el.style.height = `${Math.max(base, Math.min(84, el.scrollHeight))}px`;
 }
+
+/* ---- 形状档：只有「单行」那一档才是胶囊，长高后必须是圆角矩形（他 2026-10-14 的裁决）------
+   母本同一句话（baker-chat ChatInput.vue 的 &--grown 注释：胶囊圆角本来就是高度的一半，
+   高度一变再按 999px 去夹就成了半圆跑道 ⇒ 改用固定圆角 = 单行时那个半径）。
+   单行档的高度 = 终末地件表里那条 45px（8 + 22.4 + 8），超过它就算"长高了"。 */
+const taGrown = ref(false);
+let taRo = null;
+onMounted(() => {
+  const el = ta.value;
+  if (!el || typeof ResizeObserver === 'undefined') return;
+  taRo = new ResizeObserver(() => { taGrown.value = el.offsetHeight > 46; });
+  taRo.observe(el);
+});
+onBeforeUnmount(() => { taRo?.disconnect(); taRo = null; });
 
 function startTaGrip(e) {
   const from = uiPrefs.state.composerHeight || TA_BASE;
@@ -1007,6 +1127,12 @@ textarea::placeholder { color: var(--text-3); }
   /* 窄屏靠实测降级（tight），不靠换行：一换行整行高度就跳 */
   flex-wrap: nowrap;
 }
+/* 但 tight 只是「把文字收成图标」，收完仍可能放不下（1024 档实测要 529px、只有 380px，
+   再收也差 149px）。这时不能再硬挺着溢出 —— 溢出的那截会被右侧 dock 盖住，
+   模型选择和发送按钮直接点不到。降级态下允许换行，非降级态仍保持一行。 */
+.bar.tight {
+  flex-wrap: wrap;
+}
 .bar > * {
   /* 子项不许被压扁，否则 scrollWidth 量不出「真需要多宽」 */
   flex: 0 0 auto;
@@ -1101,7 +1227,7 @@ textarea::placeholder { color: var(--text-3); }
   height: 36px;
   margin-left: auto;
 }
-.ring {
+.ctx-ring .ring {
   width: 36px;
   height: 36px;
   transform: rotate(-90deg);

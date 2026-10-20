@@ -135,6 +135,7 @@ router.delete('/hosts/:id', wrap((req, res) => {
     if (allChats.length) {
       const q = allChats.map(() => '?').join(',');
       db.prepare(`DELETE FROM ai_chat_messages WHERE chat_id IN (${q})`).run(...allChats);
+      db.prepare(`DELETE FROM ai_chat_parts WHERE chat_id IN (${q})`).run(...allChats);
       db.prepare(`DELETE FROM undo_ops WHERE chat_id IN (${q})`).run(...allChats);
       db.prepare(`DELETE FROM ai_chats WHERE id IN (${q})`).run(...allChats);
     }

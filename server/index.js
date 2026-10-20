@@ -13,6 +13,11 @@ const { initDatabase, dataHome } = require('./database');
 
 initDatabase();
 
+// 局域网手机审批/回答桥：按 settings.lanbridge_enabled 开关启停（默认关）
+// 放在 initDatabase 之后、listen 之前，避免广播/监听抢在库就绪前
+const lanbridge = require('./utils/lanbridge');
+lanbridge.sync();
+
 const app = express();
 const PORT_FINAL = PORT;
 
@@ -168,10 +173,22 @@ if (fs.existsSync(path.join(distPath, 'index.html'))) {
     }
   }));
   // SPA fallback（Express 5 不再支持 '*' 通配，用兜底中间件；HEAD 同样返回以支持探测）
+  /* 发 index.html 时顺手把开屏动画的配置注进页面（为什么非得注在这儿见 utils/bootinject.js 头上那段）。
+     注不上也要把页面发出去，所以整段包在 try 里退回 sendFile。 */
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
     res.set('Cache-Control', 'no-store');
-    res.sendFile(path.join(distPath, 'index.html'));
+    const file = path.join(distPath, 'index.html');
+    let html;
+    try {
+      const bootinject = require('./utils/bootinject');
+      html = bootinject.renderIndex(distPath, bootinject.bootConfig(require('./database').db));
+    } catch (e) {
+      console.error('[boot] index.html 注入失败，按原样返回：', e.message);
+      return res.sendFile(file);
+    }
+    if (req.method === 'HEAD') return res.set('Content-Length', String(Buffer.byteLength(html))).end();
+    res.type('html').send(html);
   });
 }
 
@@ -235,6 +252,8 @@ const cleanupBg = () => {
   try { require('./utils/remote').closeAll(); } catch (e) { /* 同上 */ }
   // 终端会话：pty / ssh shell 都是子进程，服务退了不能留
   try { require('./utils/term').shutdownAll(); } catch (e) { /* 同上 */ }
+  // 局域网手机桥：关掉广播定时器与 TCP 监听，别留孤儿句柄
+  try { require('./utils/lanbridge').stopServer(); require('./utils/lanbridge').stopBroadcaster(); } catch (e) { /* 同上 */ }
   // Computer Use 的 PowerShell 坐标引擎与 netwright 子进程同理（快捷键钩子挂在它们里面）
   try { require('./utils/cuse').shutdownAll(); } catch (e) { /* 同上 */ }
 };

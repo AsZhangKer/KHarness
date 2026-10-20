@@ -6,8 +6,11 @@
         <p>可以在该模型列表查询全部模型</p>
       </div>
       <div class="page-actions">
-        <button class="k-btn sm" type="button" @click="openProvider()"><i class="fas fa-plus"></i> 新建提供商</button>
-        <button class="k-btn sm" type="button" @click="openModel()"><i class="fas fa-cube"></i> 添加模型</button>
+        <!-- 这两颗是这一页的主动作（新建/添加），在终末地里走黄面档。
+             用独立的 .ef-primary 而不是通用的 .primary：.primary 在 tokens.css 里对所有主题生效，
+             一改别的主题这两颗也会变色 —— 那不在本轮范围里。 -->
+        <button class="k-btn sm ef-primary" type="button" @click="openProvider()"><i class="fas fa-plus"></i> 新建提供商</button>
+        <button class="k-btn sm ef-primary" type="button" @click="openModel()"><i class="fas fa-cube"></i> 添加模型</button>
         <button class="k-btn sm" type="button" :disabled="testing" @click="testAll">
           <i class="fas fa-vial"></i> 测试全部
         </button>

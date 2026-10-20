@@ -7,6 +7,7 @@ import { toast } from '../../stores/toast';
 import { confirmDialog } from '../../stores/confirm';
 import { uiPrefs } from '../../stores/prefs';
 import { recycleBin } from '../../stores/recycle';
+import { running } from '../../stores/running';
 import { soundDone, soundError, soundApproval, soundQuestion } from '../../utils/sound';
 import { logErr } from '../../utils/errlog';
 import { errReport, toastErr } from '../../utils/errText';
@@ -45,6 +46,14 @@ const state = reactive({
   frequency_penalty: 0,
   presence_penalty: 0,
   contextLimit: 0,
+  /**
+   * 用户**亲手设**的那个窗口（服务端 usage 帧里的 configured_limit）。
+   *
+   * 为什么不和 contextLimit 共用一个字段：contextLimit 现在是**分母**（= min(你设的, 实测能力)），
+   * 拿它算百分比。但设置对话框拿它回填的话，一保存就把「你设的 100 万」写成「实测的 34 万」——
+   * 正是他两次报的「我设的窗口自己变了」。所以设置框只读这一个。
+   */
+  contextConfigured: 0,
   censoredWords: '',
   insertItems: [],
   loadedSkills: [],
@@ -57,8 +66,16 @@ const state = reactive({
   questions: {},
   usage: {},
   contextUsed: 0,
+  // 「下一发真正要发的那一包」（不含本轮工具结果）。界面用它解释「峰值」与真实值的差，
+  // 压缩判定也只看它 —— 见服务端 chatContextUsage 的 next_request。
+  // 这一发（生成中）的真实整包，含本轮工具结果。**不进主数字**，只在它明显更大时标注一句：
+  // 工具结果回合结束就不带了，所以「下一发有多满」不该算它们 —— 见服务端 chatContextUsage 函数头。
+  contextLive: 0,
+  contextNext: 0,
   // 手动压缩在跑（/press 或右栏按钮）：按钮禁用 + 转圈全靠它
   pressing: false,
+  // 这一次压缩属于哪条会话：切走之后「压缩中不许发消息」只能对号，不能拿全局那份当本会话的占用
+  pressingChatId: 0,
   latencyMs: 0,
   tokPerSec: 0,
   /** 本轮已产出的输出 token 估算（正文+思考），实时速度就按它的增量算 */
@@ -256,6 +273,12 @@ function settlePerf(key) {
 // 后台那一桶永远采不到样，切回去就看到速度停在 0。
 watch(() => Object.keys(state.busyChats).length, (n) => {
   if (n > 0) startSpeedTicker(); else stopSpeedTicker();
+});
+
+// 顶栏那颗关闭键要问的「还有会话在回答中吗」：在跑的流 + 正在进行的压缩都算数
+// （压缩也在改这条会话的上下文，中途关掉一样会把账打断）。计数只在这里写一处，见 stores/running.js。
+watch([() => Object.keys(state.busyChats).length, () => state.pressing], ([n, pressing]) => {
+  running.count = n + (pressing ? 1 : 0);
 });
 
 function safeJson(v) {
@@ -459,14 +482,25 @@ export function useChatStore() {
     state.cwd = chat.cwd || '';
     // 上下文窗口：行里 0 = 没单独设定（跟随模型上限，那个数由这一轮的 usage 帧带），
     // 所以只在有显式值时才盖，免得把界面已有的生效值清成 0。
-    if (Number(chat.context_limit) > 0) state.contextLimit = Number(chat.context_limit);
+    if (Number(chat.context_limit) > 0) {
+      state.contextLimit = Number(chat.context_limit);
+      state.contextConfigured = Number(chat.context_limit);
+    }
     // 用量也一起回读（/chats/:id/settings 带这一份）：切回一条正在生成的会话时，
     // 那条快路径不拉整段历史，百分比就只能靠这里给的数 —— 不读的就是上一条会话留下的值。
     // 注意这只管「上下文占用」那一行；`state.usage` 是**回合 token 明细**（另一把尺），
     // 由 syncTurnUsage 从消息里倒查，别拿这份上下文口径的 {used,limit} 去覆盖它。
     if (chat.usage) {
-      if (Number(chat.usage.used) > 0) state.contextUsed = Number(chat.usage.used);
-      if (Number(chat.usage.limit) > 0) state.contextLimit = Number(chat.usage.limit);
+      // 这里给的是**权威的生效值**（服务端按「会话设定 → 模型上限 → 全局默认 → 上游实测天花板」
+      // 解析出来的窗口），0 也有意义 = 一个窗口都没配。所以无条件写 ——
+      // 以前那两个 `> 0` 守卫会让「切到一条没配窗口的会话」继续显示上一条会话的百分比，
+      // 看着像这条会话真的占了那么多。
+      state.contextUsed = Number(chat.usage.used) || 0;
+      state.contextNext = Number(chat.usage.next_request) || 0;
+      state.contextLive = Number(chat.usage.live) || 0;
+      state.contextLimit = Number(chat.usage.limit) || 0;
+      // 你设的那个数（分母可能是 min(设定, 实测能力)，两者不同时以这一个为准回填设置框）
+      state.contextConfigured = Number(chat.usage.configured_limit) || Number(chat.context_limit) || 0;
     }
   }
 
@@ -553,7 +587,10 @@ export function useChatStore() {
       if (res?.usage) {
         state.usage = res.usage;
         state.contextLimit = res.usage.limit || 0;
+        state.contextConfigured = res.usage.configured_limit || 0;
         state.contextUsed = res.usage.used || 0;
+        state.contextNext = res.usage.next_request || 0;
+        state.contextLive = res.usage.live || 0;
       }
       // 流式中的 live 回复挂回列表
       if (inflight?.live && !state.messages.includes(inflight.live)) {
@@ -719,7 +756,7 @@ export function useChatStore() {
       reply.timeline.push({ kind: 'text', text });
     }
     reply.content += text;
-    state.streamTick++;
+    // streamTick 由 flushStream 统一 +1（一批一次），这里不再动 —— 见 flushStream 的注释
   }
   /* 同一段思考不许被过程提示切成两张卡（#243）。
      任何非 delta/reason 的事件都会先封口缓冲区，于是服务端每遇 429 限流 / 超时 / 参数重试发的那条
@@ -740,36 +777,60 @@ export function useChatStore() {
     if (r) r.text += text;
     else reply.timeline.push({ kind: 'reason', text });
     reply.reasoning += text;
-    state.streamTick++;
+    // streamTick 同样交给 flushStream 统一 +1
   }
 
   /* 流式合并刷新（#231）：SSE 每来一块就改一次响应式数据 → 每块渲染一次。
      攒到 ~30ms 再落地，一次渲染替掉十几次的重排重绘；入库文本一个字没改（那是服务端的事），
      界面最多钝 30ms。别用 requestAnimationFrame 当唯一驱动：窗口没焦点时它被节流到 ~1/s，
-     他会看到「切回来才刷」，所以用定时器。 */
+     他会看到「切回来才刷」，所以用定时器。
+
+     #251 缓冲区必须是**有序队列**，不能按 kind 分两个桶。
+     以前是 {text:'', reason:''}，落地时固定「先正文、后思考」—— 只要一个 30ms 窗口里
+     正文和思考都落了块，屏幕上就被强制换成「正文在前、思考在后」，他报的两个症状都出在这：
+       · 真实顺序 思考R1 → 正文T：落成 T | R1，下一窗口的 R2 因尾部是正文只能另开一张卡
+         → 一段连续的思考被正文劈成两半；
+       · 真实顺序 正文T1 → 思考R → 正文T2：落成 T1 T2 | R，而 tlAppendText 只与「紧邻的」
+         text 合并，T1/T2 被这张思考卡隔开后**再也合不回去** → 一段连续的正文被思考强行分开。
+     按到达顺序入队、按顺序落地，这两个形状就都不会出现。 */
+  /* 落一批的间隔是**自适应**的（#251 起）。
+     固定 30ms 在短回复上很顺，但他报的「文本过长时整个程序会卡」正是这条路：
+     流式那一段每落一次就要把整段正文重新过一遍 marked + DOMPurify + hljs，
+     几万字的段落一次就是几十毫秒，30ms 一次等于把主线程占满（还要跟布局抢时间）。
+     所以按「已落地的正文长度」分档，再拿上一批的实测耗时兜底：
+     短会话仍是 30ms（看不出差别），贵的自动降到 140~300ms —— 视觉上依旧连续，
+     而一批里攒的字符更多，总工作量没变，只是不再互相打架。 */
+  const FLUSH_BASE = 30;
+  function flushDelay(reply) {
+    const len = String(reply.content || '').length;
+    const base = len > 20000 ? 140 : len > 6000 ? 80 : len > 2000 ? 50 : FLUSH_BASE;
+    const cost = Number(reply._flushCost) || 0;
+    return Math.min(300, Math.max(base, Math.round(cost * 3)));
+  }
   function queueStream(reply, kind, text) {
     if (!text) return;
-    if (!reply._buf) reply._buf = { text: '', reason: '' };
-    reply._buf[kind] += text;
+    if (!reply._buf) reply._buf = [];
+    reply._buf.push({ kind, text });
     if (reply._bufQueued) return;
     reply._bufQueued = true;
-    setTimeout(() => {
-      reply._bufQueued = false;
-      const buf = reply._buf;
-      if (!buf) return;
-      if (buf.text) { tlAppendText(reply, buf.text); buf.text = ''; }
-      if (buf.reason) { tlAppendReason(reply, buf.reason); buf.reason = ''; }
-    }, 30);
+    setTimeout(() => { reply._bufQueued = false; flushStream(reply); }, flushDelay(reply));
   }
+  /* 把攒下的块按**到达顺序**落地（合并判定仍交给 tlAppendText / tailReason）。
+     清空缓冲要在落地之前做：tlAppend* 会改响应式数据、可能引发重入的 flush。 */
   function flushStream(reply) {
-    const buf = reply._buf;
-    if (buf && (buf.text || buf.reason)) {
-      if (buf.text) tlAppendText(reply, buf.text);
-      if (buf.reason) tlAppendReason(reply, buf.reason);
-      buf.text = '';
-      buf.reason = '';
-    }
     reply._bufQueued = false;
+    const buf = reply._buf;
+    if (!buf || !buf.length) return;
+    reply._buf = [];
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+    for (const it of buf) {
+      if (it.kind === 'reason') tlAppendReason(reply, it.text);
+      else tlAppendText(reply, it.text);
+    }
+    if (t0) reply._flushCost = performance.now() - t0;   // 给下一批定间隔用
+    // 一批只让 streamTick 动一次：它是「重渲染 + 跟着滚」的驱动源，
+    // 以前批里每段各加一次（批里有 3 段就白渲染 3 遍）。tlAppend* 里那两个 ++ 已挪到这里。
+    state.streamTick++;
   }
 
   /**
@@ -877,7 +938,10 @@ export function useChatStore() {
         st = { type: 'compress', name: '压缩上下文', phase: evt.phase, used: evt.used, limit: evt.limit, percent: evt.percent, from: evt.from, basis: evt.basis, threshold: evt.threshold, manual: evt.manual };
         reply.steps.push(st);
       }
-      if (evt.phase !== 'start') {
+      if (evt.phase === 'running') {
+        // 进度心跳：只更新时间，不改阶段（改了卡片会从「转圈压缩中」变成别的图标）
+        st.elapsed_ms = evt.elapsed_ms;
+      } else if (evt.phase !== 'start') {
         st.phase = evt.phase;
         st.after = evt.after ?? st.after;
         st.after_basis = evt.after_basis ?? st.after_basis;
@@ -894,6 +958,7 @@ export function useChatStore() {
         const shown = evt.phase === 'done' && Number(evt.after) > 0 ? Number(evt.after) : Number(evt.used);
         if (shown > 0) state.contextUsed = shown;
         if (Number(evt.limit) > 0) state.contextLimit = Number(evt.limit);
+        if (Number(evt.configured) > 0) state.contextConfigured = Number(evt.configured);
       }
     } else if (t === 'tool') {
       // 工具调用也是上游产物：它到了才算「这轮已经出字」，而它后面那段执行时间不算生成
@@ -984,7 +1049,16 @@ export function useChatStore() {
       // 服务端到点按拒绝处理并删掉了挂起的审批：卡片必须跟着退场。
       // 留着它，用户点哪颗键都是一个 404，而且永远点不掉（他报的「赖着不走」）。
       state.approvals = state.approvals.filter((a) => a.id !== evt.id);
+    } else if (t === 'approval_resolved') {
+      // 手机端已裁决（批准/拒绝）：电脑端那张审批卡跟着退场。
+      // 以前手机裁决只让服务端内部 Promise 放行、AI 继续跑，电脑端卡没收到任何事件，
+      // 一直挂着点一下就是一个 404（他报的「手机审批完电脑端弹窗还在」）。
+      state.approvals = state.approvals.filter((a) => a.id !== evt.id);
     } else if (t === 'question_expired') {
+      const qk = c.chatId || 'tmp';
+      if (state.questions[qk]?.id === evt.id) delete state.questions[qk];
+    } else if (t === 'question_resolved') {
+      // 手机端已回答/取消了提问：电脑端那条提问横幅跟着退场。
       const qk = c.chatId || 'tmp';
       if (state.questions[qk]?.id === evt.id) delete state.questions[qk];
     } else if (t === 'cmd_running') {
@@ -1000,7 +1074,10 @@ export function useChatStore() {
       // 反过来也成立：后台会话的用量帧不许写进正在看的这条会话的百分比（第七十三轮 ②）。
       if (here()) {
         if (Number(evt.used) > 0) state.contextUsed = Number(evt.used);
+        if (evt.next != null) state.contextNext = Number(evt.next) || 0;
+        if (evt.live != null) state.contextLive = Number(evt.live) || 0;
         if (Number(evt.limit) > 0) state.contextLimit = Number(evt.limit);
+        if (Number(evt.configured) > 0) state.contextConfigured = Number(evt.configured);
       }
     } else if (t === 'heartbeat') {
       // 15s 一次；命令运行时带 pid/command/elapsed_ms
@@ -1083,6 +1160,9 @@ export function useChatStore() {
         // （锚点 = 上游真实 prompt+completion，还含工具 schema 的开销）。
         // 以前这里用 evt.usage.prompt_tokens 覆盖一次 —— 少了 completion，等于一轮结束后换了一把尺。
         if (evt.context_used > 0) state.contextUsed = evt.context_used;
+        // 回合结束：这一发（含工具结果）已经退场了，那句「本轮整包 X%」必须跟着收掉，
+        // 否则它会在对话结束后一直挂在那儿，看着像「上下文还没降下来」。
+        state.contextLive = 0;
         if (evt.tasks) state.tasks = evt.tasks;
         if (evt.context_limit != null) state.contextLimit = evt.context_limit;
         state.runningCmd = null;
@@ -1156,14 +1236,18 @@ export function useChatStore() {
     }
 
     const busyId = state.chatId || 'tmp';
+    // 压缩中同样算「这条会话被占着」：它在归档旧消息、重写摘要与锚点，这时候发出去的一轮
+    // 手里攥的是压缩前那份整包、记的却是压缩后的账，两边都对不上（他报的「压缩中还能发消息」）。
+    // 处理方式与「生成中」一样：进队列，压完由 pressChat 的收尾自动补发。
+    const pressingHere = state.pressing && state.pressingChatId === state.chatId;
     // 本会话生成中：进消息队列，答完自动发送。队列项带着归属，收尾才敢只对号倒货
-    if (!continueMode && state.busyChats[busyId]) {
+    if (!continueMode && (state.busyChats[busyId] || pressingHere)) {
       state.queue.push({ text, chatId: busyId });
       state.draft = '';
       toast(`已加入队列（${queued.value.length}）`, 'info', 2000);
       return;
     }
-    if (continueMode && state.busyChats[busyId]) return;
+    if (continueMode && (state.busyChats[busyId] || pressingHere)) return;
     if (!continueMode) state.draft = '';
 
     // 「先点」的池子只有打开池选择器确认时才落地，localStorage 里存的却是 autoMode=true ——
@@ -1490,12 +1574,16 @@ export function useChatStore() {
       temperature: state.temperature,
       frequency_penalty: state.frequency_penalty,
       presence_penalty: state.presence_penalty,
-      context_limit: state.contextLimit || 0,
+      // 发**你自己设的那个数**，不是分母：分母可能被上游实测天花板封顶过，
+      // 拿它回写等于「保存一次模型参数，把你设的 100 万悄悄改成 38 万」。
+      context_limit: state.contextConfigured || state.contextLimit || 0,
       censored_words: state.censoredWords || '',
     });
-    // 以服务端算出的**生效值**为准（会话设定 → 模型上限 → 全局默认），界面不再显示「我刚敲的那个数」
+    // 回填两个字段：context_effective = 你设的原值（设置框显示它），context_window = 分母（算百分比用）
     const eff = Number(r?.context_effective);
-    if (Number.isInteger(eff)) state.contextLimit = eff;
+    const win = Number(r?.context_window);
+    if (Number.isFinite(eff) && eff >= 0) state.contextConfigured = eff;
+    if (Number.isFinite(win) && win > 0) state.contextLimit = win;
   }
 
   /** 找到某个步骤所属消息（撤销要把标注写回正确的 assistant 消息） */
@@ -1617,6 +1705,7 @@ export function useChatStore() {
     const chatId = state.chatId;
     if (state.busyChats[chatId]) return toast('本轮还在生成，先停止再压缩', 'warn', 4000);
     state.pressing = true;
+    state.pressingChatId = chatId;
     // 这张卡要钉在**按下按钮那一刻所属的那份消息数组**上：中途切了会话，
     // state.messages 已经换成别条会话的列表，再按「列表最后一条」找卡片就会把压缩进度写进别人的消息里
     const msgArr = state.messages;
@@ -1634,13 +1723,17 @@ export function useChatStore() {
       onEvent: (evt) => {
         if (evt.t !== 'compress') return;
         const c = card();
-        if (c) Object.assign(c, evt);
+        if (c) {
+          if (evt.phase === 'running') c.elapsed_ms = evt.elapsed_ms;   // 心跳只更新用时，不改阶段
+          else Object.assign(c, evt);
+        }
         // 界面那一格用量只在「还在看这条会话」时跟着走，而且压完取的是压缩后的 after
         // （以前写的是 evt.used = 压缩**前**的量 —— 他报的「压完百分比一动不动」，第七十三轮 ②）
         if (state.chatId === chatId) {
           const shown = evt.phase === 'done' && Number(evt.after) > 0 ? Number(evt.after) : Number(evt.used);
           if (shown > 0) state.contextUsed = shown;
           if (Number(evt.limit) > 0) state.contextLimit = Number(evt.limit);
+          if (Number(evt.configured) > 0) state.contextConfigured = Number(evt.configured);
         }
         if (evt.phase === 'failed') failed = evt.message || '压缩失败';
         else result = evt;
@@ -1653,10 +1746,14 @@ export function useChatStore() {
       },
       onDone: async () => {
         state.pressing = false;
+        state.pressingChatId = 0;
         if (state.chatId !== chatId) return;   // 中途切了会话：用量与消息都不许再动（别把那边的拉掉）
         if (result?.after != null) state.contextUsed = result.after;
         await openChat(chatId);
+        // 压缩期间攒下的话现在放行（占用解除，成败都一样，别让它们烂在队列里）
+        await flushQueue(chatId);
         if (failed) return toastErr(new Error(failed), '压缩失败');
+        if (result?.phase === 'cancelled') return toast(result.message || '已取消压缩，历史保持原样', 'info', 4000);
         if (result?.phase === 'skipped') return toast(result.message || '没有可压缩的内容', 'warn');
         const arch = result?.archived ?? 0;
         const chars = result?.chars ?? 0;
@@ -1668,13 +1765,29 @@ export function useChatStore() {
     return undefined;
   }
 
+  /** 取消正在跑的压缩（手动 / 自动都能取消）：只中止摘要那一发上游请求，历史原样保留。
+   *  以前压缩一旦开跑就只能等 —— 界面上连一颗能点的按钮都没有（他这轮点名的那条）。 */
+  async function cancelPress() {
+    const chatId = state.pressingChatId || state.chatId;
+    if (!chatId) return toast('还没有会话', 'warn', 3000);
+    try {
+      const d = await aiApi.cancelPress({ chat_id: chatId });
+      toast(d?.message || (d?.cancelled ? '已取消压缩' : '当前没有在跑的压缩'), d?.cancelled ? 'success' : 'info', 4000);
+    } catch (e) {
+      toastErr(e, '取消压缩失败');
+    }
+  }
+
   async function setContext(limit) {
     if (!state.chatId) return toast('还没有会话，无法设定上下文窗口', 'warn', 4000);
     const chatId = state.chatId;
     // 窗口数字本地就能定：先立刻写进状态，右侧百分比当场按新分母重算。
     // 以前要等服务端那趟「设窗口 + 顺手压缩」（可能几十秒）回来才动，看着就像「没生效，得强刷」。
     state.contextLimit = limit;
-    toast(`上下文窗口已设为 ${limit}，正在压缩较早的历史…`, 'info', 4000);
+    // 设置框回填的是**你设的原值**；分母可能被上游实测天花板封顶（那是另一格），
+    // 混用会导致「敲 100 万、回填显示 38 万」—— 用户以为自己的设置被改了。
+    state.contextConfigured = limit;
+    toast(`上下文窗口已设为 ${limit}${limit ? `（当前用量 ${Math.round((state.contextUsed || 0) / limit * 100)}%）` : ''}`, 'info', 3000);
     let d = null;
     try {
       d = await aiApi.setContext({ chat_id: chatId, limit });
@@ -1684,10 +1797,13 @@ export function useChatStore() {
     // 回来时人可能已经切走了：这两格属于按下按钮那条会话，别写到别人身上
     if (state.chatId === chatId) {
       if (d && d.limit != null) state.contextLimit = d.limit;
+      if (d && d.configured_limit != null) state.contextConfigured = d.configured_limit;
       if (d && d.used != null) state.contextUsed = d.used;
     }
     if (d && d.compressed) {
       if (state.chatId !== chatId) return;
+      // 没到压缩线 → 服务端压根没压（改窗口不等于要动历史：摘要是有损的）
+      if (d.compressed.skipped) return toast(d.compressed.message || '未达压缩线，历史保持原样', 'info', 5000);
       await openChat(chatId);   // 压过了：历史条数变了，不重拉一遍界面还是旧的
       if (d.compressed.error) toastErr(new Error(d.compressed.error), '窗口已改，但压缩失败');
       else toast('窗口已更新，并压缩了一轮历史', 'success');
@@ -1776,6 +1892,7 @@ export function useChatStore() {
     saveSkills,
     setCwd,
     pressChat,
+    cancelPress,
     setContext,
     updateTask,
     filesFromMessages,

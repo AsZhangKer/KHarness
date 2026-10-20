@@ -33,7 +33,12 @@ const DEFAULT_SETTINGS = {
   // 全局代理总闸：开（'1'）时所有提供商即使勾了「代理」也直连
   proxy_disabled: '0',
   // 内置浏览器用哪种 UA：desktop / mobile（界面开关与 browser_useragent 工具共用这一条）
-  browser_ua_mode: 'desktop'
+  browser_ua_mode: 'desktop',
+  /* 开屏加载动画。默认开（他拍的口径），设置-外观 可关。
+     这一条不只是前端看的：**服务端要拿它在返回 index.html 时直接注入首帧配置**（见 server/index.js），
+     因为动画必须在第一个字节就决定播不播 —— 等 uiPrefs.load() 拉回来再决定就已经晚了
+     （第三方主题 endfield 就是栽在这上面：异步设置段没到时读到默认值，动画再也不出现）。 */
+  boot_plate: '1'
 };
 
 module.exports = { DEFAULT_SETTINGS };

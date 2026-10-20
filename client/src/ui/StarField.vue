@@ -3,7 +3,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
+import { motionState } from '../stores/motion';
 
 const canvasRef = ref(null);
 const LINK_DIST = 110;
@@ -18,7 +19,9 @@ let stars = [];
 let mouse = { x: -9999, y: -9999 };
 let dpr = 1;
 
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* 「要不要动」只认设置-外观那颗开关（以前读系统的「减少动效」偏好：
+   桌面一关动画，星空整片静帧，用户在这里没有任何反悔的口子）。 */
+const reduced = () => !motionState.on;
 
 function themeColors() {
   // 颜色来自 themes.css 的 --star-* 令牌，换主题时星空跟着变
@@ -126,7 +129,7 @@ function renderStatic() {
 
 function onResize() {
   resize();
-  if (reducedMotion) renderStatic();
+  if (reduced()) renderStatic();
 }
 
 function onMouseMove(e) {
@@ -140,7 +143,7 @@ function onMouseLeave() {
 }
 
 function onVisibility() {
-  if (reducedMotion) return;
+  if (reduced()) return;
   if (document.hidden) {
     cancelAnimationFrame(rafId);
     rafId = 0;
@@ -149,11 +152,24 @@ function onVisibility() {
   }
 }
 
+/* 开关在这里拨一下就得立刻见效：关掉 → 停 rAF 留一张静帧；打开 → 直接把环跑起来。
+   不这么做的话「打开动效」要等到下次进这个主题才看得见，等于没反应。 */
+watch(() => motionState.on, (on) => {
+  if (!ctx) return;
+  if (!on) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+    renderStatic();
+  } else if (!rafId && !document.hidden) {
+    rafId = requestAnimationFrame(frame);
+  }
+});
+
 onMounted(() => {
   const canvas = canvasRef.value;
   ctx = canvas.getContext('2d');
   resize();
-  if (reducedMotion) {
+  if (reduced()) {
     renderStatic();
   } else {
     window.addEventListener('mousemove', onMouseMove, { passive: true });

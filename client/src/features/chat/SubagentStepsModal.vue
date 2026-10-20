@@ -5,7 +5,7 @@
   跑着的时候 1.5 秒拉一次 detail（服务端每一步都写进 steps_json），所以「它在查什么」是实时看得见的。
 -->
 <template>
-  <KModal :open="!!id" :title="titleText" width="860px" @close="close">
+  <KModal :open="!!id" :title="titleText" board="panel" tall code="SUBAGENT.LOG" ghost="LOG" width="860px" ef-width="1280" @close="close">
     <div class="ss-meta">
       <span class="badge" :class="badgeClass">{{ stateText }}</span>
       <span class="mono muted">{{ id }}</span>
@@ -45,7 +45,7 @@
     </div>
 
     <template #footer>
-      <button class="k-btn sm ghost" type="button" @click="close">{{ txt('chat.agent.close') }}</button>
+      <KButton variant="ghost" size="sm" @click="close">{{ txt('chat.agent.close') }}</KButton>
     </template>
   </KModal>
 </template>
@@ -53,6 +53,7 @@
 <script setup>
 import { computed, onUnmounted, ref, watch } from 'vue';
 import KModal from '../../ui/KModal.vue';
+import KButton from '../../ui/KButton.vue';
 import ChatMessage from './ChatMessage.vue';
 import { aiApi } from '../../api';
 import { txt } from '../../copy';

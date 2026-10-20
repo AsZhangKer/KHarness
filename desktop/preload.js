@@ -47,4 +47,11 @@ contextBridge.exposeInMainWorld('khDesktop', {
     ipcRenderer.on('kh:win-state', h);
     return () => ipcRenderer.removeListener('kh:win-state', h);
   },
+  /* 「要不要关这扇窗」的裁决交给页面：只有页面知道还有没有会话在回答中。
+     主进程按 Ctrl+W 时不再直接 close，而是发这一句，页面问完人再调 winCtl('close')。 */
+  onAskClose: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on('kh:ask-close', h);
+    return () => ipcRenderer.removeListener('kh:ask-close', h);
+  },
 });

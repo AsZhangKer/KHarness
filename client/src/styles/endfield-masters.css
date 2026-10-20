@@ -1,0 +1,951 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   endfield-masters.css · 终末地件表（**脚本从母本按行号切出来的原文**）
+   ---------------------------------------------------------------------------
+   生成方式：node D:/tmp/ef_port.js   —— 改这个文件请改脚本，别手打。
+   下面每一段都标了母本文件与行号；除三类登记过的改动外与母本逐字相同：
+     CHANGE 1  --u:.1rem → --u:var(--ef-port-u,1px)          （缩放旋钮，母本 1u=1920 画布 1px）
+     CHANGE 2  Xrem → calc(var(--ef-board-u,1px)*X*10)        （母本 html{font-size:10px} ⇒ 1rem=10u）
+     CHANGE 3  --font 的字族换成随包的 Noto 子集（只换字族名，一个尺寸没动）
+     CHANGE 4  button.ef-pill 的 color:inherit 复位让位给母本自己写的 --d-text / --y-text
+     CHANGE 5  母本那些短名字（.dock/.info/.chip/.sel…）只往选择器左端补一个 client 已有的宿主类，
+               声明体一个字节没动 ⇒ 不会顺手改到右栏 ChatDock 等同名件（见 DOCK_QUALIFY）
+   他给的三档背景与两档黄写在文件末尾 OVERRIDE 段。
+   整套挂在 [data-theme='endfield'] 下 ⇒ 六套原主题一行都不受影响。
+   ════════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] {
+  --ef-port-u: 1px;      /* 1u = 1px：与母本 1920 画布截图 1:1（样张 §七 5 的账本判据） */
+  --ef-board-u: 1px;     /* 板面旋钮：母本 1rem = 10u ⇒ 这里 1px 就是母本字面尺度 */
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   BUTTON 族
+   母本：D:\粥味数据库\ai/BUTTON/按钮控件陈列.html
+   切片行号：6–17 / 26–26 / 28–93（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/BUTTON/按钮控件陈列.html 第 6–17 行 ---- */
+:root[data-theme='endfield'] {
+  --font:'Noto Sans SC','Microsoft YaHei','PingFang SC',system-ui,sans-serif;
+  /* —— 以下数值均取自按钮素材的实测像素 —— */
+  --d-outer:#444343; --d-ring:#9e9c9f; --d-fill:#454444; --d-line:#959494; --d-text:#eeeeee; --d-ico:#eeeeee;
+  --y-rim:#fff000; --y-ring:#363533; --y-fill:#ffef01; --y-line:#948b12; --y-text:#444343; --y-ico:#333333;
+  --bar-ring:#777675; --bar-dark:#3f3f3f; --bar-light:#c2c2c2; --bar-inner:#4d4c4c;
+  --cur-fill:#c3c3c3; --cur-edge:#aca9a9;
+  --blk-fill:#393939; --blk-ring:#a9a8a8; --blk-line:#606060;
+  --rnd-fill:#eeecec; --rnd-edge:#cbc9c9; --rnd-glyph:#444343;
+  --tex-dark:url("data:image/png;base64,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");
+  --tex-yel:url("data:image/png;base64,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");
+}
+
+/* ---- ai/BUTTON/按钮控件陈列.html 第 26–26 行 ---- */
+:root[data-theme='endfield'] .hatch {background:repeating-linear-gradient(135deg,#d6d6d6 0 calc(var(--ef-board-u,1px)*2),transparent calc(var(--ef-board-u,1px)*2) calc(var(--ef-board-u,1px)*4.5))}
+
+/* ---- ai/BUTTON/按钮控件陈列.html 第 28–93 行 ---- */
+/* ================= 按钮控件（独立、可复用）================= */
+/* 1u = calc(var(--ef-board-u,1px)*1) = 设计稿 1px；任何控件改 --u 即可整体缩放 */
+:root[data-theme='endfield'] button.ef-pill,:root[data-theme='endfield'] button.ef-bar,:root[data-theme='endfield'] button.ef-cursor,:root[data-theme='endfield'] button.ef-blocked,:root[data-theme='endfield'] button.ef-round,:root[data-theme='endfield'] button.ef-icon {appearance:none;font:inherit;color:inherit;padding:0;margin:0;-webkit-tap-highlight-color:transparent}
+
+/* A. 胶囊动作钮 .ef-pill  —— 取消 / 确认 / 解锁（素材 cancel / empty_confirm）*/
+:root[data-theme='endfield'] .ef-pill {--u:var(--ef-port-u,1px);--ring:var(--d-ring);--line:var(--d-line);--lc:#999999;
+  position:relative;display:inline-block;width:calc(var(--u)*306);height:calc(var(--u)*61.5);border-radius:999px;overflow:hidden;cursor:pointer;
+  border:calc(var(--u)*2) solid var(--d-outer);background:var(--d-fill);color:var(--d-text);font-weight:600;
+  transition:filter .12s,transform .06s}
+:root[data-theme='endfield'] .ef-pill::before {content:"";position:absolute;inset:0;border-radius:inherit;z-index:2;pointer-events:none;box-shadow:inset 0 0 0 calc(var(--u)*2) var(--ring)}
+:root[data-theme='endfield'] .ef-pill__tex {position:absolute;right:calc(var(--u)*-2);top:calc(var(--u)*-2);width:calc(var(--u)*141);height:calc(var(--u)*61.5);
+  background:var(--tex-dark) right center/100% 100% no-repeat}
+:root[data-theme='endfield'] .ef-pill__line {position:absolute;left:calc(var(--u)*37.5);top:50%;width:calc(var(--u)*119);height:calc(var(--u)*1);margin-top:calc(var(--u)*-.5);background:var(--line)}
+:root[data-theme='endfield'] .ef-pill__line::before,:root[data-theme='endfield'] .ef-pill__line::after {content:"";position:absolute;top:50%;width:calc(var(--u)*4.4);height:calc(var(--u)*4.4);margin-top:calc(var(--u)*-2.2);border-radius:50%;background:var(--lc)}
+:root[data-theme='endfield'] .ef-pill__line::before {left:calc(var(--u)*-2.2)}:root[data-theme='endfield'] .ef-pill__line::after {right:calc(var(--u)*-2.2)}
+:root[data-theme='endfield'] .ef-pill__label {position:absolute;right:calc(var(--u)*66);top:50%;transform:translateY(-52%);font-size:calc(var(--u)*23);line-height:1;letter-spacing:.04em;white-space:nowrap}
+:root[data-theme='endfield'] .ef-pill__ico {position:absolute;right:calc(var(--u)*17);top:50%;width:calc(var(--u)*32);height:calc(var(--u)*32);margin-top:calc(var(--u)*-16);border-radius:50%;
+  background:var(--d-ico);display:grid;place-items:center;z-index:1}
+:root[data-theme='endfield'] .ef-pill__ico svg {width:100%;height:100%}
+:root[data-theme='endfield'] .ef-pill:hover {filter:brightness(1.1)}
+:root[data-theme='endfield'] .ef-pill:active {transform:translateY(calc(var(--u)*1));filter:brightness(.94)}
+:root[data-theme='endfield'] .ef-pill:focus-visible {outline:calc(var(--u)*2) solid #fff;outline-offset:calc(var(--u)*3)}
+:root[data-theme='endfield'] .ef-pill--yellow {--ring:var(--y-ring);--line:var(--y-line);--lc:#9a9118;border-color:var(--y-rim);background:var(--y-fill);color:var(--y-text)}
+:root[data-theme='endfield'] .ef-pill--yellow .ef-pill__tex {background-image:var(--tex-yel)}
+:root[data-theme='endfield'] .ef-pill--yellow .ef-pill__ico {background:var(--y-ico)}
+:root[data-theme='endfield'] .ef-pill--sm {--u:calc(var(--ef-port-u,1px)*.82)}
+:root[data-theme='endfield'] .ef-pill--float {box-shadow:0 calc(var(--u)*11) calc(var(--u)*9) calc(var(--u)*-2) rgba(0,0,0,.3),0 0 0 calc(var(--u)*6) rgba(0,0,0,.05)}
+:root[data-theme='endfield'] .ef-pill.is-disabled {filter:grayscale(1) brightness(.8);opacity:.6;pointer-events:none}
+
+/* B. 选择条 .ef-bar —— 列表行底板（素材 bar_normal / bar_select）*/
+:root[data-theme='endfield'] .ef-bar {--u:var(--ef-port-u,1px);position:relative;display:inline-flex;align-items:center;width:calc(var(--u)*233);height:calc(var(--u)*65.5);padding:0 calc(var(--u)*34);
+  border-radius:999px;border:calc(var(--u)*3) solid var(--bar-ring);background:var(--bar-dark);color:#eee;font-weight:600;font-size:calc(var(--u)*22);
+  cursor:pointer;transition:filter .12s,background .12s,color .12s}
+:root[data-theme='endfield'] .ef-bar:hover {filter:brightness(1.12)}
+:root[data-theme='endfield'] .ef-bar.is-selected {background:var(--bar-light);color:#333;box-shadow:inset 0 0 0 calc(var(--u)*1) var(--bar-inner)}
+
+/* C. 光标条 .ef-cursor —— 空光标（素材 cursor_bar_empty）*/
+:root[data-theme='endfield'] .ef-cursor {--u:var(--ef-port-u,1px);display:inline-flex;align-items:center;width:calc(var(--u)*236);height:calc(var(--u)*40);padding:0 calc(var(--u)*24);
+  border-radius:999px;border:calc(var(--u)*1.5) solid var(--cur-edge);background:var(--cur-fill);color:#3a3a3a;font-weight:600;font-size:calc(var(--u)*20);cursor:pointer}
+:root[data-theme='endfield'] .ef-cursor:hover {filter:brightness(1.06)}
+
+/* D. 禁用钮 .ef-blocked（素材 blocked）*/
+:root[data-theme='endfield'] .ef-blocked {--u:var(--ef-port-u,1px);position:relative;display:inline-block;width:calc(var(--u)*204.5);height:calc(var(--u)*42.5);border-radius:999px;
+  border:calc(var(--u)*2) solid var(--blk-ring);background:var(--blk-fill);box-shadow:0 0 0 calc(var(--u)*.5) #313131;cursor:not-allowed;overflow:hidden}
+:root[data-theme='endfield'] .ef-blocked__line {position:absolute;left:calc(var(--u)*22.5);top:50%;width:calc(var(--u)*34.5);height:calc(var(--u)*1);margin-top:calc(var(--u)*-.5);background:var(--blk-line)}
+:root[data-theme='endfield'] .ef-blocked__line::before,:root[data-theme='endfield'] .ef-blocked__line::after {content:"";position:absolute;top:50%;width:calc(var(--u)*4.4);height:calc(var(--u)*4.4);margin-top:calc(var(--u)*-2.2);border-radius:50%;background:#6f6f6f}
+:root[data-theme='endfield'] .ef-blocked__line::before {left:calc(var(--u)*-2.2)}:root[data-theme='endfield'] .ef-blocked__line::after {right:calc(var(--u)*-2.2)}
+:root[data-theme='endfield'] .ef-blocked svg {position:absolute;right:calc(var(--u)*7.5);top:50%;width:calc(var(--u)*28);height:calc(var(--u)*28);margin-top:calc(var(--u)*-14)}
+
+/* E. 圆形加减钮 .ef-round（素材 add / minus）*/
+:root[data-theme='endfield'] .ef-round {--u:var(--ef-port-u,1px);position:relative;display:inline-grid;place-items:center;width:calc(var(--u)*40);height:calc(var(--u)*40);border:0;border-radius:50%;
+  background:var(--rnd-fill);box-shadow:inset 0 0 0 calc(var(--u)*1) var(--rnd-edge),0 calc(var(--u)*1) calc(var(--u)*3) rgba(0,0,0,.2);cursor:pointer;transition:background .12s,transform .06s}
+:root[data-theme='endfield'] .ef-round::before,:root[data-theme='endfield'] .ef-round::after {content:"";position:absolute;background:var(--rnd-glyph);border-radius:calc(var(--u)*.4)}
+:root[data-theme='endfield'] .ef-round::before {width:calc(var(--u)*16);height:calc(var(--u)*3)}
+:root[data-theme='endfield'] .ef-round--add::after {width:calc(var(--u)*3);height:calc(var(--u)*16)}
+:root[data-theme='endfield'] .ef-round:hover {background:#f7f6f6}
+:root[data-theme='endfield'] .ef-round:active {background:#dddbdb;transform:scale(.95)}
+:root[data-theme='endfield'] .ef-round.is-disabled {opacity:.4;pointer-events:none}
+
+/* F. 图标钮 .ef-icon —— 关闭 exit / 返回 back（矢量描摹自素材）*/
+:root[data-theme='endfield'] .ef-icon {--u:var(--ef-port-u,1px);display:inline-block;width:calc(var(--u)*42);height:calc(var(--u)*42);border:0;background:none;cursor:pointer;border-radius:50%;transition:transform .06s,filter .12s}
+:root[data-theme='endfield'] .ef-icon svg {display:block;width:100%;height:100%}
+:root[data-theme='endfield'] .ef-icon:hover {filter:brightness(.92)}
+:root[data-theme='endfield'] .ef-icon:active {transform:scale(.94)}
+:root[data-theme='endfield'] .ef-icon:focus-visible {outline:calc(var(--u)*2) solid #ffe500;outline-offset:calc(var(--u)*2)}
+/* ================= 按钮控件结束 ================= */
+
+/* ═════════════════════════════════════════════════════════════════════════
+   TAB_BAR 公告标签栏
+   母本：D:\粥味数据库\ai/TAB_BAR/公告标签栏.html
+   切片行号：11–19 / 29–31 / 33–42 / 43–52（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/TAB_BAR/公告标签栏.html 第 11–19 行 ---- */
+:root[data-theme='endfield'] {
+  --ui-bg-grid:rgba(255,255,255,.04);
+  --ui-surface-dark:rgba(46,46,46,.95); --ui-surface-mid:#8d8e92; --ui-surface-light:#ececec; --ui-surface-lighter:#f5f5f5;
+  --ui-text-light:#f2f2f2; --ui-text-dark:#2c2c2c; --ui-text-muted:#8d8d8b;
+  --ui-accent:#ffee00; --ui-info:#25b5f0; --ui-border:rgba(255,255,255,.18);
+  --ui-radius-sm:6px; --ui-radius-md:10px; --ui-radius-pill:999px;
+  --ui-font:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+  --ui-transition:.12s ease;
+}
+
+/* ---- ai/TAB_BAR/公告标签栏.html 第 29–31 行 ---- */
+:root[data-theme='endfield'] button,:root[data-theme='endfield'] input {font:inherit;color:inherit}
+:root[data-theme='endfield'] button {border:0;background:none;cursor:pointer;padding:0}
+:root[data-theme='endfield'] .ui-icon {width:1em;height:1em;fill:currentColor;flex:none}
+
+/* ---- ai/TAB_BAR/公告标签栏.html 第 33–42 行 ---- */
+/* ========== 2. Interactive base ==========
+   基准:WINDOW/弹窗 · 面板.html 中已成型的 .ef-pill 按钮效果
+   - hover:整体提亮 brightness(1.1)
+   - active:下沉 1px + 压暗 brightness(.94),松手自动回位
+   原实现叠了一层自上而下的白色渐变(::after):浅色底看不出、深色底顶部过曝,
+   且依赖 overflow:hidden 裁切会把胶囊圆角切坏,整套移除。 */
+:root[data-theme='endfield'] .ui-interactive {position:relative;cursor:pointer;transition:filter var(--ui-transition),transform .06s ease}
+:root[data-theme='endfield'] .ui-interactive:hover {filter:brightness(1.1)}
+:root[data-theme='endfield'] .ui-interactive:active {transform:translateY(1px);filter:brightness(.94)}
+:root[data-theme='endfield'] .ui-interactive:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px}
+
+/* ---- ai/TAB_BAR/公告标签栏.html 第 43–52 行 ---- */
+/* ================= ui-announcement__tabs · 公告标签栏(标签页 + 关闭钮) ================= */
+
+:root[data-theme='endfield'] .ui-announcement__top {position:relative;height:76px;padding:8px 24px 0;background:repeating-linear-gradient(135deg,#d9d9d9 0 3px,#eee 3px 6px)}
+:root[data-theme='endfield'] .ui-announcement__tabs {display:flex;gap:18px;position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(88%,860px)}
+:root[data-theme='endfield'] .ui-announcement__tab {flex:1;display:flex;align-items:center;gap:18px;height:58px;padding:0 24px;background:#3d3d3d;color:#9b9b9b;border-radius:8px 8px 0 0;font-size:24px;font-weight:600}
+:root[data-theme='endfield'] .ui-announcement__tab.is-active {background:#8c8d91;color:#fff;height:68px}
+:root[data-theme='endfield'] .ui-announcement__tab-icon {width:46px;height:42px;border-radius:6px;background:#aaa;color:#3b3b3b;display:grid;place-items:center;font-size:28px}
+:root[data-theme='endfield'] .ui-announcement__tab.is-active .ui-announcement__tab-icon {background:#f2f2f2}
+:root[data-theme='endfield'] .ui-announcement__close {position:absolute;right:16px;top:12px;width:46px;height:46px;border-radius:50%;background:#2b2b2b;color:#eee;display:grid;place-items:center;font-size:26px;z-index:2}
+/* ================= 组件结束 ================= */
+
+/* ═════════════════════════════════════════════════════════════════════════
+   WINDOW · 面板框 .b3
+   母本：D:\粥味数据库\ai/WINDOW/弹窗 · 更多文字面板框.html
+   切片行号：95–108（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/WINDOW/弹窗 · 更多文字面板框.html 第 95–108 行 ---- */
+:root[data-theme='endfield'] .b3 {left:calc(var(--ef-board-u,1px)*39);top:calc(var(--ef-board-u,1px)*280);width:calc(var(--ef-board-u,1px)*1842);height:calc(var(--ef-board-u,1px)*522);border-radius:calc(var(--ef-board-u,1px)*8);overflow:hidden;background:#ebe9e9;color:#2b2b2d;box-shadow:0 0 calc(var(--ef-board-u,1px)*60) #0008}
+:root[data-theme='endfield'] .b3>* {position:absolute}
+:root[data-theme='endfield'] .b3 .dots {inset:0;background:radial-gradient(#00000010 calc(var(--ef-board-u,1px)*1),transparent calc(var(--ef-board-u,1px)*1.7)) 0 0/calc(var(--ef-board-u,1px)*5) calc(var(--ef-board-u,1px)*5)}
+:root[data-theme='endfield'] .b3 .hd {left:0;top:0;right:0;height:calc(var(--ef-board-u,1px)*105);background:#222;overflow:hidden}
+:root[data-theme='endfield'] .b3 .hd .gh {left:calc(var(--ef-board-u,1px)*536);top:calc(var(--ef-board-u,1px)*32);font:900 calc(var(--ef-board-u,1px)*130)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*30);transform:scaleX(1.5);transform-origin:left;color:#2f2f2f;white-space:nowrap}
+:root[data-theme='endfield'] .b3 .hd h1 {left:calc(var(--ef-board-u,1px)*60);top:calc(var(--ef-board-u,1px)*34);font:700 calc(var(--ef-board-u,1px)*36)/1 var(--font);color:#fff;letter-spacing:calc(var(--ef-board-u,1px)*1)}
+:root[data-theme='endfield'] .b3 .hd small {left:calc(var(--ef-board-u,1px)*60);top:calc(var(--ef-board-u,1px)*78);font:700 calc(var(--ef-board-u,1px)*9)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*2);color:#ffe500}
+:root[data-theme='endfield'] .b3 .lbl {left:calc(var(--ef-board-u,1px)*463);top:calc(var(--ef-board-u,1px)*168);width:calc(var(--ef-board-u,1px)*157);height:calc(var(--ef-board-u,1px)*11);background:#dcdada;border-radius:calc(var(--ef-board-u,1px)*1)}
+:root[data-theme='endfield'] .b3 .lbl::after {content:"// ITEM.BOX 03";position:absolute;left:calc(var(--ef-board-u,1px)*6);top:calc(var(--ef-board-u,1px)*2);font:700 calc(var(--ef-board-u,1px)*6)/calc(var(--ef-board-u,1px)*7) var(--font);letter-spacing:calc(var(--ef-board-u,1px)*1);color:#b3b1b1}
+:root[data-theme='endfield'] .b3 .tl {left:calc(var(--ef-board-u,1px)*463);height:calc(var(--ef-board-u,1px)*2);background:#d4d2d2}
+:root[data-theme='endfield'] .b3 .desc {left:calc(var(--ef-board-u,1px)*463);top:calc(var(--ef-board-u,1px)*230);width:calc(var(--ef-board-u,1px)*900);font:500 calc(var(--ef-board-u,1px)*24)/1.7 var(--font);color:#444}
+:root[data-theme='endfield'] .b3 .wt {right:calc(var(--ef-board-u,1px)*-30);top:calc(var(--ef-board-u,1px)*200);width:calc(var(--ef-board-u,1px)*350);height:calc(var(--ef-board-u,1px)*320);clip-path:polygon(0 0,100% 0,100% 100%,40% 100%)}
+:root[data-theme='endfield'] .b3 .wx {right:calc(var(--ef-board-u,1px)*-10);top:calc(var(--ef-board-u,1px)*340);font:900 calc(var(--ef-board-u,1px)*64)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*14);transform:scaleX(1.18);transform-origin:right;white-space:nowrap;
+  background:repeating-linear-gradient(135deg,#d3d3d3 0 calc(var(--ef-board-u,1px)*2),transparent calc(var(--ef-board-u,1px)*2) calc(var(--ef-board-u,1px)*4.5));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   WINDOW · 横幅框 .d1
+   母本：D:\粥味数据库\ai/WINDOW/弹窗 · 普通长条横幅按钮框.html
+   切片行号：95–112（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/WINDOW/弹窗 · 普通长条横幅按钮框.html 第 95–112 行 ---- */
+:root[data-theme='endfield'] .d1 {left:0;top:calc(var(--ef-board-u,1px)*396);width:calc(var(--ef-board-u,1px)*1920);height:calc(var(--ef-board-u,1px)*407);background:#fffdfd;color:#2b2b2d;box-shadow:0 0 calc(var(--ef-board-u,1px)*60) #0008}
+:root[data-theme='endfield'] .d1>* {position:absolute}
+:root[data-theme='endfield'] .d1 .l0 {left:0;top:0;width:calc(var(--ef-board-u,1px)*1920);height:calc(var(--ef-board-u,1px)*1);background:#f1f1f1}
+:root[data-theme='endfield'] .d1 .l1 {left:0;top:0;width:calc(var(--ef-board-u,1px)*23);height:calc(var(--ef-board-u,1px)*1);background:#999}
+:root[data-theme='endfield'] .d1 .c1,:root[data-theme='endfield'] .d1 .c2,:root[data-theme='endfield'] .d1 .c3 {top:calc(var(--ef-board-u,1px)*-0.5);height:calc(var(--ef-board-u,1px)*1.5)}
+:root[data-theme='endfield'] .d1 .c1 {left:calc(var(--ef-board-u,1px)*23);width:calc(var(--ef-board-u,1px)*150);background:#fff200}:root[data-theme='endfield'] .d1 .c2 {left:calc(var(--ef-board-u,1px)*173);width:calc(var(--ef-board-u,1px)*75);background:#00d8ff}:root[data-theme='endfield'] .d1 .c3 {left:calc(var(--ef-board-u,1px)*248);width:calc(var(--ef-board-u,1px)*70);background:#ff4dff}
+:root[data-theme='endfield'] .d1 .tri {left:calc(var(--ef-board-u,1px)*23);top:calc(var(--ef-board-u,1px)*15);width:calc(var(--ef-board-u,1px)*10);height:calc(var(--ef-board-u,1px)*9);background:#fff200;clip-path:polygon(0 0,100% 0,50% 100%)}
+:root[data-theme='endfield'] .d1 .tag {left:calc(var(--ef-board-u,1px)*44);top:calc(var(--ef-board-u,1px)*13);font:700 calc(var(--ef-board-u,1px)*8)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*1.8);color:#cfcfcf;text-shadow:calc(var(--ef-board-u,1px)*1) 0 #e6e6e6}
+:root[data-theme='endfield'] .d1 .wt {left:0;top:calc(var(--ef-board-u,1px)*32);width:calc(var(--ef-board-u,1px)*260);height:calc(var(--ef-board-u,1px)*130);clip-path:polygon(0 0,100% 0,58% 100%,0 72%)}
+:root[data-theme='endfield'] .d1 .wx {left:calc(var(--ef-board-u,1px)*-4);top:calc(var(--ef-board-u,1px)*134);font:900 calc(var(--ef-board-u,1px)*60)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*14);transform:scaleX(1.18);transform-origin:left;white-space:nowrap;
+  background:repeating-linear-gradient(135deg,#d6d6d6 0 calc(var(--ef-board-u,1px)*2),transparent calc(var(--ef-board-u,1px)*2) calc(var(--ef-board-u,1px)*4.5));-webkit-background-clip:text;background-clip:text;color:transparent}
+:root[data-theme='endfield'] .d1 .s0 {left:calc(var(--ef-board-u,1px)*1392);top:calc(var(--ef-board-u,1px)*1);width:calc(var(--ef-board-u,1px)*528);height:calc(var(--ef-board-u,1px)*23)}
+:root[data-theme='endfield'] .d1 .s1 {left:calc(var(--ef-board-u,1px)*1343);top:calc(var(--ef-board-u,1px)*1);width:calc(var(--ef-board-u,1px)*22);height:calc(var(--ef-board-u,1px)*21)}:root[data-theme='endfield'] .d1 .s2 {left:calc(var(--ef-board-u,1px)*1368);top:calc(var(--ef-board-u,1px)*24);width:calc(var(--ef-board-u,1px)*22);height:calc(var(--ef-board-u,1px)*21)}:root[data-theme='endfield'] .d1 .s3 {left:calc(var(--ef-board-u,1px)*1392);top:calc(var(--ef-board-u,1px)*49);width:calc(var(--ef-board-u,1px)*22);height:calc(var(--ef-board-u,1px)*21)}
+:root[data-theme='endfield'] .d1 .s0,:root[data-theme='endfield'] .d1 .s1,:root[data-theme='endfield'] .d1 .s2,:root[data-theme='endfield'] .d1 .s3 {background:repeating-linear-gradient(135deg,#cfcfcf 0 calc(var(--ef-board-u,1px)*2),transparent calc(var(--ef-board-u,1px)*2) calc(var(--ef-board-u,1px)*4.5))}
+:root[data-theme='endfield'] .d1 .ttl {left:calc(var(--ef-board-u,1px)*360);top:calc(var(--ef-board-u,1px)*94);font:700 calc(var(--ef-board-u,1px)*36)/1 var(--font);letter-spacing:calc(var(--ef-board-u,1px)*0.6)}
+:root[data-theme='endfield'] .d1 .msg {left:0;right:0;top:calc(var(--ef-board-u,1px)*186);text-align:center;font:500 calc(var(--ef-board-u,1px)*28)/1.5 var(--font);color:#444}
+:root[data-theme='endfield'] .d1 .ln {top:calc(var(--ef-board-u,1px)*334);height:calc(var(--ef-board-u,1px)*1);background:#c9c9c9}
+:root[data-theme='endfield'] .d1 .ln.a {left:0;width:calc(var(--ef-board-u,1px)*635)}:root[data-theme='endfield'] .d1 .ln.b {left:calc(var(--ef-board-u,1px)*1281);right:0}:root[data-theme='endfield'] .d1 .ln.m {left:calc(var(--ef-board-u,1px)*940);width:calc(var(--ef-board-u,1px)*37);background:#444}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   WINDOW · 解锁框 .u4
+   母本：D:\粥味数据库\ai/WINDOW/弹窗 · 危险解锁框.html
+   切片行号：95–109（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/WINDOW/弹窗 · 危险解锁框.html 第 95–109 行 ---- */
+:root[data-theme='endfield'] .u4 {left:calc(var(--ef-board-u,1px)*357);top:calc(var(--ef-board-u,1px)*330);width:calc(var(--ef-board-u,1px)*1206);height:calc(var(--ef-board-u,1px)*439);border-radius:calc(var(--ef-board-u,1px)*14);overflow:hidden;background:#dedddb;color:#2b2b2d;box-shadow:0 0 calc(var(--ef-board-u,1px)*60) #0008}
+:root[data-theme='endfield'] .u4>* {position:absolute}
+:root[data-theme='endfield'] .u4 .hd {left:0;top:0;right:0;height:calc(var(--ef-board-u,1px)*86.5);background:#ffd42d;overflow:hidden}
+:root[data-theme='endfield'] .u4 .hd>* {position:absolute}
+:root[data-theme='endfield'] .u4 .hd .lg {left:calc(var(--ef-board-u,1px)*41);top:calc(var(--ef-board-u,1px)*12);font:700 calc(var(--ef-board-u,1px)*6)/calc(var(--ef-board-u,1px)*8) var(--font);letter-spacing:calc(var(--ef-board-u,1px)*1);color:#8a6d00}
+:root[data-theme='endfield'] .u4 .hd .lg::before {content:"▲";margin-right:calc(var(--ef-board-u,1px)*4);color:#5a4800}
+:root[data-theme='endfield'] .u4 .hd h1 {left:calc(var(--ef-board-u,1px)*41);top:calc(var(--ef-board-u,1px)*25);font:700 calc(var(--ef-board-u,1px)*28)/1 var(--font);color:#2b2b2d;letter-spacing:calc(var(--ef-board-u,1px)*1)}
+:root[data-theme='endfield'] .u4 .hd .tag {left:calc(var(--ef-board-u,1px)*41);top:calc(var(--ef-board-u,1px)*62.5);width:calc(var(--ef-board-u,1px)*102);height:calc(var(--ef-board-u,1px)*10);border-radius:calc(var(--ef-board-u,1px)*2);background:#333;color:#fff;font:700 calc(var(--ef-board-u,1px)*6)/calc(var(--ef-board-u,1px)*10) var(--font);letter-spacing:calc(var(--ef-board-u,1px)*1);padding-left:calc(var(--ef-board-u,1px)*5)}
+:root[data-theme='endfield'] .u4 .hd .tag::after {content:"▢▢";position:absolute;right:calc(var(--ef-board-u,1px)*5);top:0;color:#aaa;letter-spacing:calc(var(--ef-board-u,1px)*1)}
+:root[data-theme='endfield'] .u4 .hd .sh {left:calc(var(--ef-board-u,1px)*1132);top:calc(var(--ef-board-u,1px)*10);width:calc(var(--ef-board-u,1px)*59);height:calc(var(--ef-board-u,1px)*52);border:calc(var(--ef-board-u,1px)*19) solid #ecc332;border-bottom:0;border-radius:calc(var(--ef-board-u,1px)*32) calc(var(--ef-board-u,1px)*32) 0 0}
+:root[data-theme='endfield'] .u4 .hd .lk {left:calc(var(--ef-board-u,1px)*1070);top:calc(var(--ef-board-u,1px)*52.5);width:calc(var(--ef-board-u,1px)*90);height:calc(var(--ef-board-u,1px)*60);background:#ecc332}
+:root[data-theme='endfield'] .u4 .gc {background:#d3d2d0;opacity:.85}
+:root[data-theme='endfield'] .u4 .ck {width:calc(var(--ef-board-u,1px)*21);height:calc(var(--ef-board-u,1px)*21)}
+:root[data-theme='endfield'] .u4 .tx {left:calc(var(--ef-board-u,1px)*432);font:500 calc(var(--ef-board-u,1px)*22)/1 var(--font);color:#444}
+:root[data-theme='endfield'] .u4 .dv {left:calc(var(--ef-board-u,1px)*291);top:calc(var(--ef-board-u,1px)*219);width:calc(var(--ef-board-u,1px)*623);height:calc(var(--ef-board-u,1px)*2);background:#777}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   下拉与勾选族
+   母本：D:\粥味数据库\可参考/下拉菜单和复选框勾选框.html
+   切片行号：8–34 / 63–85 / 90–145 / 150–241 / 242–267（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- 可参考/下拉菜单和复选框勾选框.html 第 8–34 行 ---- */
+:root[data-theme='endfield'] {
+            /* 颜色变量定义，方便统一修改 */
+            --bg-page: #f5f5f5;
+            
+            /* 面板背景色 */
+            --panel-light-bg: #dcdcdc;
+            --panel-dark-bg: #404040;
+            
+            /* 胶囊按钮背景色 */
+            --pill-bg-white: #f5f5f5;
+            --pill-bg-gray: #b0b0b0;
+            --pill-bg-dark: #636363;
+            
+            /* 选中状态高亮色 */
+            --item-active-dark: #636363;
+            --item-active-light: #b0b0b0;
+            
+            /* 文本颜色 */
+            --text-dark: #333333;
+            --text-light: #ffffff;
+            --text-muted: #666666;
+            
+            /* 边框和分割线 */
+            --border-light: rgba(0, 0, 0, 0.05);
+            --border-dark: rgba(0, 0, 0, 0.2);
+            --divider-color: #8c8c8c;
+        }
+
+/* ---- 可参考/下拉菜单和复选框勾选框.html 第 63–85 行 ---- */
+:root[data-theme='endfield'] .icon {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        
+        :root[data-theme='endfield'] .icon-check {
+            width: 18px;
+            height: 18px;
+            stroke: currentColor;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            fill: none;
+        }
+
+        :root[data-theme='endfield'] .icon-arrow-down,:root[data-theme='endfield'] .icon-arrow-up {
+            fill: currentColor;
+            width: 12px;
+            height: 12px;
+        }
+
+/* ---- 可参考/下拉菜单和复选框勾选框.html 第 90–145 行 ---- */
+:root[data-theme='endfield'] .pill-group {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        :root[data-theme='endfield'] .pill-btn {
+            background-color: var(--pill-bg-white);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 999px; /* 完全圆角 */
+            padding: 6px 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 14px;
+            color: var(--text-dark);
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            min-width: 100px;
+        }
+
+        :root[data-theme='endfield'] .pill-btn span {
+            margin-right: 8px;
+            font-weight: 500;
+        }
+
+        /* 底部吸附的复杂胶囊按钮 (带分割线) */
+        :root[data-theme='endfield'] .pill-complex {
+            background-color: var(--panel-light-bg);
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            padding: 4px;
+            font-size: 14px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+
+        :root[data-theme='endfield'] .pill-complex-part {
+            padding: 4px 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            border-radius: 999px; /* 内部也保持圆角倾向 */
+        }
+        
+        :root[data-theme='endfield'] .pill-complex-part.active {
+            background-color: #f0f0f0; /* 白色高亮部分 */
+        }
+
+        :root[data-theme='endfield'] .pill-divider {
+            width: 1px;
+            height: 14px;
+            background-color: var(--divider-color);
+            margin: 0 2px;
+        }
+
+/* ---- 可参考/下拉菜单和复选框勾选框.html 第 150–241 行 ---- */
+:root[data-theme='endfield'] .dropdown-panel {
+            border-radius: 12px;
+            overflow: hidden;
+            width: 240px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.light {
+            background-color: var(--panel-light-bg);
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.dark {
+            background-color: var(--panel-dark-bg);
+            color: var(--text-light);
+        }
+
+        /* 列表项 */
+        :root[data-theme='endfield'] .list-item {
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 14px;
+            cursor: pointer;
+            position: relative;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.dark .list-item {
+            border-bottom: 1px solid var(--border-dark);
+        }
+
+        :root[data-theme='endfield'] .list-item:last-child {
+            border-bottom: none;
+        }
+
+        :root[data-theme='endfield'] .item-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* 列表项 - 选中状态 */
+        :root[data-theme='endfield'] .list-item.active {
+            font-weight: bold;
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.light .list-item.active {
+            background-color: var(--item-active-dark);
+            color: var(--text-light);
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.dark .list-item.active {
+            background-color: var(--item-active-light);
+            color: var(--text-dark);
+        }
+
+        /* 左侧指示竖线 */
+        :root[data-theme='endfield'] .list-item.active::before {
+            content: '';
+            position: absolute;
+            left: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 60%;
+            border-radius: 2px;
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.light .list-item.active::before {
+            background-color: var(--text-light);
+        }
+
+        :root[data-theme='endfield'] .dropdown-panel.dark .list-item.active::before {
+            background-color: var(--text-dark);
+        }
+
+        /* =========================================
+           3. 复选框/单选指示器 (Checkboxes)
+           ========================================= */
+        :root[data-theme='endfield'] .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 18px;
+            color: var(--text-dark);
+            cursor: pointer;
+            padding: 8px;
+        }
+
+/* ---- 可参考/下拉菜单和复选框勾选框.html 第 242–267 行 ---- */
+:root[data-theme='endfield'] .checkbox-circle {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background-color: #bcbcbc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        :root[data-theme='endfield'] .checkbox-wrapper.checked .checkbox-circle {
+            background-color: #333333;
+            /* 模拟截图中的外圈半透明描边效果 */
+            box-shadow: 0 0 0 4px rgba(180, 180, 180, 0.5); 
+        }
+
+        :root[data-theme='endfield'] .checkbox-wrapper.checked .icon-check {
+            color: #ffffff;
+            width: 14px;
+            height: 14px;
+        }
+        
+        :root[data-theme='endfield'] .checkbox-wrapper:not(.checked) .icon-check {
+            display: none;
+        }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   聊天输入栏
+   母本：D:\粥味数据库\ai/INPUTBOX/聊天输入栏.html
+   切片行号：50–59（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/INPUTBOX/聊天输入栏.html 第 50–59 行 ---- */
+/* ========== 9. ui-chat-input 聊天框(输入栏) ========== */
+:root[data-theme='endfield'] .ui-chat-input {display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(18,18,18,.92);border:1px solid #3a3a3a;border-radius:var(--ui-radius-md)}
+:root[data-theme='endfield'] .ui-chat-input__field {flex:1;display:flex;align-items:center;height:40px;padding:0 14px;background:var(--ui-surface-lighter);border-radius:var(--ui-radius-pill);color:#222}
+:root[data-theme='endfield'] .ui-chat-input__text {flex:1;min-width:0;background:none;border:0;outline:0;font-size:17px;color:#222}
+:root[data-theme='endfield'] .ui-chat-input__text::placeholder {color:#222}
+:root[data-theme='endfield'] .ui-chat-input__quick {font-size:22px;color:#333}
+:root[data-theme='endfield'] .ui-chat-input__btn {width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-size:22px;background:#e6e6e6;color:#222}
+:root[data-theme='endfield'] .ui-chat-input__btn--emoji {background:#eee}
+:root[data-theme='endfield'] .ui-chat-input__btn--plus {background:#3b3b3b;color:#fff}
+/* ================= 组件结束 ================= */
+
+/* ═════════════════════════════════════════════════════════════════════════
+   聊天顶栏 .ef-chat-head + 消息框 .ef-bubble
+   母本：D:\粥味数据库\ai/MESSAGE_BOX/聊天框顶栏与消息框.html
+   切片行号：6–13 / 22–42 / 44–56（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/MESSAGE_BOX/聊天框顶栏与消息框.html 第 6–13 行 ---- */
+:root[data-theme='endfield'] {
+  --font:'Noto Sans SC','Microsoft YaHei','PingFang SC',system-ui,sans-serif;
+  /* 以下均为截图实测值 */
+  --page:#1b212a;
+  --head:#3c3c3c; --head-edge:#878686; --head-line:#2c2c2c; --head-strip:#1d1d1d; --head-strip-r:#353535;
+  --cyan:#19cffd; --blue:#1993fd; --dot:#2a98b8; --ink:#3a3a3a; --light:#c5c9c9; --ghost:#505050;
+  --bubble:#454444;
+}
+
+/* ---- ai/MESSAGE_BOX/聊天框顶栏与消息框.html 第 22–42 行 ---- */
+/* ================= 聊天顶栏 .ef-chat-head ================= */
+/* 1u = calc(var(--ef-board-u,1px)*1) = 截图 1px；宽度跟随父容器，右侧装饰簇固定贴右 */
+:root[data-theme='endfield'] .ef-chat-head {--u:var(--ef-port-u,1px);position:relative;width:100%;height:calc(var(--u)*105);overflow:hidden;color:#fff;font-family:var(--font);
+  border:solid var(--head-edge);border-width:calc(var(--u)*3) calc(var(--u)*2) calc(var(--u)*3) 0;
+  border-radius:calc(var(--u)*20) calc(var(--u)*24) 0 0;
+  background:linear-gradient(var(--head) 0 calc(var(--u)*90),var(--head-line) calc(var(--u)*90) calc(var(--u)*91),var(--head-strip) calc(var(--u)*91))}
+:root[data-theme='endfield'] .ef-chat-head>* {position:absolute}
+:root[data-theme='endfield'] .ef-chat-head__bar {top:calc(var(--u)*-3);bottom:calc(var(--u)*-3);background:var(--cyan)}
+:root[data-theme='endfield'] .ef-chat-head__bar--1 {left:calc(var(--u)*1);width:calc(var(--u)*11)}
+:root[data-theme='endfield'] .ef-chat-head__bar--2 {left:calc(var(--u)*21);width:calc(var(--u)*13)}
+:root[data-theme='endfield'] .ef-chat-head__ghost {left:0;top:0;width:calc(var(--u)*330);height:calc(var(--u)*90)}
+:root[data-theme='endfield'] .ef-chat-head__name {left:calc(var(--u)*75);top:calc(var(--u)*37);font-size:calc(var(--u)*36);line-height:calc(var(--u)*36);font-weight:500;white-space:nowrap;letter-spacing:.02em}
+:root[data-theme='endfield'] .ef-chat-head__strip {left:0;right:0;bottom:0;height:calc(var(--u)*8);background:linear-gradient(90deg,var(--head-strip) calc(100% - var(--u)*432),var(--head-strip-r) 0)}
+:root[data-theme='endfield'] .ef-chat-head__deco {right:0;top:0;width:calc(var(--u)*680);height:calc(var(--u)*99)}
+:root[data-theme='endfield'] .ef-chat-head__deco>* {position:absolute}
+:root[data-theme='endfield'] .ef-chat-head__cell {background:var(--cyan)}
+:root[data-theme='endfield'] .ef-chat-head__field {left:calc(var(--u)*63);top:0;width:calc(var(--u)*481);height:calc(var(--u)*91);background:var(--cyan);overflow:hidden}
+:root[data-theme='endfield'] .ef-chat-head__field svg {position:absolute;left:0;top:0;width:100%;height:100%}
+:root[data-theme='endfield'] .ef-chat-head__stripe {top:0;height:calc(var(--u)*91);background:var(--light)}
+:root[data-theme='endfield'] .ef-chat-head__tail {left:calc(var(--u)*544);top:0;width:calc(var(--u)*136);height:calc(var(--u)*91);background:var(--light)}
+:root[data-theme='endfield'] .ef-chat-head__tail svg {position:absolute;left:0;top:0;width:100%;height:100%}
+
+/* ---- ai/MESSAGE_BOX/聊天框顶栏与消息框.html 第 44–56 行 ---- */
+/* ================= 消息框 .ef-bubble（宽高随内容自适应）================= */
+/* 实测：内边距 17/25、行高 44、字号 32.6、圆角 25；小型最宽 475，大型最宽 743（截图中大型为两行 = 122 高）*/
+:root[data-theme='endfield'] .ef-bubble {--u:var(--ef-port-u,1px);--max:calc(var(--u)*475);position:relative;display:block;width:fit-content;min-width:calc(var(--u)*50);
+  max-width:min(100%,var(--max));padding:calc(var(--u)*17) calc(var(--u)*25);background:var(--bubble);color:#fff;
+  font:500 calc(var(--u)*32.6)/calc(var(--u)*44) var(--font);border-radius:0 calc(var(--u)*25) calc(var(--u)*25) calc(var(--u)*25);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+:root[data-theme='endfield'] .ef-bubble--lg {--max:calc(var(--u)*743)}
+/* 左上角“尾巴”：顶边向左外伸 12，再以内凹椭圆弧收回到气泡左边（高 28）*/
+:root[data-theme='endfield'] .ef-bubble::before {content:"";position:absolute;left:calc(var(--u)*-12);top:0;width:calc(var(--u)*12);height:calc(var(--u)*28);
+  background:radial-gradient(ellipse calc(var(--u)*12) calc(var(--u)*28) at 0 100%,transparent 99%,var(--bubble) 100%)}
+:root[data-theme='endfield'] .ef-bubble--self {margin-left:auto;border-radius:calc(var(--u)*25) 0 calc(var(--u)*25) calc(var(--u)*25)}
+:root[data-theme='endfield'] .ef-bubble--self::before {left:auto;right:calc(var(--u)*-12);transform:scaleX(-1)}
+/* ================= 组件结束 ================= */
+
+/* ═════════════════════════════════════════════════════════════════════════
+   整体 · hk设计 输入区 .dock（.rnd/.sel/.comp/.cbar/.ring/.tabq/.mnu）
+   母本：D:\粥味数据库\ai/WINDOW/整体 · hk设计.html
+   切片行号：6–12 / 18–18 / 29–32 / 44–45 / 125–139 / 160–167（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 6–12 行 ---- */
+:root[data-theme='endfield'] {
+  --font:'Noto Sans SC','Microsoft YaHei','PingFang SC',system-ui,sans-serif;
+  --mono:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  --y:#ffef00;--cy:#19cffd;--mg:#ff4dff;--red:#ff4031;--grn:#1fc57a;
+  --ink:#2b2b2d;--sub:#7d7b7b;--p1:#ececec;--p2:#e2e0e0;--p3:#d1cfcf;--ln:#c4c2c2;
+  --d1:#1d1d1f;--d2:#2c2c2e;--d3:#3c3c3c;--rim:#878686;
+}
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 18–18 行 ---- */
+:root[data-theme='endfield'] svg.i {width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-.12em}
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 29–32 行 ---- */
+:root[data-theme='endfield'] .rnd {display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#eeecec;color:#444343;box-shadow:inset 0 0 0 1px #cbc9c9,0 1px 3px #0003;transition:background .1s,transform .06s;flex:none}
+:root[data-theme='endfield'] .rnd:hover {background:#fbfafa}:root[data-theme='endfield'] .rnd:active {background:#dddbdb;transform:scale(.94)}:root[data-theme='endfield'] .rnd.sm {width:24px;height:24px;font-size:13px}
+:root[data-theme='endfield'] .rnd.dk {background:#3c3c3c;color:#fff;box-shadow:inset 0 0 0 2px #777675}:root[data-theme='endfield'] .rnd.dk:hover {background:#4c4c4c}
+:root[data-theme='endfield'] .rnd.y {background:var(--y);color:#222;box-shadow:inset 0 0 0 2px #363533}:root[data-theme='endfield'] .rnd[disabled] {background:#6b6a6a;color:#8a8989;box-shadow:none;cursor:default}
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 44–45 行 ---- */
+:root[data-theme='endfield'] .k-dd-trigger.sel {display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 12px 0 11px;border:2px solid #fff;border-radius:999px;background:#eeecec;box-shadow:inset 0 0 0 1px #f8f6f6,0 0 4px #0003;color:#393939;font-weight:500;font-size:13px;white-space:nowrap;transition:filter .12s}
+:root[data-theme='endfield'] .k-dd-trigger.sel:hover {filter:brightness(.96)}:root[data-theme='endfield'] .k-dd-trigger.sel .car {width:0;height:0;border:5px solid transparent;border-bottom:7px solid #817f7f;border-top:0;margin-left:2px}
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 125–139 行 ---- */
+/* ===== 输入区 ===== */
+:root[data-theme='endfield'] .composer.dock {flex:none;width:100%;max-width:928px;margin:0 auto;padding:0 24px 10px}
+:root[data-theme='endfield'] .meta-bar.info {display:flex;align-items:center;gap:7px;margin:0 6px 6px;font:11px var(--mono);color:#7d7b7b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-theme='endfield'] .meta-bar.info b {color:#444;font-weight:600}
+:root[data-theme='endfield'] .comp-wrap.comp {border:2px solid #fff;border-radius:24px;background:#f1efef;box-shadow:inset 0 0 0 1px #f8f6f6,0 6px 18px #0002;overflow:hidden}
+:root[data-theme='endfield'] .comp-wrap.comp:focus-within {box-shadow:inset 0 0 0 1px #f8f6f6,0 0 0 3px var(--y),0 6px 18px #0002}
+:root[data-theme='endfield'] .comp-wrap.comp textarea {display:block;width:100%;min-height:62px;max-height:170px;padding:14px 18px 4px;border:0;outline:0;background:none;resize:none;font-size:14px;line-height:1.6}
+:root[data-theme='endfield'] .attach-row.chips {display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px 0}:root[data-theme='endfield'] .attach-row.chips:empty {display:none}
+:root[data-theme='endfield'] .attach.chip {display:flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 10px;border-radius:99px;background:#3c3c3c;color:#fff;font-size:12px}
+:root[data-theme='endfield'] .attach.chip button {color:#ccc;width:18px;height:18px;border-radius:50%;display:grid;place-items:center}:root[data-theme='endfield'] .attach.chip button:hover {background:#fff3}
+:root[data-theme='endfield'] .bar.cbar {display:flex;align-items:center;gap:8px;padding:6px 10px 10px}:root[data-theme='endfield'] .bar.cbar .sp {flex:1}
+:root[data-theme='endfield'] .composer .ring {--p:0;position:relative;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#ffd500 calc(var(--p)*1%),#cfcdcd 0);font:700 8.5px var(--font);color:#555;cursor:pointer}
+:root[data-theme='endfield'] .composer .ring::before {content:"";position:absolute;inset:3px;border-radius:50%;background:#f1efef}:root[data-theme='endfield'] .composer .ring span {position:relative}
+:root[data-theme='endfield'] .tabq {display:flex;justify-content:center;margin-top:-1px}
+:root[data-theme='endfield'] .tabq button {display:flex;align-items:center;gap:6px;height:22px;padding:0 14px;border-radius:0 0 10px 10px;background:#3c3c3c;color:#eee;font-size:12px}:root[data-theme='endfield'] .tabq button:hover {background:#555}
+
+/* ---- ai/WINDOW/整体 · hk设计.html 第 160–167 行 ---- */
+:root[data-theme='endfield'] .k-dd-menu.pop {position:fixed;z-index:80;min-width:170px;animation:pp .12s ease-out}@keyframes pp{from{opacity:0;transform:translateY(4px)}}
+:root[data-theme='endfield'] .mnu {padding:8px 0;border-radius:10px;background:#484747;color:#fff;box-shadow:0 8px 22px #0006;overflow:hidden}
+:root[data-theme='endfield'] .mnu .mi {position:relative;display:flex;align-items:center;gap:9px;height:38px;padding:0 18px 0 20px;font-weight:500;font-size:13.5px;white-space:nowrap;width:100%;text-align:left}
+:root[data-theme='endfield'] .mnu .mi:hover {background:#545353}
+:root[data-theme='endfield'] .mnu .mi.on {background:#bdbcbc;color:#444343}:root[data-theme='endfield'] .mnu .mi.on::before {content:"";position:absolute;left:3px;top:7px;bottom:7px;width:3px;background:#444343}
+:root[data-theme='endfield'] .mnu .mi .ck {margin-left:auto;display:none;stroke-width:3.4}:root[data-theme='endfield'] .mnu .mi.on .ck {display:block}
+:root[data-theme='endfield'] .mnu .mi small {color:#aaa;margin-left:auto;padding-left:16px}
+:root[data-theme='endfield'] .mnu.lt {background:#d1cfcf;padding:6px 0 0}:root[data-theme='endfield'] .mnu.lt .mi {color:#444;height:40px}:root[data-theme='endfield'] .mnu.lt .mi+.mi {border-top:2px solid #c4c2c2}:root[data-theme='endfield'] .mnu.lt .mi:hover {background:#c9c7c7}:root[data-theme='endfield'] .mnu.lt .mi.danger {color:#c0392b}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   五段外框 .ef-chat-frame + 三色条 .ef-tri-bars（令牌）
+   母本：D:\粥味数据库\@lib/tokens.css
+   切片行号：618–634（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- @lib/tokens.css 第 618–634 行 ---- */
+:root[data-theme='endfield'] {
+/* 聊天框外框：CSS 画五段，替代母本原来那张贴图 */
+  --ef-frame-line: 1.5px;
+  --ef-frame-color: rgb(202, 201, 201);
+  --ef-frame-gap: 264px;            /* 顶边左段右侧留的缺口 */
+  --ef-frame-seg: 32px;             /* 缺口右端那一小块 */
+  --ef-frame-notch-w: 232px;        /* 下沉折线（要一段 svg，stroke 1.5 + non-scaling-stroke） */
+  --ef-frame-notch-h: 10px;
+  --ef-frame-radius: 0 0 12px 12px; /* 只有下两角圆，上方靠折线开口 */
+
+  /* 三色条：母本实测是 品红 / 黄 / 青（他口头说的「红蓝黄」就是这一条） */
+  --ef-bar-w: 64px;
+  --ef-bar-h: 2px;
+  --ef-bar-gap: 8px;
+  --ef-bar-right: 44px;
+  --ef-bar-magenta: rgb(226, 2, 226);
+  --ef-bar-yellow: rgb(243, 241, 0);
+  --ef-bar-cyan: rgb(1, 241, 241);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   五段外框 .ef-chat-frame + 三色条 .ef-tri-bars（画法）
+   母本：D:\粥味数据库\@lib/tokens.css
+   切片行号：653–701（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- @lib/tokens.css 第 653–701 行 ---- */
+/* 聊天框外框（母本 ChatArea 的五段结构，这里压成一个类 + 两个伪元素 + 一条 svg） */
+:root[data-theme='endfield'] .ef-chat-frame {
+  position: relative;
+  border: var(--ef-frame-line) solid var(--ef-frame-color);
+  border-top: 0;
+  border-radius: var(--ef-frame-radius);
+}
+:root[data-theme='endfield'] .ef-chat-frame::before { /* 顶边左段：从左边一直画到缺口前 */
+  content: '';
+  position: absolute;
+  top: calc(var(--ef-frame-line) * -1);
+  left: 0;
+  right: var(--ef-frame-gap);
+  height: var(--ef-frame-line);
+  background: var(--ef-frame-color);
+}
+:root[data-theme='endfield'] .ef-chat-frame::after { /* 顶边右端那一小块 */
+  content: '';
+  position: absolute;
+  top: calc(var(--ef-frame-line) * -1);
+  right: 0;
+  width: var(--ef-frame-seg);
+  height: var(--ef-frame-line);
+  background: var(--ef-frame-color);
+}
+/* 三色条：三条各 64×2，两条切角、一条不切，每条自带同色辉光 */
+:root[data-theme='endfield'] .ef-tri-bars {
+  position: absolute;
+  top: calc(var(--ef-frame-line) * -1);
+  right: var(--ef-bar-right);
+  display: flex;
+  gap: var(--ef-bar-gap);
+  pointer-events: none;
+}
+:root[data-theme='endfield'] .ef-tri-bars i { width: var(--ef-bar-w); height: var(--ef-bar-h); }
+:root[data-theme='endfield'] .ef-tri-bars i:nth-child(1) {
+  background: var(--ef-bar-magenta);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 8px 100%);
+  box-shadow: 0 0 8px var(--ef-bar-magenta);
+}
+:root[data-theme='endfield'] .ef-tri-bars i:nth-child(2) {
+  background: var(--ef-bar-cyan);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  box-shadow: 0 0 8px var(--ef-bar-cyan);
+}
+:root[data-theme='endfield'] .ef-tri-bars i:nth-child(3) {
+  background: var(--ef-bar-yellow);
+  box-shadow: 0 0 8px var(--ef-bar-yellow);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   下拉菜单 .ef-dd 连体（面板底边压在胶囊中线上、胶囊压在口上）
+   母本：D:\粥味数据库\ai/DROPDOWN_MENU/下拉菜单.html
+   切片行号：6–12 / 23–23 / 26–32 / 37–39 / 47–47（逐字，未改一条值）
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- ai/DROPDOWN_MENU/下拉菜单.html 第 6–12 行 ---- */
+:root[data-theme='endfield'] {
+  --font:'Noto Sans SC','Microsoft YaHei','PingFang SC',system-ui,sans-serif;
+  /* 以下均为截图实测值 */
+  --page:#1c2028;
+  --menu:#484747; --menu-hover:#545353; --sel:#bdbcbc; --sel-ink:#444343; --opt-ink:#ffffff;
+  --pill:#eeecec; --pill-rim:#fcfaf9; --pill-ink:#393939; --caret:#817f7f;
+}
+
+/* ---- ai/DROPDOWN_MENU/下拉菜单.html 第 23–23 行 ---- */
+:root[data-theme='endfield'] .k-dropdown.ef-dd {--u:var(--ef-port-u,1px);position:relative;display:block;width:calc(var(--u)*337);max-width:100%;height:calc(var(--u)*43);font-family:var(--font)}
+
+/* ---- ai/DROPDOWN_MENU/下拉菜单.html 第 26–32 行 ---- */
+:root[data-theme='endfield'] .ef-dd__btn {appearance:none;position:relative;z-index:2;display:flex;align-items:center;width:100%;height:100%;margin:0;
+  padding:0 calc(var(--u)*19) 0 calc(var(--u)*24);border:calc(var(--u)*2) solid var(--pill-rim);border-radius:999px;background:var(--pill);
+  box-shadow:0 0 calc(var(--u)*6) rgba(0,0,0,.32);color:var(--pill-ink);font:500 calc(var(--u)*22.5)/1 var(--font);text-align:left;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:filter .12s}
+:root[data-theme='endfield'] .ef-dd__btn:hover {filter:brightness(.97)}
+:root[data-theme='endfield'] .ef-dd__btn:active {filter:brightness(.93)}
+:root[data-theme='endfield'] .ef-dd__btn:focus-visible {outline:calc(var(--u)*2.5) solid #ffef00;outline-offset:calc(var(--u)*3)}
+
+/* ---- ai/DROPDOWN_MENU/下拉菜单.html 第 37–39 行 ---- */
+:root[data-theme='endfield'] .k-dd-menu.ef-dd__menu {position:absolute;left:0;right:0;bottom:calc(var(--u)*21.5);z-index:1;display:none;
+  padding:calc(var(--u)*14.5) 0 calc(var(--u)*36);border-radius:calc(var(--u)*10);background:var(--menu);box-shadow:0 calc(var(--u)*4) calc(var(--u)*14) rgba(0,0,0,.35)}
+:root[data-theme='endfield'] .k-dropdown.ef-dd.is-open .k-dd-menu.ef-dd__menu {display:block}
+
+/* ---- ai/DROPDOWN_MENU/下拉菜单.html 第 47–47 行 ---- */
+:root[data-theme='endfield'] .ef-dd__label {margin-left:calc(var(--u)*8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+
+/* ═════════════════════════════════════════════════════════════════════════
+   SIZES · 他允许的唯一一类改动：「你改改尺寸可以」
+   母本的 1u 是 1920×1200 画布上的 1px，client 是 app 尺度 ⇒ 只拧两根旋钮 + 把几处
+   字号按 app 重量一遍。**上面切下来的原文一条没动**（要改尺寸改这里）。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] {
+  --ef-port-u: .52px;   /* .ef-pill 61.5u → 32 高（对齐母本 app 档 .pill-btn 的 32），__ico 32u→16.6，label 23u→12 */
+  --ef-board-u: .6px;   /* .b3 .hd 105u→63px / .u4 标头 86.5u→52px / 板影 60u→36px */
+}
+/* 母本那些"微字"是按 1920 画布量的（.9rem=9u、.6rem=6u），拧旋钮会一起缩没 ⇒ 单独钉回 app 档 */
+:root[data-theme='endfield'] .b3 .hd small,
+:root[data-theme='endfield'] .b3 .lbl::after,
+:root[data-theme='endfield'] .u4 .hd .lg { font-size: 10px; }
+:root[data-theme='endfield'] .b3 .hd h1 { font-size: 20px; }
+:root[data-theme='endfield'] .b3 .desc { font-size: 14px; line-height: 1.7; }
+:root[data-theme='endfield'] .b3 .hd .gh { font-size: 60px; letter-spacing: 14px; }
+:root[data-theme='endfield'] .d1 .ttl { font-size: 20px; }
+:root[data-theme='endfield'] .d1 .msg { font-size: 14px; }
+:root[data-theme='endfield'] .d1 .tag { font-size: 10px; letter-spacing: 4px; }
+:root[data-theme='endfield'] .d1 .wx,
+:root[data-theme='endfield'] .b3 .wx { font-size: 30px; letter-spacing: 7px; }
+:root[data-theme='endfield'] .u4 .hd h1 { font-size: 17px; }
+:root[data-theme='endfield'] .u4 .tx { font-size: 13px; }
+/* 母本 .pill-btn / .ef-pill 都没写 line-height ⇒ 中文按 normal 撑高（样张里唯一一处补写就是它） */
+:root[data-theme='endfield'] .pill-btn { line-height: 18px; }
+/* 主输入框两档形状（他 2026-10-14 夜：单行才胶囊，长高 = 圆角矩形）。
+   半径 = 母本单行胶囊那个半径（40/2 = 20u），口径出处 baker ChatInput.vue 的 &--grown 原话 */
+:root[data-theme='endfield'] .ui-chat-input__field { padding: 8px 14px; }
+:root[data-theme='endfield'] .ui-chat-input__field.is-grown { border-radius: 20px; }
+/* 接线：母本那份是「字段 + 两颗圆键」横排，client 的 composer 是「字段 + 一整排工具行」上下叠
+   ⇒ 只让字段与工具行各占一行，母本的内距/圆角/面色/键径一个没动 */
+:root[data-theme='endfield'] .ui-chat-input { flex-wrap: wrap; }
+:root[data-theme='endfield'] .ui-chat-input__field { flex: 1 1 100%; min-height: 40px; }
+:root[data-theme='endfield'] .ui-chat-input .bar { flex: 1 1 100%; margin-top: 8px; }
+/* 气泡宽度：母本 --max 475u/743u 是 1920 画布的对话框尺度 ⇒ client 的消息列宽本来就由 --msg-w 管 */
+:root[data-theme='endfield'] .ef-bubble { --max: 100%; }
+/* 公告标签栏：母本是 1920 画布的对话框尺度（页签 58 高 / 字 24 / 图标块 46×42）⇒ 收到 app 档，形状不动 */
+:root[data-theme='endfield'] .ui-announcement__top { height: 44px; padding: 6px 12px 0; }
+:root[data-theme='endfield'] .ui-announcement__tabs { gap: 8px; width: min(94%, 860px); }
+:root[data-theme='endfield'] .ui-announcement__tab { height: 30px; gap: 8px; padding: 0 10px; font-size: 13px; }
+:root[data-theme='endfield'] .ui-announcement__tab.is-active { height: 38px; }
+:root[data-theme='endfield'] .ui-announcement__tab-icon { width: 22px; height: 20px; font-size: 13px; }
+:root[data-theme='endfield'] .ui-announcement__close { width: 28px; height: 28px; font-size: 15px; right: 8px; top: 6px; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   PILL WIRING · 长条胶囊按钮装到真实按钮上
+   母本 .ef-pill 是画布上定宽 306u 的一块，里面四个解剖件全 absolute ⇒ 文案长短不一时
+   只能把「定宽 + 文字钉右边」换成「按文字撑宽」：__tex（右端纹理）、__line（细线带两颗点）、
+   __ico（右端圆盘）的偏移与尺寸一个数没动，padding 就是它们原来占的位。
+   ═════════════════════════════════════════════════════════════════════════ */
+/* ⚠ 选择器必须带 button 这一层：母本第 26 行那条复位 `button.ef-pill{…padding:0;margin:0;font:inherit}`
+   = (0,3,1)，比 `:root[data-theme] .ef-pill` =(0,3,0) 高 ⇒ 不带 button 的话 padding 会被它清零，
+   文字就会一路顶到右端圆盘上（本轮实测：文字压在 ✕ 圆盘上）。 */
+:root[data-theme='endfield'] button.ef-pill,
+:root[data-theme='endfield'] .ef-pill {
+  width:auto;
+  min-width:calc(var(--u)*306);
+  display:inline-flex;
+  align-items:center;
+  /* 文字永远贴右（母本 __label 就是 right:66u 的绝对定位），
+     所以主轴收在右端；多出来的空间由横线吃掉，文字不会离开 #ico 圆盘。 */
+  justify-content:flex-end;
+  gap:calc(var(--u)*10);
+  padding:0 calc(var(--u)*66) 0 calc(var(--u)*37.5);
+}
+/* 横线是唯一可伸缩的部分：文字变长/按钮变窄时先压它，圆盘与文字的距离不变（不挤 logo） */
+:root[data-theme='endfield'] .ef-pill__line { position:relative; top:auto; margin-top:0; flex:1 1 auto; min-width:0; }
+:root[data-theme='endfield'] .ef-pill__label { position:static; transform:none; flex:0 0 auto; white-space:nowrap; }
+/* 占满一行的动作钮（client 的 .block 老属性）：只把定宽解开，解剖不动 */
+:root[data-theme='endfield'] .ef-pill.is-block { width:100%; min-width:0; }
+/* 需要左对齐的场合（.is-block / .is-left）：文字贴左，**横线挪到文字右边**去吃掉余量 */
+:root[data-theme='endfield'] .ef-pill.is-block,
+:root[data-theme='endfield'] .ef-pill.is-left { justify-content:flex-start; }
+:root[data-theme='endfield'] .ef-pill.is-block .ef-pill__label,
+:root[data-theme='endfield'] .ef-pill.is-left .ef-pill__label { order:1; }
+:root[data-theme='endfield'] .ef-pill.is-block .ef-pill__line,
+:root[data-theme='endfield'] .ef-pill.is-left .ef-pill__line { order:2; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   MODAL WIRING · 三块板当真实弹窗用（.k-board 是板，.bd 内容，.ft 按钮行）
+   母本三块板带着画布坐标（left/top/width/height）且孩子全 absolute；client 的弹窗宽度
+   跟着窗口走 ⇒ 只做三件事，都不碰面色/解剖：
+     ① 板的定位从 absolute 换成 flex 列（left/top/height 归零，标头改成 relative：
+        它自己的 left/top/right:0 在流里本就无效，改 relative 才能继续当内部件的包含块）
+     ② 「board 从屏幕左侧一直到最右侧」是他的原话 ⇒ 面板框 / 横幅框 width:100%，
+        居中框按母本 1206u
+     ③ 母本样板里代表内容的 .desc / .msg 直接当内容宿主用（原文就写着「此处放置…内容」）；
+        它的 color:#444 在 #A8A6A6 上只有 4.02:1 ⇒ 按他要的黑改成板面本色 #2b2b2d
+   横幅框右上阶梯纹理 .s0–.s3 与底部基线 .ln a/m/b 母本是钉在 1920 画布边上的 ⇒
+   改钉在板的左右边；右移的量 = 母本坐标到画布右沿的差（1920−(1343+22)=555 等），没造新数。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .k-board { position:relative; left:auto; top:auto; height:auto; max-height:min(84vh,720px); display:flex; flex-direction:column; }
+:root[data-theme='endfield'] .k-board--panel,
+:root[data-theme='endfield'] .k-board--banner { width:100%; }
+:root[data-theme='endfield'] .k-board--dialog { width:calc(var(--ef-board-u,1px)*1206); max-width:92vw; }
+:root[data-theme='endfield'] .k-board>.hd { position:relative; }
+/* 母本 .b3 .hd 的三个孩子（.gh / h1 / small）各写了 left/top，却没有 position ⇒
+   在母本自己那页上标题是被 overflow:hidden 裁掉的（我拍了母本对证：标头只剩水印）。
+   这里按母本写好的坐标把它们钉回原位，值一个没造。 */
+:root[data-theme='endfield'] .k-board .hd > * { position:absolute; }
+:root[data-theme='endfield'] .k-board>.bd,
+:root[data-theme='endfield'] .k-board>.ft { position:relative; }   /* relative 不是 static：板里的点阵 .dots 是 absolute，内容得跟它同一层才算压在上面 */
+:root[data-theme='endfield'] .k-board>.bd { flex:1 1 auto; overflow:auto; padding:14px 18px; }
+:root[data-theme='endfield'] .k-board>.ft { display:flex; justify-content:center; align-items:center; gap:calc(var(--ef-board-u,1px)*36); padding:10px 0 14px; }
+/* 标头右上角的关闭钮：母本 .ef-icon 那颗 42u 白盘，钉法和母本其它右端件一样（right + top:50% + 负 margin） */
+:root[data-theme='endfield'] .k-board>.hd>.ef-icon { position:absolute; right:calc(var(--ef-board-u,1px)*22); top:50%; margin-top:calc(var(--u,1px)*-21); }
+/* 母本第 26 行的复位 button.ef-pill{…color:inherit} 比 .ef-pill{color:var(--d-text)} 多一个元素选择器，
+   在母本那页上继承的是 .stage 的白；client 的板面字色是母本板自己的 #2b2b2d ⇒ 胶囊文字一继承就成了深字压深面。
+   这里按母本 .ef-pill / .ef-pill--yellow 自己写过的面色把 color 钉回来（值就是那两个变量）。 */
+:root[data-theme='endfield'] button.ef-pill { color: var(--d-text); }
+:root[data-theme='endfield'] button.ef-pill--yellow { color: var(--y-text); }
+:root[data-theme='endfield'] .k-board .desc,
+:root[data-theme='endfield'] .k-board .msg { position:relative; top:auto; width:auto; color:#2b2b2d; }
+:root[data-theme='endfield'] .k-board--banner .bd { text-align:center; }
+:root[data-theme='endfield'] .k-board--banner .ft { position:relative; padding:12px 0; }
+:root[data-theme='endfield'] .k-board--banner .s0 { left:auto; right:0; }
+:root[data-theme='endfield'] .k-board--banner .s1 { left:auto; right:calc(var(--ef-board-u,1px)*555); }
+:root[data-theme='endfield'] .k-board--banner .s2 { left:auto; right:calc(var(--ef-board-u,1px)*530); }
+:root[data-theme='endfield'] .k-board--banner .s3 { left:auto; right:calc(var(--ef-board-u,1px)*506); }
+:root[data-theme='endfield'] .k-board--banner .ln { top:50%; }
+:root[data-theme='endfield'] .k-board--banner .ln.b { left:auto; width:calc(var(--ef-board-u,1px)*639); }   /* 母本 1281→1920 = 639u：只给 right 不给宽度的话 absolute 盒会 shrink-to-fit 成 0 宽 */
+:root[data-theme='endfield'] .k-board--banner .ln.m { left:50%; transform:translateX(-50%); }
+/* 居中框标头右上的挂锁两块：母本按 1206u 宽的板从左量（.sh left 1132 / .lk left 1070），
+   我们的板按调用点的宽度走 ⇒ 改成钉右沿，右沿距离 = 1206 −(左偏移+宽)，仍是母本自己算得出的数 */
+:root[data-theme='endfield'] .k-board--dialog .hd .sh { left:auto; right:calc(var(--ef-board-u,1px)*15); }
+:root[data-theme='endfield'] .k-board--dialog .hd .lk { left:auto; right:calc(var(--ef-board-u,1px)*46); }
+/* 居中框的关闭钮让位给挂锁：锁宽 59u + 右沿 15u，再留 8u 缝 ⇒ 49px 处 */
+:root[data-theme='endfield'] .k-board--dialog>.hd>.ef-icon { right:calc(var(--ef-board-u,1px)*82); }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   TITLEBAR WIRING · 项目顶栏换成母本 .ef-chat-head（他 2026-10-14 夜点名的第一件）
+   母本这块板只有「会话名 + 右端装饰簇」两个内容位，client 的顶栏还有一排模式开关，
+   所以只补两条接线，母本的值一个没改：
+     ① 开关排按母本自己的钉法贴到装饰簇左边：装饰簇宽 680u ⇒ 让开 680u + 12u 缝；
+        上下用 top/bottom:0 撑满板高再 flex 居中（母本的 .ef-chat-head__stripe 也是这个钉法）。
+     ② overflow 从 hidden 改 visible：板里那颗「会话菜单」下拉（.title-menu，约 180 高）
+        在 105u 高的板里必被裁；母本这块板本来没有会溢出的内容，所以它写 hidden 是对的。
+        代价：__bar 那两道青竖条本来 top/bottom 各外扩 3u 被板裁平，现在会露出 1.5px。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .titlebar.ef-chat-head { overflow:visible; }
+/* ① 会话名与开关排同一条中线：母本 top:37u 是给 90u 高的可视带用的，
+      client 这块板里名字槽还多挂了「⋯」按钮（26 高），照 top 钉就整体低 9px（实测 36.2 vs 27.3）。
+      改成和开关排同一个钉法（top/bottom:0 + flex 居中），两排自然共线。 */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__name { top:0; bottom:0; display:flex; align-items:center; }
+/* ② 左右各外扩 5px 把缝填掉：中间列与两张悬浮卡片之间实测各留 5px（gutterLeft/gutterRight），
+      他要「不要左右留空隙」⇒ 板自己盖过这道槽，两角仍然圆。
+      只给负 margin 不够：flex 纵向列里 stretch 算出来的宽度不跟负 margin 走（实测板子只整体左移 5、
+      右边反而空出 10）⇒ 宽度自己写死 100%+10px。 */
+:root[data-theme='endfield'] .titlebar.ef-chat-head { margin-left:-5px; width:calc(100% + 10px); }
+:root[data-theme='endfield'] .titlebar .title-actions { left:auto; right:calc(var(--u)*692); top:0; bottom:0; display:flex; align-items:center; }
+/* 会话名占位上限 = 板宽 − 名字左位 75u − 右端让位 692u。
+   这里只给 max-width、不写 overflow:hidden —— .title 里挂着那颗「会话菜单」下拉，
+   一裁就把菜单裁没了（菜单 184 高，板才 55）。标题过长由开关排的降级先兜住。 */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__name { max-width:calc(100% - var(--u)*767); }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   DOCK WIRING · 输入区换成母本「整体 · hk设计」的 .dock（他点名的第二件）
+   母本 .dock 里只有 .info + .comp + .tabq 三件；client 这块外面还要套五段外框
+   （他原话：「聊天输入框外面包围的用之前那个带有红黄蓝三种色条的那个」），
+   框里另外多了 / 命令与 @ 提及两个补全面板。所以只补四类接线，母本一条值没改：
+     ① .composer 当 .dock 用 ⇒ 母本的 max-width:928 / margin auto / padding 0 24px 10px 生效，
+        client 原来那圈 10px 22px 20px 让位（不然两层内缩叠起来输入框凭空窄 46px）。
+     ② .box 只留外框职责 ⇒ 它自己那层卡片皮（底色/边框/圆角/内距/影）摘掉，
+        皮交给 .ef-chat-frame（画五段线）与 .comp（画白卡）。
+     ③ .comp 的 overflow:visible：母本写 hidden 是因为卡里只放 textarea；
+        client 的 / 与 @ 补全面板浮在卡上方（bottom:calc(100% + 8px)），一裁就没了。
+     ④ .info 的 max-width/margin 让位：母本 .info 是 .dock 的孩子、跟着 928 走，
+        client 的 .meta-bar 以前自己按 --msg-w 居中，两层居中叠一起会错位。
+   ═════════════════════════════════════════════════════════════════════════ */
+/* ① 底边那档不是母本的 10px：母本 .tabq 是 .dock 的最后一个孩子（贴白卡下沿、margin-top:-1px 咬住），
+      client 的终端那颗是 Teleport + fixed 钉在视口底边 ⇒ 不在流里，dock 得替它让出 22−1 = 21px，
+      否则外框底边压在标签上（实测重叠 12px）。左右 24px 与母本一致。 */
+:root[data-theme='endfield'] .composer.dock { padding: 0 calc(var(--ef-dock-pad,24px)) 21px; }
+/* ② .box 只留外框职责 ⇒ 卡片皮（底色 / 影 / 内距 / 自己的 max-width）摘掉。
+      这里不能写 border:0 —— .box 在终末地下就是 .ef-chat-frame（五段框，1.5px 那条），
+      一条 border:0 会把外框一起抹掉（接线 (0,4,0) 压过画法的 (0,3,0)）。
+      同理 .box:focus-within 原本会按 --border-strong 重画四边 ⇒ 让它继续用外框自己的色。 */
+:root[data-theme='endfield'] .composer .box { background: none; box-shadow: none; padding: 0; max-width: 928px; }
+:root[data-theme='endfield'] .composer .box:focus-within { border-color: var(--ef-frame-color); }
+:root[data-theme='endfield'] .composer .meta-bar.info { max-width: none; margin: 0 6px 6px; padding: 0; }
+:root[data-theme='endfield'] .composer .comp { overflow: visible; }
+/* 附件行 = 母本 .chips/.chip（26 高胶囊 + 右端 18×18 圆钮）；client 的缩略图仍按自己的类画，只借母本的外壳 */
+:root[data-theme='endfield'] .composer .attach-row.chips { margin-bottom: 0; }
+:root[data-theme='endfield'] .composer .attach.chip { overflow: hidden; }
+/* 用量环：母本那颗是 conic-gradient 的 32u 圆盘（.ring），推右边靠母本自己的 .cbar .sp{flex:1}
+   ⇒ 不需要再补 margin-left:auto；client 原来那对 SVG circle 只在 .ctx-ring 里画（改到那儿了） */
+/* .rnd 那颗 34×34 白盘：client 的 button:disabled 全局有 opacity:.35（tokens.css 第 120 行），
+   母本的 .rnd[disabled] 是「换面色」不是「变透明」⇒ 这里只把 opacity 让位，面色按母本 */
+:root[data-theme='endfield'] .composer .rnd:disabled { opacity: 1; }
+/* 终端那颗 .tabq 里的会话数角标：母本没有这颗角标，原样式是「亮底暗字」的胶囊，
+   放在母本 #3c3c3c 的标签上就是暗底暗字 ⇒ 皮摘掉，数字按标签自己的字色走（不新造颜色） */
+:root[data-theme='endfield'] .tabq .td-pill-n { background: none; color: inherit; min-width: 0; }
+/* 下拉菜单：母本 .mnu 没有高度上限（它那份只有几项），client 的模型表 280+ 条 ⇒ 给滚动档 */
+:root[data-theme='endfield'] .k-dd-menu.mnu { max-height: 320px; overflow: auto; scrollbar-width: thin; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   DROPDOWN WIRING · 下拉与胶囊「连体」（他点名的第三件）
+   母本 ai/DROPDOWN_MENU/下拉菜单.html 第 22 行原话：「菜单底边对齐触发胶囊的中线，
+   选项增多时向上生长」⇒ 面板 absolute + left/right:0（与胶囊同宽）+ bottom:21.5u（胶囊 43u 的一半），
+   胶囊自己 z-index:2 压在口上（第 26 行）——所以「挡住按钮」在母本里根本不成立：露出来的永远是按钮。
+   这一件要落地只有两处让位，都是尺寸档：
+     ① 缩放：母本那颗胶囊 43u，我们这排按上一件点名的 .dock 母本是 34px 高 ⇒ --u 收到 .79px
+        （43×.79=34.0；于是 bottom:21.5u=17px 正好还是这颗胶囊的中线，母本的比例一个数没改）。
+     ② 定宽：母本 .ef-dd 是 337u 定宽的一整颗 select ⇒ 我们这排是内容撑宽的胶囊，
+        只把定宽/定高让位（和 .ef-pill 的 306u 同一处理），position:relative 留着当面板的宿主。
+   另外母本只画了「向上展开」这一档；client 的下拉有的贴在屏幕顶上（右栏工具条、设置页），
+   向上开会开出视口外 ⇒ 给向下那一档一个镜像定位，用的还是母本自己那个 21.5u，只是换了边。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .k-dropdown.ef-dd { --u: .79px; width: auto; height: auto; display: inline-block; }
+/* ③ 连体的字面意思 = 母本 .ef-dd__menu 的 left:0;right:0（面板就是胶囊那么宽）。
+      上一件点名的「整体 · hk设计」母本给独立浮层写过 min-width:170 —— 那颗面板是脱离按钮自己浮的，
+      这一件不浮在按钮外头，所以那条下限在这一件里让位（只撤 min-width，皮/行/滚动全留着）。
+      文案比胶囊长怎么办：母本自己有答案 —— .ef-dd__label 就是 nowrap + overflow:hidden + 省略号，挂上它。 */
+:root[data-theme='endfield'] .k-dd-menu.pop.ef-dd__menu { min-width: 0; }
+:root[data-theme='endfield'] .k-dropdown.ef-dd.place-bottom .k-dd-menu.ef-dd__menu { bottom:auto; top:calc(var(--u)*21.5); }
+:root[data-theme='endfield'] .k-dropdown.ef-dd.place-bottom .k-dd-trigger.sel .car { transform: rotate(180deg); }
+/* 面板留在组件里（母本就是胶囊的兄弟）：Teleport 到 body 之后 fixed 面板永远压在按钮上，
+   母本那套 z-index:1/2 的咬合就没了 —— 所以终末地下这一件不搬运到 body，靠 .comp 已登记的 overflow:visible 出头。 */
+
+/* ═════════════════════════════════════════════════════════════════════════
+   OVERRIDE · 他 2026-10-14 夜给的三档背景与两档黄
+   他这次把这一档统一钉成 #A8A6A6 ⇒ 只改面色，板上的几何与解剖一个数没动。
+   ═════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] {
+  --ef-rail-bg: #484848;      /* 左栏 / 右栏 */
+  --ef-canvas: #a8a6a6;       /* 中间消息区 + 弹窗内容区（不含标头） */
+  --ef-head: #222222;         /* 弹窗标头：母本 .b3 .hd 字面值，不改 */
+  --ef-yellow: #ffff0e;       /* 浅黄 / 渐变黄 */
+  --ef-gold: #eecb0e;         /* 金黄 / 深黄 */
+}
+:root[data-theme='endfield'] .b3,
+:root[data-theme='endfield'] .d1 { background: var(--ef-canvas); }
+:root[data-theme='endfield'] .u4 { background: var(--ef-canvas); }
+:root[data-theme='endfield'] .b3 .hd { background: var(--ef-head); }
+/* 母本 --y-fill:#ffef01 / --y-rim:#fff000 与他给的浅黄 #FFFF0E 同档 ⇒ 黄档统一按他这次的数 */
+:root[data-theme='endfield'] { --y-rim: #ffff0e; --y-fill: #ffff0e; --ef-accent: #ffff0e; --ef-accent-deep: #eecb0e; }
+/* 「整体 · hk设计」那份自己写的 --y:#ffef00（输入卡 focus 那一圈黄光用它）⇒ 一并收到他的浅黄档 */
+:root[data-theme='endfield'] { --y: var(--ef-yellow); }

@@ -142,10 +142,11 @@ function remove(id) {
   opacity: 0;
   transform: translateY(6px);
 }
-@media (prefers-reduced-motion: reduce) {
-  .toast-enter-active,
-  .toast-leave-active {
+
+  html[data-motion='off'] .toast-enter-active,
+
+  html[data-motion='off'] .toast-leave-active{
     transition: none;
   }
-}
+
 </style>

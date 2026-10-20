@@ -488,6 +488,23 @@ function buildChatRequest(provider, payload) {
   // 三种协议都在这一处裁剪图片：历史上攒下来的截图是请求体膨胀的主因，
   // 放在这里比放在各调用点靠得住（谁以后加新协议也不会漏掉）。
   const p = payload && Array.isArray(payload.messages) ? { ...payload, messages: onlyLatestImage(payload.messages) } : payload;
+  /* ★ 发请求前的最后一道：带 tool_calls 的 assistant 必须带 reasoning_content 字符串。
+   *
+   * 为什么必须放在这里，而不是散在各调用点：
+   *   这是全仓唯一「每一次上游请求都必然经过」的出口 —— 主循环、侧栏、子智能体、托管、
+   *   压缩摘要、测速/自检全都走它。放在调用点就意味着「每加一条新路径、每处中途重建消息」
+   *   都是一次漏字段的机会。事实也正是如此：主循环改了、历史重建改了，却仍会零星报 400，
+   *   因为漏的那个点不是你当时想到的那一个。
+   *   和「什么进上下文只有一份定义」是同一个道理：约束要落在唯一出口上。
+   *
+   * Anthropic 走自己的 message 组装（tool_use/tool_result），不吃这个字段，跳过。
+   * 就地补齐是幂等的：已经合法字符串的消息不会被改第二次，所以不会每轮重复刷日志。 */
+  if (p && Array.isArray(p.messages) && style !== 'anthropic') {
+    const fixed = ensureReasoningBack(p.messages);
+    if (fixed > 0) {
+      console.error(`[protocols] 发请求前补齐 reasoning_content ${fixed} 处（带 tool_calls 的 assistant 缺这个字段会被思考模式上游整包 400）`);
+    }
+  }
   if (style === 'anthropic') return anthropicRequest(provider, p);
   if (style === 'custom') return customRequest(provider, p);
   return openaiRequest(provider, p);
@@ -560,11 +577,66 @@ function anthropicVariants(norm) {
   }];
 }
 
+/**
+ * 拼一条「带 tool_calls 的 assistant 消息」。**回喂工具结果时必须走这里，不要手搓对象。**
+ *
+ * 为什么单独抽一个函数：OpenAI 系有一批上游（DeepSeek 思考模式最典型）对这类消息有硬校验 ——
+ * 只要 assistant 带了 tool_calls，就**必须**同时回传一个 `reasoning_content` 字符串；
+ * 缺失或 null 一律 400：
+ *   The `reasoning_content` in the thinking mode must be passed back to the API.
+ * 空串 `''` 是合法的（2026-10-16 实测），所以「这一轮没有思考」也必须显式给空串，不能省字段。
+ *
+ * 三个实测结论，决定了这里的实现：
+ *   1) 这条校验与「有没有发思考参数」无关 —— deepseek-flash 默认就在思考模式，
+ *      连 reasoning_effort 都不发也照样要求（所以不能靠「思考关闭」绕过）。
+ *   2) **同一包里每一条**带 tool_calls 的 assistant 都要有，漏一条整包被拒（多轮工具尤其容易漏）。
+ *   3) 纯文本 assistant（不带 tool_calls）**不需要**，所以跨轮历史不必带思考 ——
+ *      否则每条消息都拖一份几千字的思考，上下文会被白吃掉一大半。
+ */
+function assistantToolCallMessage(content, toolCalls, reasoning) {
+  return {
+    role: 'assistant',
+    content: content || '',
+    reasoning_content: String(reasoning == null ? '' : reasoning),
+    tool_calls: toolCalls
+  };
+}
+
+/** 上游因「思考模式下必须回传 reasoning_content」而拒包（用来触发一次补齐修复） */
+function isReasoningBackError(status, body) {
+  const s = Number(status);
+  if (s !== 400 && s !== 422) return false;
+  /* 措辞各家不一样：DeepSeek 官方说 "must be passed back"、
+     有的中转网关说 "reasoning_content is required/missing/expected"、
+     还有的中文化成「需要传回思考内容」。以前只认 passed back|must be passed|thinking mode
+     三个词 —— 换个网关就整条自愈路失效。
+     判据收成「4xx 客户端错误 + 正文明确点名 reasoning_content」，这是不会误伤别的问题的最小集合。 */
+  return /reasoning[_\s-]?content/i.test(String(body || ''));
+}
+
+/**
+ * 给 assistant 消息补 reasoning_content（缺的补空串）；返回补了几条。
+ * 空串是合法的（实测），所以「这一轮没有思考」也必须显式给空串、不能省字段。
+ * opts.all = true 时连「不带 tool_calls 的纯文本 assistant」也补 —— 少数网关对
+ * 所有 assistant 都要求这个字段（同一类 400 的第二种形态），留给自愈的第二次尝试用。
+ */
+function ensureReasoningBack(list, opts) {
+  const all = !!(opts && opts.all);
+  let fixed = 0;
+  for (const m of list || []) {
+    if (!m || m.role !== 'assistant') continue;
+    if (!Array.isArray(m.tool_calls) && !all) continue;
+    if (typeof m.reasoning_content !== 'string') { m.reasoning_content = ''; fixed++; }
+  }
+  return fixed;
+}
+
 module.exports = {
   STYLES, DEFAULT_MAX_TOKENS, MAX_IMAGES_PER_REQUEST,
   styleOf, customConfig, maxTokensOf,
   buildChatRequest, createChunkNormalizer, normalizeReply,
   listRequest, parseModelList, anthropicVariants,
+  assistantToolCallMessage, isReasoningBackError, ensureReasoningBack,
   // 暴露给测试
   _internal: { toAnthropicMessages, anthropicThinking, anthropicRequest, anthropicReplyToOpenai, createAnthropicNormalizer, getPath, renderTemplate, customRequest, customVars, createCustomNormalizer, onlyLatestImage, imageUsable }
 };

@@ -129,12 +129,74 @@ async function collectRemote(hostRow, projectRoot, cwd) {
   return out;
 }
 
-/** 把收集到的文件拼成注入系统提示词的那段文本；一份都没有就回空串 */
-function promptBlock(files) {
+/* ── 提示词占位符 ──────────────────────────────────────────────────────────
+   主人写在 AGENTS.md 里的这几个记号，注入系统提示词时会被换成当下的真值：
+     {cwd}   完整绝对工作目录（到了某个会话/项目自适应）
+     {time}  hh:mm:ss
+     {date}  yyyy/mm/dd
+     {os}    当前系统（平台 + 架构 + 内核版本）
+   **只在注入那一刻替换**，磁盘上的文件一个字节都不动 —— 编辑器里看到的是原文（带占位符），
+   模型看到的是展开后的值。这也是为什么不能把替换写进 read()/write()：那样用户每开一次编辑器，
+   文件就被"定格"成当次的路径与时间，换台机器 / 换个会话就全是过期的假值。
+
+   只做这四个（主人点名的），**不是**通用模板引擎：宁可少而准，也不引入一个会跟用户文本打架的语法。
+   想写一个字面量的 {cwd}（要教模型这个记号本身），写成 {{cwd}} 即可。 */
+const VAR_KEYS = ['cwd', 'time', 'date', 'os'];
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 平台人话名（{os} 用）。认不出来就回 process.platform 本身，不猜。 */
+function osLabel() {
+  const p = process.platform;
+  const arch = process.arch;
+  const base = p === 'win32' ? 'Windows' : p === 'darwin' ? 'macOS' : p === 'linux' ? 'Linux' : p;
+  // release 在 Windows 上是内核版本（10.0.26100 这种），在 Linux 上是内核版本号：
+  // 都留着 —— 模型判断"能不能用某个命令/特性"时，这串比一句笼统的"Windows"有用得多。
+  let rel = '';
+  try { rel = String(os.release() || '').trim(); } catch (e) { rel = ''; }
+  return `${base}（${p}${rel ? ' · ' + rel : ''} · ${arch}）`;
+}
+
+/** 这一次注入的变量快照（时间取调用当刻，所以每一轮都是新的） */
+function promptVars(cwd, now = new Date()) {
+  return {
+    cwd: String(cwd || ''),
+    time: `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
+    date: `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())}`,
+    os: osLabel(),
+  };
+}
+
+/**
+ * 展开占位符。规则：
+ *   1) 先保护转义的 {{key}}（换成一个不可能出现在正文里的哨兵），最后再还原成字面 {key}
+ *   2) 只替换白名单里的四个键 —— 别的 {xxx} 原样留着（用户写 JSON 示例、写模板都别掺和）
+ *   3) {cwd} 拿不到值（调用方没给）时**保留占位符原文**，不换成空串：
+ *      换成空串会让「工作目录是 」出现在提示词里，看着像正经信息，其实是坏的
+ */
+function renderVars(text, vars) {
+  const s = String(text == null ? '' : text);
+  if (!s || s.indexOf('{') === -1) return s;
+  const v = vars || {};
+  const sentinel = '\u0000KHESC';
+  let out = s.replace(/\{\{(cwd|time|date|os)\}\}/g, (_m, k) => `${sentinel}${k}\u0000`);
+  out = out.replace(/\{(cwd|time|date|os)\}/g, (m, k) => {
+    const val = v[k];
+    return (val === undefined || val === null || val === '') ? m : String(val);
+  });
+  return out.replace(new RegExp(`${sentinel}(cwd|time|date|os)\u0000`, 'g'), (_m, k) => `{${k}}`);
+}
+
+/**
+ * 把收集到的文件拼成注入系统提示词的那段文本；一份都没有就回空串。
+ * vars 见上面 promptVars：**必须由调用方带上当前会话的 cwd**，否则 {cwd} 会原样留在提示词里。
+ */
+function promptBlock(files, vars) {
   const usable = (files || []).filter((f) => f && f.content);
   if (!usable.length) return '';
+  const v = vars || {};
   const lines = ['[长期记忆：以下内容来自 AGENTS.md 文件（全局配置 + 项目/目录配置，就近覆盖），是项目背景、编码规范与业务约定，必须遵守]'];
-  for (const f of usable) lines.push(`<<AGENTS.md：${f.scope}（${f.path}）>>\n${f.content}`);
+  for (const f of usable) lines.push(`<<AGENTS.md：${f.scope}（${f.path}）>>\n${renderVars(f.content, v)}`);
   return lines.join('\n');
 }
 
@@ -173,4 +235,5 @@ module.exports = {
   AGENTS_MD_MAX_BYTES, NAMES, globalDir, defaultCwd,
   loadAgentsMd, loadAgentsMdWithFallback, resolveAgentsFile, estimateTokens,
   collect, collectRemote, promptBlock, read, write,
+  VAR_KEYS, promptVars, renderVars, osLabel,
 };

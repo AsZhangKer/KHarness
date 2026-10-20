@@ -342,7 +342,10 @@ async function drive(id) {
   const tools = buildToolList(modelRow);
   // 子智能体是在项目里替主 Agent 查东西的人，项目/全局的 AGENTS.md 规矩它也得守。
   // 项目根按父会话查（cwd 可能只是项目里的一个子目录，只按 cwd 就近取会漏掉项目那份）。
-  const agentsBlock = agentsMd.promptBlock(agentsMd.collect(projectRootOfChat(rec.parent_chat_id), rec.cwd));
+  const agentsBlock = agentsMd.promptBlock(
+    agentsMd.collect(projectRootOfChat(rec.parent_chat_id), rec.cwd),
+    agentsMd.promptVars(rec.cwd),
+  );
   const messages = [{ role: 'system', content: SYS_PROMPT + (agentsBlock ? `\n\n${agentsBlock}` : '') }, { role: 'user', content: rec.task }];
   const steps = [];
   let usage = null;
@@ -373,6 +376,9 @@ async function drive(id) {
       messages.push({
         role: 'assistant',
         content: r.content || '',
+        // 带 tool_calls 的 assistant 必须回传 reasoning_content，否则思考模式上游整包 400
+        // （见 utils/protocols.js 的 assistantToolCallMessage）。子智能体没有可回传的思考，给空串。
+        reasoning_content: String(r.reasoning || ''),
         tool_calls: r.toolCalls.map(c => ({
           id: c.id, type: 'function',
           function: { name: c.name, arguments: JSON.stringify(c.args || {}) },

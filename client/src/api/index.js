@@ -120,6 +120,8 @@ export const aiApi = {
   answerQuestion: (b, silent) => http.post('/ai/chat/answer', b, { timeout: 30000, silent: !!silent }).then(pick),
   toolTimeout: (chat_id) => http.post('/ai/chat/tool-timeout', { chat_id }, { timeout: 30000 }).then(pick),
   // 手动压缩不在这里：它改成 SSE 了（chatStream.openPressStream），普通请求看不到进度
+  // 取消压缩：只中止摘要那一发上游请求（不打断整回合的流），历史原样保留
+  cancelPress: (b) => http.post('/ai/chat/press/cancel', b, { timeout: 15000 }).then(pick),
   setContext: (b) => http.post('/ai/chat/context', b, { timeout: 120000 }).then(pick),
   systemNotify: (b) => http.post('/ai/notify', b, { timeout: 25000 }).then(pick),
   retractChat: (b) => http.post('/ai/chat/retract', b, { timeout: 60000 }).then(pick),
@@ -236,6 +238,7 @@ export const aiApi = {
   gitCheckout: (b) => http.post('/ai/git/checkout', b, { timeout: 15000 }).then(pick),
   gitCommit: (b) => http.post('/ai/git/commit', b, { timeout: 30000 }).then(pick),
   gitPush: (b) => http.post('/ai/git/push', b, { timeout: 60000 }).then(pick),
+  gitPull: (b) => http.post('/ai/git/pull', b || {}, { timeout: 60000 }).then(pick),
   gitChanges: (b) => http.post('/ai/git/changes', b || {}, { timeout: 25000 }).then(pick),
   revealPath: (path) => http.post('/ai/reveal', { path }, { timeout: 10000 }).then(pick),
   // 后台任务（右栏「后台」页）：带 chat_id 才只列本会话自己起的（别的会话起的任务看不见也杀不掉）
@@ -281,6 +284,7 @@ export const settingsApi = {
   getAll: () => http.get('/settings').then(pick),
   update: (b) => http.put('/settings', b).then(pick),
   appInfo: () => http.get('/settings/app-info').then(pick),
+  lanbridge: () => http.get('/settings/lanbridge').then(pick),
 };
 
 export default { aiApi, settingsApi };

@@ -180,7 +180,10 @@ function appendChatMessage(chatId, role, content, speaker, extra = {}) {
 function loadHistory(chatId, limitChars) {
   let rows = [];
   try {
-    rows = db.prepare('SELECT role, content, speaker FROM ai_chat_messages WHERE chat_id = ? AND (archived IS NULL OR archived = 0) ORDER BY id ASC').all(chatId);
+    // 口径必须与主路一致：主路（assembleHistoryBase / 用量）用的是 COALESCE(archived,0)=0，
+    // 从前这里写 (archived IS NULL OR archived = 0) —— 同一会话在「托管」和「主对话」两条路上
+    // 会看到不一样的历史（NULL 行一边算未归档、一边算已归档）。
+    rows = db.prepare('SELECT role, content, speaker FROM ai_chat_messages WHERE chat_id = ? AND COALESCE(archived, 0) = 0 ORDER BY id ASC').all(chatId);
   } catch (e) { return []; }
   const picked = [];
   let acc = 0;
@@ -471,7 +474,7 @@ async function runTurn({ chatId, content, supervisorModel, workerModel, relay = 
         cwd,
         resolveModelRow(workerModel, scope.row.model_row_id).row?.model_id || '（跟随会话）',
         plan0,
-        agentsMd.promptBlock(agentsMd.collect(scope.projectRoot, cwd))
+        agentsMd.promptBlock(agentsMd.collect(scope.projectRoot, cwd), agentsMd.promptVars(cwd))
       ),
     },
     ...loadHistory(Number(chatId), LIMITS.historyChars),
@@ -557,6 +560,9 @@ async function runTurn({ chatId, content, supervisorModel, workerModel, relay = 
 
     messages.push({
       role: 'assistant', content: r.content || '',
+      // 带 tool_calls 的 assistant 必须回传 reasoning_content，否则思考模式上游整包 400
+      // （见 utils/protocols.js 的 assistantToolCallMessage）。托管这条链路不保留思考，给空串。
+      reasoning_content: String(r.reasoning || ''),
       tool_calls: r.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args || {}) } })),
     });
 

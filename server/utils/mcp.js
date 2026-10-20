@@ -421,23 +421,129 @@ function listForUi() {
   }));
 }
 
+/* ---------------- 输入解析：宽松输入、明确报错 ----------------
+   这里是**全仓唯一一份** MCP 表单解析 —— 前端只把 textarea 原文提交过来，不再自己 parse。
+   以前有三套规则并存、而且一律静默改写，「格式不规范」就是这么来的：
+     · 前端 args 按行拆（SettingsPage.parseArgsText）
+     · 后端字符串形态按空白拆（旧 split(/\s+/)）—— 会把 `C:\Program Files\x` 这类参数拆碎
+     · 官方/VS Code 的 mcp.json 是「JSON 数组 或 空格分隔」（文档原话）
+   现在三种写法都当合法，解析不了就报错说清原因，绝不悄悄变成 [] / {}。 */
+
+/** 单行按空格切参数；"a b" / 'a b' 把含空格的参数括起来（Windows 路径常用） */
+function splitArgsLine(line) {
+  const out = [];
+  let cur = '';
+  let quote = '';
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (/\s/.test(ch)) { if (cur) { out.push(cur); cur = ''; } continue; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * args 输入 → 字符串数组。三种写法都收：
+ *   1) JSON 数组：["-y", "@modelcontextprotocol/server-filesystem", "C:\\dir"]
+ *   2) 一行一个参数（**推荐**：参数里的空格不会被拆坏）
+ *   3) 单行空格分隔：-y @modelcontextprotocol/server-filesystem "C:\Program Files\x"
+ */
+function parseArgsInput(input) {
+  if (Array.isArray(input)) return input.map((x) => String(x));
+  const text = String(input == null ? '' : input).trim();
+  if (!text) return [];
+  if (text.startsWith('[')) {
+    let v;
+    try { v = JSON.parse(text); } catch (e) {
+      /* 以 [ 开头但不是合法 JSON，分两种情况：
+         · `["a", ]` 这种明显是在写数组却没写对 → 报错（附原文位置），别把坏配置存进去
+         · `[abc]*.txt` 这种单行 glob 参数 → 按普通参数走，不报错
+         判据：数组里第一项必然以引号/花括号/方括号开头，glob 不会。 */
+      const looksLikeArray = /^\[\s*["'[{]/.test(text);
+      if (!looksLikeArray && !/\r?\n/.test(text)) return splitArgsLine(text);
+      throw new Error(`args 看着像 JSON 数组，但写法有误：${e.message}`);
+    }
+    if (!Array.isArray(v)) throw new Error('args 以 [ 开头，却不是 JSON 数组（想写单个含 [ 的参数请改用单行原样写）');
+    return v.map((x) => String(x));
+  }
+  if (/\r?\n/.test(text)) return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return splitArgsLine(text);
+}
+
+/**
+ * env / headers 输入 → 对象。JSON 对象，或每行一条 `KEY=VALUE` 都收
+ * （很多人按 .env 的习惯写，以前这样写会被静默吃成 {}）。值统一转字符串。
+ */
+function parseObjInput(input, label) {
+  if (Array.isArray(input)) throw new Error(`${label} 要的是「键=值」，不是数组`);
+  if (input && typeof input === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) out[String(k).trim()] = v == null ? '' : String(v);
+    return out;
+  }
+  const text = String(input == null ? '' : input).trim();
+  if (!text) return {};
+  if (text.startsWith('{')) {
+    let v;
+    try { v = JSON.parse(text); } catch (e) { throw new Error(`${label} 看着像 JSON 对象，但写法有误：${e.message}`); }
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${label} 必须是 JSON 对象，例如 {"API_KEY":"..."}，或每行一条 KEY=VALUE`);
+    return parseObjInput(v, label);
+  }
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    const i = s.indexOf('=');
+    if (i === -1) throw new Error(`${label} 里这一行既不是 KEY=VALUE，也不是 JSON 对象：${s}`);
+    out[s.slice(0, i).trim()] = s.slice(i + 1).trim().replace(/^"(.*)"$/, '$1');
+  }
+  return out;
+}
+
+/**
+ * transport 归一：认官方 mcp.json 里的 `type` 字段，也认几个常见写法。
+ * 非法值**报错**（以前静默回落成 stdio，于是 type:"http" 粘过来会变成
+ * 「stdio 方式必须填 command」—— 完全看不出真正的原因）。
+ */
+function normalizeTransport(body) {
+  const raw = String(body.transport || body.type || '').trim().toLowerCase();
+  if (!raw) return 'stdio';
+  if (raw === 'stdio') return 'stdio';
+  if (['http', 'streamable-http', 'streamablehttp', 'streamable_http'].includes(raw)) return 'http';
+  return { error: `不支持的 transport：${raw}（可选 stdio / http；老的 HTTP+SSE 双端点请先用 mcp-proxy 转成 streamable http）` };
+}
+
 function normalizeBody(body = {}) {
   const name = String(body.name || '').trim().slice(0, 40);
   if (!name) return { error: '名称不能为空' };
-  const transport = ['stdio', 'http'].includes(String(body.transport)) ? String(body.transport) : 'stdio';
-  let args = body.args;
-  if (typeof args === 'string') { try { args = JSON.parse(args); } catch (e) { args = args.split(/\s+/).filter(Boolean); } }
-  if (!Array.isArray(args)) args = [];
-  const clean = (o) => (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  const transport = normalizeTransport(body);
+  if (transport && transport.error) return transport;
+  let args; let env; let headers;
+  try {
+    args = parseArgsInput(body.args);
+    env = parseObjInput(body.env, 'env');
+    headers = parseObjInput(body.headers, 'headers');
+  } catch (e) {
+    return { error: String((e && e.message) || e) };
+  }
+  // 以前是 slice(0,24) 静默砍掉多余项 —— 少几个参数会表现成「工具起不来但看不出为什么」
+  if (args.length > 24) return { error: `args 最多 24 项，现在填了 ${args.length} 项` };
   return {
     name,
     transport,
     command: String(body.command || '').trim().slice(0, 300),
-    args: JSON.stringify(args.map(String).slice(0, 24)),
+    args: JSON.stringify(args),
     url: String(body.url || '').trim().slice(0, 400),
-    env: JSON.stringify(clean(body.env)),
+    env: JSON.stringify(env),
     cwd: String(body.cwd || '').trim().slice(0, 300),
-    headers: JSON.stringify(clean(body.headers)),
+    headers: JSON.stringify(headers),
     enabled: body.enabled === undefined ? 0 : (body.enabled ? 1 : 0),
   };
 }
@@ -488,4 +594,6 @@ module.exports = {
   ensureTable, rows, rowOf, listForUi, create, update, remove,
   connect, disconnect, connectAll, shutdownAll, callTool, namesOfServer,
   live, slug, toolNameFor, cleanSchema, flattenResult,
+  // 输入解析（前端不再自己 parse，只把原文提交过来；这几个导出给单测用）
+  parseArgsInput, parseObjInput, normalizeTransport, normalizeBody,
 };

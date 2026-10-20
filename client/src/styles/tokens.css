@@ -255,9 +255,9 @@ select:focus-visible {
   /* 渐变呼吸：亮 → 淡 → 亮 连续过渡（旧的是 step-end 硬切，看着像开关不像光标） */
   animation: caret-blink 1.1s ease-in-out infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-  .caret-dot { animation: none; }
-}
+
+  html[data-motion='off'] .caret-dot{ animation: none; }
+
 
 /* 按钮体系：尺寸克制、圆角中等、黑白为主 */
 .k-btn {
@@ -462,10 +462,10 @@ textarea.k-input,
   0% { opacity: 1; transform: none; }
   100% { opacity: 0; transform: translateY(42px) scale(0.97); }
 }
-@media (prefers-reduced-motion: reduce) {
-  /* 系统关了动画的人：只留淡入淡出，不做抖动与下落 */
-  .ctx-menu { animation: none; }
-}
+/* 系统关了动画的人：只留淡入淡出，不做抖动与下落 */
+  
+  html[data-motion='off'] .ctx-menu{ animation: none; }
+
 
 /* 表格对齐工具类（表头与内容同向，避免错位） */
 .c-center { text-align: center; }
@@ -643,11 +643,13 @@ textarea.k-input,
   background: var(--on-accent);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+
+  html[data-motion='off'] *,
+
+  html[data-motion='off'] *::before,
+
+  html[data-motion='off'] *::after{
     transition: none !important;
     animation: none !important;
   }
-}
+

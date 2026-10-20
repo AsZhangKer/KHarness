@@ -1,5 +1,5 @@
 <template>
-  <KModal :open="open" title="选择模型" width="640px" @close="$emit('close')">
+  <KModal :open="open" title="选择模型" board="panel" tall code="MODEL.BOX" ghost="MODEL" width="640px" ef-width="1280" @close="$emit('close')">
     <div ref="listEl" class="picker-body">
       <div class="picker-bar">
         <input v-model="q" class="nu-input search" placeholder="搜索模型 / 提供商…" />

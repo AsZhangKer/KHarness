@@ -93,14 +93,15 @@ describe('流式光标：贴在最后一个字后面', () => {
     expect(dotInfo(host)[0].before).toBe('正在说的这句');
   });
 
-  it('尾部已经落成工具卡：光标留在上面那段正文的末尾（Agent 调工具的一整段时间都要看得见）', async () => {
+  it('尾部已经落成工具卡：光标退场（第八十三轮口径；「在跑」由 .phase 那行表示）', async () => {
     const host = await render([
       { kind: 'text', text: '先看一眼。' },
       { kind: 'step', type: 'result', name: 'read_file', output: '内容很长' },
     ]);
-    const d = dotInfo(host);
-    expect(d).toHaveLength(1);
-    expect(d[0].before).toBe('先看一眼。');
+    /* 第八十三轮他重新拍过这一条：尾部是工具卡/note/压缩卡时**不放**光标。
+       第七十七轮那套（跟到上面那段正文末尾）正是他报的「光标会卡在那」——
+       一句话说完、接着去调工具，圆点还粘在已经说完的那句话末尾不动。 */
+    expect(host.querySelectorAll('.caret-dot')).toHaveLength(0);
     expect(host.querySelector('.phase')).toBeTruthy();
   });
 
@@ -118,11 +119,11 @@ describe('流式光标：贴在最后一个字后面', () => {
     expect(host.querySelectorAll('.caret-dot')).toHaveLength(0);
   });
 
-  it('重进会话那条路（没有 timeline，只有 steps + content）也照样贴在最后一个字后面', async () => {
+  it('重进会话那条路（没有 timeline）：不显示光标（重载后不该有东西在闪）', async () => {
+    /* 重建路径（content/reasoning/steps）天然不该有光标：
+       它是「已经落库的历史」，不是「正在写的字」。第八十三轮的口径明确写了这一条。 */
     const host = await render(null, [{ type: 'text', text: '落库的正文尾巴' }]);
-    const d = dotInfo(host);
-    expect(d).toHaveLength(1);
-    expect(d[0].before).toBe('落库的正文尾巴');
+    expect(host.querySelectorAll('.caret-dot')).toHaveLength(0);
   });
 });
 

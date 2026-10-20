@@ -93,10 +93,13 @@
         </label>
         <label class="field">
           <span>音量 {{ Math.round(prefs.volume * 100) }}%</span>
-          <span class="slider-line">
+          <span class="slider-line ui-slider">
+            <!-- 类名照搬母本 SWITCH_TOGGLE/滑动调节器.html；--ui-slider-percent 供轨道画「已走过」那段 -->
             <input
+              class="ui-slider__input"
               type="range" min="0" max="100" step="5"
               :value="Math.round(prefs.volume * 100)"
+              :style="{ '--ui-slider-percent': Math.round(prefs.volume * 100) + '%' }"
               :disabled="!prefs.sound"
               @change="savePref({ volume: Number($event.target.value) / 100 })"
             />
@@ -426,16 +429,21 @@
             <input class="k-input mono" v-model="mcpForm.command" placeholder="node / npx / python" />
           </label>
           <label class="cfg-item">
-            <span>args（JSON 数组，或一行一个）</span>
-            <textarea class="k-input mono" rows="3" v-model="mcpForm.argsText" placeholder='["index.js"]'></textarea>
+            <span>args（一行一个参数，可空）</span>
+            <textarea class="k-input mono" rows="3" v-model="mcpForm.argsText" placeholder='-y
+@modelcontextprotocol/server-filesystem
+C:\Users\me\Documents'></textarea>
+            <small class="hint">一行一个最稳（参数里的空格不会被拆坏）。也认 <code>["a","b"]</code> 这种 JSON 数组，以及单行空格分隔（含空格的参数用引号括起来）。</small>
           </label>
           <label class="cfg-item">
-            <span>cwd（可空）</span>
-            <input class="k-input mono" v-model="mcpForm.cwd" />
+            <span>cwd（可空，仅 stdio）</span>
+            <input class="k-input mono" v-model="mcpForm.cwd" placeholder="留空 = 继承 KHarness 的工作目录" />
           </label>
           <label class="cfg-item">
-            <span>env（JSON 对象，可空）</span>
-            <textarea class="k-input mono" rows="2" v-model="mcpForm.envText" placeholder='{"API_KEY":"..."}'></textarea>
+            <span>env（每行一条 KEY=VALUE，可空）</span>
+            <textarea class="k-input mono" rows="2" v-model="mcpForm.envText" placeholder="API_KEY=sk-...
+BASE_URL=http://127.0.0.1:8000"></textarea>
+            <small class="hint">也认 <code>{"API_KEY":"sk-..."}</code> 这种 JSON 对象。值一律按字符串传给孩子进程。</small>
           </label>
         </div>
         <div v-else class="cfg">
@@ -444,8 +452,9 @@
             <input class="k-input mono" v-model="mcpForm.url" placeholder="http://127.0.0.1:8000/mcp" />
           </label>
           <label class="cfg-item">
-            <span>headers（JSON 对象，鉴权头写这里）</span>
-            <textarea class="k-input mono" rows="2" v-model="mcpForm.headersText" placeholder='{"authorization":"Bearer ..."}'></textarea>
+            <span>headers（每行一条 KEY=VALUE，可空）</span>
+            <textarea class="k-input mono" rows="2" v-model="mcpForm.headersText" placeholder="authorization=Bearer xxx"></textarea>
+            <small class="hint">也认 JSON 对象。<code>mcp-session-id</code> 不用手填，客户端会自动续用。</small>
           </label>
         </div>
         <div class="row-actions">
@@ -465,7 +474,7 @@
           <span>主题</span>
           <div class="theme-grid">
             <button
-              v-for="t in THEMES"
+              v-for="t in visibleThemes"
               :key="t.id"
               type="button"
               class="theme-card"
@@ -492,10 +501,34 @@
           <KDropdown :items="widthItems" v-model="contentWidth" block width="100%" @change="applyWidth" />
         </label>
         <label class="field line">
+          <input class="k-check" type="checkbox" :checked="motionState.on" @change="onMotion($event.target.checked)" />
+          <span>{{ txt('settings.motion.label') }}</span>
+          <span class="muted">{{ txt('settings.motion.note') }}</span>
+        </label>
+        <label class="field line">
           <input class="k-check" type="checkbox" :checked="whaleOn" @change="setWhaleOn($event.target.checked)" />
           <span>{{ txt('settings.whale.label') }}</span>
           <span class="muted">{{ txt('settings.whale.note') }}</span>
         </label>
+        <!-- 开屏加载动画。这一行比别的开关多两个讲究：
+             ① 值虽然存在服务端 settings，但**首帧播不播是服务端发 index.html 时注入决定的**
+                （见 server/index.js 的 indexHtml()），改完对本次启动没有影响，所以文案老实写「下一次启动生效」，
+                右边那颗「预览」就是补这一脚的 —— 它重载整窗，走的就是下一次启动那条路。
+             ② 关着的时候预览禁用：重载一次却什么都看不到，比不给按钮更糟。 -->
+        <div class="field line stall-line">
+          <label class="field line">
+            <input class="k-check" type="checkbox" :checked="prefs.bootPlate" @change="setBootPlate($event.target.checked)" />
+            <span>{{ txt('settings.boot.label') }}</span>
+            <span class="muted">{{ txt('settings.boot.note') }}</span>
+          </label>
+          <button
+            type="button"
+            class="btn sm"
+            :disabled="!prefs.bootPlate"
+            :title="txt('settings.boot.previewTitle')"
+            @click="previewBootPlate"
+          >{{ txt('settings.boot.preview') }}</button>
+        </div>
       </div>
     </section>
 
@@ -877,13 +910,15 @@ import KInput from '../../ui/KInput.vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import KModal from '../../ui/KModal.vue';
 import AgentsEditor from '../../ui/AgentsEditor.vue';
-import { THEMES, themeState, setTheme } from '../../stores/theme';
+import { visibleThemes, themeState, setTheme, labFlags, setLabFlag } from '../../stores/theme';
+import { motionState, setMotion } from '../../stores/motion';
 import { uiPrefs } from '../../stores/prefs';
 import { soundApproval } from '../../utils/sound';
 import { promptDialog } from '../../stores/prompt';
 import { confirmDialog } from '../../stores/confirm';
 import { debugLog as dbg } from '../../stores/debuglog';
 import { isImeComposing } from '../../utils/ime';
+import { bootReplay } from '../../utils/boot';
 
 const tabs = [
   { id: 'general', label: '常规' },
@@ -1021,7 +1056,9 @@ function applyFont() {
 }
 
 const contentWidth = ref(localStorage.getItem('nu_w') || '860');
-const labOn = ref({ ...(JSON.parse(localStorage.getItem('nu_labs') || '{}')) });
+/* 开关的显示状态绑的是 stores/theme.js 那本账（逐键的 reactive 属性），不是这里自己抄的一份 ref：
+   抄的那份在打包后的产物里「换整个 ref.value」不会引起重渲染，见 stores/theme.js 顶部注释。 */
+const labOn = labFlags;
 /* 实验室只放「还没实装、先占个位置」的东西。
    原来这三条：会话互聊一直没做；Git 版本预览与未提交变更提醒已经生效，
    不该再挂着「实验」的名头，所以这一页清空重列。开关值仍留在 localStorage 的 nu_labs 里，
@@ -1033,12 +1070,19 @@ const labs = [
     desc: '让 AI 操作这台电脑（面板见下方）。',
     panel: true,
   },
+  {
+    /* 终末地主题做到一半（图标层、其余页面、对比度都还没过完），先别当正常主题摆着。
+       开关只决定「外观页那张主题卡露不露」，判据在 stores/theme.js：
+       没点亮时 visibleThemes 里没有它，setTheme 也不认它，正在用的人会退回暗色。 */
+    key: 'endfieldTheme',
+    title: '终末地主题',
+    desc: '开发中，尚未完成。打开后「外观 → 主题」才会出现这张主题卡；关掉即退回暗色。',
+  },
 ];
 // 带 panel 的那条不走上面的占位行（自己有一整套真设置区），其余照旧
 const labsSimple = computed(() => labs.filter((x) => !x.panel));
 function toggleLab(k) {
-  labOn.value = { ...labOn.value, [k]: !labOn.value[k] };
-  localStorage.setItem('nu_labs', JSON.stringify(labOn.value));
+  if (!setLabFlag(k, !labOn[k])) toast(`实验室开关没写进去：${k}`, 'warn');
 }
 
 /* FULL-SEND 总闸：开它要过一次确认（这一档跳过一切审批与越级面），关它不用（往安全方向走不该设卡）。 */
@@ -1411,6 +1455,13 @@ function onPromptSaved(d) {
   if (d) gpInfo.value = { ...gpInfo.value, ...d, tokens: d.tokens ?? gpInfo.value.tokens };
 }
 
+/* ---- 界面动效总开关：值在 localStorage（kh.motion），判据在 stores/motion.js ----
+   这一颗只影响本机本浏览器，不落服务端 settings：它管的是「这台机器的合成器/桌面受不受得住动画」，
+   换一台机器答案可能相反，跟着账号走反而会让人在另一台机器上看着一片静帧。 */
+function onMotion(v) {
+  if (!setMotion(v)) toast(txt('settings.motion.offFail'), 'warn');
+}
+
 /* ---- 小鲸鱼挂件总开关：配置与挂件自己的菜单共用一份（settings.whale_widget.enabled） ---- */
 const whaleOn = ref(true);
 
@@ -1616,6 +1667,32 @@ async function savePref(patch) {
   const okk = await uiPrefs.save(patch);
   if (okk && patch.volume !== undefined && patch.sound !== false) soundApproval();
   return okk;
+}
+
+/* 开屏加载动画。保存完必须读回来对一遍：
+   新键最容易死在「后端还在跑旧版本，认不下 boot_plate、静默丢掉却照样回 200」——
+   那样界面上勾是勾上了，下次启动照旧，人只会以为是自己没点着（常规页那条 notStored 就是这个坑）。 */
+async function setBootPlate(v) {
+  const okk = await savePref({ bootPlate: v });
+  if (!okk) return false;
+  try {
+    const st = await settingsApi.getAll();
+    const want = v ? '1' : '0';
+    if (String(st?.boot_plate) !== want) {
+      const got = st?.boot_plate === undefined ? '（库里没有这一项）' : st.boot_plate;
+      return toastErr(new Error(`提交：boot_plate=${want}；读回：${got}`),
+        txt('settings.notStored', { keys: txt('settings.boot.label') }), 8000, { where: 'settings.bootPlate' });
+    }
+  } catch (e) {
+    // 读不回来说明服务已经不通，save 那步报过一次了，不重复冒红条
+  }
+  return true;
+}
+
+// 预览 = 重载整窗。板子是内联在 index.html 里的，只有重新走一次「服务端发 HTML」才算真播；
+// 不做原地重放，因为那份状态（两条时钟、里程碑表、淡出到第几帧）全在闭包里，重放很容易留半截状态。
+function previewBootPlate() {
+  bootReplay();
 }
 
 /* ---- 图片大小控制（实验室）----
@@ -1975,24 +2052,12 @@ function mcpSlug(name) {
   return (s || 'server').slice(0, 20);
 }
 
-function parseArgsText(text) {
-  const t = String(text || '').trim();
-  if (!t) return [];
-  if (t.startsWith('[')) {
-    const v = JSON.parse(t);
-    if (!Array.isArray(v)) throw new Error('args 必须是 JSON 数组');
-    return v.map(String);
-  }
-  return t.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-}
-
-function parseObjText(text, label) {
-  const t = String(text || '').trim();
-  if (!t) return {};
-  const v = JSON.parse(t);
-  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${label} 必须是 JSON 对象`);
-  return v;
-}
+/* args / env / headers 的原文**直接交给后端解析**（server/utils/mcp.js 的
+   parseArgsInput / parseObjInput 是全仓唯一一份实现）。
+   以前这里自己 parse 一份、后端又有一套，两边规则还不一样（这边按行、那边按空白），
+   同一次填写经界面提交和经 API 提交会得到不同结果 —— 统一成一份就没这个问题了。
+   这里只做「空 → 空串」的规整，让后端走它那套「JSON 数组 / 一行一个 / 单行空格分隔」。 */
+const mcpRawText = (t) => String(t == null ? '' : t).trim();
 
 async function loadMcp() {
   try {
@@ -2008,11 +2073,11 @@ function mcpBodyFromForm() {
     name: mcpForm.name,
     transport: mcpForm.transport,
     command: mcpForm.command,
-    args: parseArgsText(mcpForm.argsText),
+    args: mcpRawText(mcpForm.argsText),
     cwd: mcpForm.cwd,
-    env: parseObjText(mcpForm.envText, 'env'),
+    env: mcpRawText(mcpForm.envText),
     url: mcpForm.url,
-    headers: parseObjText(mcpForm.headersText, 'headers'),
+    headers: mcpRawText(mcpForm.headersText),
     enabled: !!mcpForm.enabled,
   };
 }
@@ -2027,7 +2092,9 @@ async function saveMcp() {
     await loadMcp();
     await loadTools();          // 工具清单多了 MCP 一节，设置页要跟着刷新
   } catch (e) {
-    toastErr(e, '保存失败（args/env 得是合法 JSON）');
+    // 后端会把「哪一行不对、为什么」写清楚（例如 args 是 JSON 数组但写法有误：…）。
+    // 以前这里统一换成一句「args/env 得是合法 JSON」，把位置信息和原因都吞掉了。
+    toastErr(e, '保存失败');
   } finally {
     mcpSaving.value = false;
   }
@@ -2037,17 +2104,28 @@ function resetMcpForm() {
   Object.assign(mcpForm, emptyMcp());
 }
 
+/** 回填：args 按**一行一个**展开（与输入框的推荐写法一致，比一串 JSON 好改） */
+function mcpArgsToText(args) {
+  const list = Array.isArray(args) ? args : [];
+  return list.length ? list.map((a) => (/[\s"']/.test(String(a)) ? JSON.stringify(String(a)) : String(a))).join('\n') : '';
+}
+/** 回填：env/headers 按 KEY=VALUE 每行一条（比 JSON 更接近大家手写 .env 的习惯） */
+function mcpPairsToText(obj) {
+  const o = obj && typeof obj === 'object' ? obj : {};
+  return Object.keys(o).length ? Object.entries(o).map(([k, v]) => `${k}=${v}`).join('\n') : '';
+}
+
 function editMcp(s) {
   Object.assign(mcpForm, {
     id: s.id,
     name: s.name,
     transport: s.transport,
     command: s.command || '',
-    argsText: JSON.stringify(s.args || [], null, 1),
+    argsText: mcpArgsToText(s.args),
     cwd: s.cwd || '',
-    envText: Object.keys(s.env || {}).length ? JSON.stringify(s.env, null, 1) : '',
+    envText: mcpPairsToText(s.env),
     url: s.url || '',
-    headersText: Object.keys(s.headers || {}).length ? JSON.stringify(s.headers, null, 1) : '',
+    headersText: mcpPairsToText(s.headers),
     enabled: !!s.enabled,
   });
 }
@@ -2342,10 +2420,11 @@ pre.cu-err {
 .pane-leave-active { transition: opacity 0.09s ease; }
 .pane-enter-from { opacity: 0; transform: translateY(8px); }
 .pane-leave-to { opacity: 0; }
-@media (prefers-reduced-motion: reduce) {
-  .pane-enter-active,
-  .pane-leave-active { transition: none; }
-}
+
+  html[data-motion='off'] .pane-enter-active,
+
+  html[data-motion='off'] .pane-leave-active{ transition: none; }
+
 .page-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .page-head h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; }

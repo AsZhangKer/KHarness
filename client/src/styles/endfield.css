@@ -1,0 +1,1112 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   终末地（第七套主题）· 形状层
+   ---------------------------------------------------------------------------
+   他 2026-10-14 看完第一版实装的四条纠正，本文件就是按这四条重做的：
+     ① 配色只有三档：**纯白 / 平涂亮黄 / 特色黑**。（第一版我搬了样张墙的 #f5f5f5 亮灰布面 + #dcdcdc
+        灰面板，整屏发灰 ⇒ 作废。灰只留给 hairline 与 hover 叠层，不当面用。）
+     ② **输入框是方形的**（第一版我写成 r999 胶囊 ⇒ 作废）。取件 4 搜索框那一族：
+        母本 `可参考/搜索框_2.html` 第 20–30 行 —— 2px 实描边 + radius 5u + 内阴影 + focus 追加 2.5u 亮黄外环。
+     ③ **下拉菜单是长条胶囊**：触发条 = 母本 `下拉菜单和复选框勾选框.html` 第 96–109 行 `.pill-btn`
+        （r999 / padding 6px 16px / 字 14 / min-width 100），面板与行 = 同文件第 150–227 行
+        `.dropdown-panel` / `.list-item`（r12 面板、选中 = 整行换深色面 + 白字 + 左 6px 处 3×60% 白竖条）。
+     ④ **切换 tab 与拖动条/滚动条**：tab = 母本 `切换按钮.html` 第 51–53 行 `.ui-segmented`
+        （胶囊盒 + 选中那颗换反色胶囊），滚动条与滑杆 = 母本 `滚动条组件.html` 第 25–50 行的
+        「深色长条 + 浅色圆盘 + 圆盘一圈同心线」语言。
+   三态硬口径（§八-⑤ / A16）：控件 hover 提亮、active 压暗，**零位移零尺寸变化**；板与卡不反应。
+   六套原主题不受影响：本文件所有规则都以 `:root[data-theme='endfield']` 起头。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* 随包字体：子集已在 client/public/fonts/endfield/（OFL，1.88MB，可变字重 100–900）。
+   @font-face 只留这一份事实源，别复制第二份。 */
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('/fonts/endfield/NotoSansSC-var.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   一 · 变量表
+   他 2026-10-14 夜给的三档背景 + 两档黄（覆盖上一版「面全纯白」的口径）：
+     · 左栏 / 右栏 = **#484848**（母本 --bar-dark #3f3f3f 同一族的深灰）
+     · 中间消息区 + 大部分弹窗的内容区（**不含标头**）= **#A8A6A6**
+     · 标头 = 母本 .b3 .hd 的字面 **#222**
+     · 黄两档 = 金黄/深黄 **#EECB0E**、浅黄/渐变黄 **#FFFF0E**
+   ⚠ 对比度是这一档的硬约束：#A8A6A6 的相对亮度 0.383 ⇒ 上面只有 ≤ #3a3a3a 的字才过 AA 4.5:1
+     （#444 只有 4.02、#4d4d4d 3.49、#767676 2.2）。所以**亮灰底上的层级靠字重与字号，不靠把字改淡**；
+     要淡字就得把那一块垫到更浅的一档（母本 .b3 的面本来就是 #ebe9e9）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] {
+  /* 面：中间画布与弹窗内容 = 浅灰 #A8A6A6；左右栏 = 深灰 #484848；标头 = #222 */
+  --bg: #a8a6a6;
+  --page-bg: #a8a6a6;
+  --bg-main: #a8a6a6;
+  --bg-elev: #b4b2b2;                        /* 浮在画布上的卡 / 嵌套面（比画布亮一档，仍属灰族） */
+  --bg-panel: #484848;                       /* 左右栏 */
+  --bg-translucent: rgba(168, 166, 166, 0.94);
+  --bg-hover: rgba(255, 255, 255, 0.12);     /* 深灰栏上的 hover = 叠白（母本 --ef-hover-white 同值） */
+  --bg-active: rgba(255, 255, 255, 0.2);
+  --bg-input: #f0eeee;                       /* 字段面：母本 baker --ef-panel-btn 字面值 */
+  --bg-sunken: #2b2b2d;                      /* 沉下去那一层 = 母本板上的字色那一档 */
+  --bg-bubble: #454444;                      /* 我方气泡 = 母本 MESSAGE_BOX 第 12 行 --bubble 字面 */
+  --bg-rail: #484848;
+  --bg-head: #222222;                        /* 弹窗标头 = 母本 .b3 .hd 字面 */
+
+  /* 线：hairline 用黑透明，结构描边用母本的深炭 */
+  --border: rgba(0, 0, 0, 0.28);
+  --border-soft: rgba(0, 0, 0, 0.16);
+  --border-strong: #444343;                  /* 母本 --d-outer（ef-pill 外框）字面值 */
+  --border-hover: rgba(0, 0, 0, 0.45);
+  --line-soft: rgba(0, 0, 0, 0.16);
+
+  /* 字：亮灰底上只有 #212121 / #2f2f31 / #3a3a3a 三档过 AA；深灰栏上走白族 */
+  --text: #212121;
+  --text-2: #2f2f31;                          /* 5.1:1 on #A8A6A6 */
+  --text-3: #3a3a3a;                          /* 4.7:1 —— 母本的 #444 在这块底上只有 4.02，过不了，压暗一档 */
+  --text-inverse: #f2f2f2;                    /* 母本 --ui-text-light 字面 */
+  --text-on-dark-2: #c2c2c2;                  /* 母本 --bar-light：深灰栏上的次级字（5.2:1） */
+  --text-on-dark-3: #a8a6a6;                  /* 仅给装饰性微字，不承载信息 */
+
+  /* 黄两档（他这次给的数）：浅黄/渐变黄 = 面与细条，金黄/深黄 = 描边、kicker、要读得出来的地方 */
+  --accent: #ffff0e;
+  --accent-deep: #eecb0e;
+  --accent-hover: #ffff5c;
+  --on-accent: #444343;                       /* 母本 --y-text 字面值 */
+  --accent-ink: #6b5c00;                      /* 黄**当文字**压在浅灰上看不见 ⇒ 这一档专门给「accent 语义但要读得出」 */
+  --gold: #eecb0e;                            /* 收藏/置顶/拖拽指示线 */
+  --terra: #0b7fa8;                           /* 旧站的暖橙位 → 母本 --ui-info 那支青，压暗到 AA */
+  --ok: #0a7a43;                              /* 母本实测 #00d872 在浅底只有 2.2:1 ⇒ 文字档压暗，填充另说 */
+  --warn: #7a4a00;
+  --danger: #b3211a;                          /* 母本 #f62a2a 在浅灰上 3.4:1 ⇒ 压到 5.4:1 */
+  --on-scrim: #ffffff;
+  --success: var(--ok);
+
+  /* diff：与"代码块 = 深面部件"保持同一口径 —— 整块深底 + 浅字，
+     增删行靠 12%/14% 的黄与红叠在深底上区分（浅底 + 浅灰字是读不出来的，上一版就是这个病）。 */
+  --diff-add-bg: rgba(255, 229, 0, 0.12);
+  --diff-del-bg: rgba(255, 92, 92, 0.14);
+  --diff-add: #ffe500;
+  --diff-del: #ff6b5e;
+  --diff-add-fg: #e9e6c8;
+  --diff-del-fg: #ffc4bd;
+  --ok-soft: rgba(10, 122, 67, 0.16);
+  --ok-line: rgba(10, 122, 67, 0.42);
+  --danger-soft: rgba(179, 33, 26, 0.14);
+  --danger-line: rgba(179, 33, 26, 0.45);
+  --warn-soft: rgba(122, 74, 0, 0.16);
+  --gold-soft: rgba(255, 255, 14, 0.42);
+  --gold-line: rgba(238, 203, 14, 0.6);
+
+  --surface-pop: #a8a6a6;                     /* 弹窗内容区 = 他定的浅灰（标头另走 --bg-head） */
+  --surface-hover: rgba(0, 0, 0, 0.08);
+  --surface-active: #454444;                  /* 下拉里选中 = 整行换母本深灰面 + 白字 */
+  --ring: #ffff0e;                            /* 焦点环 = 浅黄档 */
+  --scrim: rgba(13, 13, 14, 0.6);             /* 母本 .stage 底 #0d0d0e + 板影 0 0 60px #0008 */
+  --state-layer: rgba(0, 0, 0, 0.08);
+  --scroll-thumb: #2b2b2d;
+  --scroll-thumb-hover: #000000;
+  --selection: rgba(255, 255, 14, 0.45);
+  --switch-off-knob: #b0b0b0;                 /* 母本 --pill-bg-gray 字面 */
+
+  --bar-a: #2b2b2d;
+  --bar-b: #ffff0e;
+
+  /* 代码块/终端是母本认的「深面部件」，亮体系里它们保持深面 */
+  --code-bg: #2b2b2d;
+  --code-fg: #f2f2f2;
+  --hl-comment: #a0a0a0;
+  --hl-keyword: #ffff0e;
+  --hl-entity: #ffd9f0;
+  --hl-const: #7fd8ff;
+  --hl-string: #9be8b8;
+  --hl-var: #ffe9a8;
+  --hl-tag: #8fe3c0;
+  --hl-meta: #d6d6d6;
+  --hl-heading: #ffff0e;
+  --hl-bullet: #ffff0e;
+  --hl-add: #9be8b8;
+  --hl-add-bg: rgba(10, 122, 67, 0.28);
+  --hl-del: #ffb3ad;
+  --hl-del-bg: rgba(179, 33, 26, 0.26);
+
+  /* 形状：小圆角只给卡与面板（母本 .b3 r8 / .u4 r14）；控件的胶囊/方形由各件自己写死 */
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-xs: 3px;
+  --radius-pill: 999px;
+
+  --font: 'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --mono: Consolas, 'Microsoft YaHei', ui-monospace, monospace;
+
+  /* 影：母本 .dropdown-panel 与 .pill-btn 那两颗，加弹窗那颗 0 0 60px */
+  --shadow: 0 10px 20px rgba(0, 0, 0, 0.15);      /* 母本 .dropdown-panel 第 154 行 */
+  --shadow-soft: 0 2px 4px rgba(0, 0, 0, 0.05);   /* 母本 .pill-btn 第 107 行 */
+  --shadow-board: 0 0 60px rgba(0, 0, 0, 0.53);   /* 母本 .b3 / .d1 / .u4 的 box-shadow:0 0 6rem #0008 */
+
+  /* —— 本层自己的件值（不散落成字面值用）—— */
+  --efk-black: #2b2b2d;
+  --efk-yellow: #ffff0e;
+  --efk-gold: #eecb0e;
+  --efk-ink-on-yellow: #444343;
+  --efk-hatch: rgba(0, 0, 0, 0.05);               /* 布面纹理：24px 网格，只 1 个母题（§⑩ 配额） */
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   二 · 布面纹理：浅灰画布 + 24px 暗网格（母本 tokens §② --ef-bg-grid 的亮底换色）
+   ⚠ 底色一律走变量，别写死 #ffffff —— 上一版就是写死了白，他这次改三档背景时它不跟着变。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] body,
+:root[data-theme='endfield'] .app-shell,
+:root[data-theme='endfield'] .chat-page,
+:root[data-theme='endfield'] .main,
+:root[data-theme='endfield'] .stream {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--efk-hatch) 1px, transparent 1px),
+    linear-gradient(90deg, var(--efk-hatch) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+/* 左右栏 = 他定的深灰 #484848（母本 --bar-dark 同一族），栏上的字走白族。
+   :not(.composer) 是必须的：输入区这一整块按母本「整体 · hk设计」也叫 .dock，
+   不排掉的话它会被铺上一层 #484848 灰底，白卡外面那圈就成了深灰板（他 2026-10-14 夜点名要删的「后面的灰色底色」）。 */
+:root[data-theme='endfield'] .rail,
+:root[data-theme='endfield'] .rail-inner,
+:root[data-theme='endfield'] .dock:not(.composer),
+:root[data-theme='endfield'] .dock-inner { background: var(--bg-panel); color: var(--text-inverse); }
+:root[data-theme='endfield'] .rail .chat-row,
+:root[data-theme='endfield'] .rail .proj-head,
+:root[data-theme='endfield'] .rail .tree-label,
+:root[data-theme='endfield'] .rail .tree-empty,
+:root[data-theme='endfield'] .dock:not(.composer) h4,
+:root[data-theme='endfield'] .dock:not(.composer) .muted { color: var(--text-on-dark-2); }
+
+/* 表单控件不继承字体是 Chrome 的老毛病，母本每份都写了这条 reset，这里补上 */
+:root[data-theme='endfield'] :where(button, input, select, textarea, output) { font-family: var(--font); }
+:root[data-theme='endfield'] body { letter-spacing: 0.01em; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   三 · 件 2 通用钮 = 母本两套钮的**材质原值**（不是照着画）
+   母本里有两套钮，用在哪看底色：
+     · `.pill-btn`（可参考/下拉菜单和复选框勾选框.html 第 96–109 行）—— 深色底上的白面胶囊：
+       #f5f5f5 面 / 1px rgba(0,0,0,.1) / r999 / 6px 16px / 字 14 / min-width 100 / 影 0 2px 4px .05
+     · `.ef-pill--yellow`（ai/WINDOW/*.html 第 28–93 行）—— 主行动：--y-fill 面 + --y-rim 边
+       + inset 0 0 0 2u --y-ring 内环 + 近黑字
+   斜纹一律按母本 `.ef-pill__tex` 的画法（55°/-55° 交叉 + 90° 渐隐遮罩），只落在右端 141u，
+   不再整颗铺满 —— 上一版整颗铺满是我自己发明的，母本只在右端那一条上有。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-btn,
+:root[data-theme='endfield'] .btn,
+:root[data-theme='endfield'] .pill,
+:root[data-theme='endfield'] .k-pill {
+  position: relative;
+  min-height: 32px;
+  height: auto;
+  padding: 6px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  background: #f5f5f5;
+  color: #333333;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  transition: filter 0.12s linear;   /* 只走亮度：颜色/尺寸/阴影都不参与三态 */
+}
+/* 母本 `.ef-pill__tex`：右端 141u 宽的交叉细线 + 右侧渐隐（遮罩值就是母本那行 90deg 渐隐） */
+:root[data-theme='endfield'] .k-btn::after,
+:root[data-theme='endfield'] .btn::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 74px;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(55deg, rgba(0, 0, 0, 0.075) 0 0.5px, transparent 0.5px 2.2px),
+    repeating-linear-gradient(-55deg, rgba(0, 0, 0, 0.05) 0 0.5px, transparent 0.5px 2.6px);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 25%, #000 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 25%, #000 100%);
+}
+:root[data-theme='endfield'] .k-btn > *,
+:root[data-theme='endfield'] .btn > * { position: relative; z-index: 1; }
+:root[data-theme='endfield'] .k-btn.sm,
+:root[data-theme='endfield'] .btn.sm,
+:root[data-theme='endfield'] .k-btn.ghost { padding: 6px 12px; min-width: 0; }
+:root[data-theme='endfield'] .btn.sm::after,
+:root[data-theme='endfield'] .k-btn.sm::after { width: 40px; }
+/* 主行动 = 母本黄面那颗（--y-fill / --y-rim / --y-ring 内环 / --y-text 字） */
+:root[data-theme='endfield'] .k-btn.primary,
+:root[data-theme='endfield'] .btn.primary,
+:root[data-theme='endfield'] .send--primary {
+  background: var(--y-fill);
+  border-color: var(--y-rim);
+  color: var(--y-text);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--y-ring), 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .k-btn.primary::after,
+:root[data-theme='endfield'] .btn.primary::after {
+  background-image:
+    repeating-linear-gradient(55deg, rgba(120, 90, 0, 0.16) 0 0.5px, transparent 0.5px 2.2px),
+    repeating-linear-gradient(-55deg, rgba(120, 90, 0, 0.1) 0 0.5px, transparent 0.5px 2.6px);
+}
+:root[data-theme='endfield'] .k-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: #3a3a3a;
+}
+:root[data-theme='endfield'] .k-btn.ghost::after { display: none; }
+:root[data-theme='endfield'] .k-btn.ghost:hover { background: rgba(33, 33, 33, 0.06); color: #212121; filter: none; }
+:root[data-theme='endfield'] .k-btn.danger,
+:root[data-theme='endfield'] .btn.danger {
+  background: #f5f5f5;
+  border-color: rgba(179, 33, 26, 0.5);
+  color: #a01c16;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .k-btn.ok { background: transparent; border-color: rgba(10, 122, 67, 0.5); color: #0a7a43; box-shadow: none; }
+:root[data-theme='endfield'] .k-btn:hover,
+:root[data-theme='endfield'] .btn:hover,
+:root[data-theme='endfield'] .pill:hover,
+:root[data-theme='endfield'] .k-pill:hover { filter: brightness(1.12); }
+:root[data-theme='endfield'] .k-btn:active,
+:root[data-theme='endfield'] .btn:active,
+:root[data-theme='endfield'] .pill:active { filter: brightness(0.86); transform: none !important; }
+:root[data-theme='endfield'] .k-btn:focus-visible,
+:root[data-theme='endfield'] .btn:focus-visible { outline: 2px solid #ffe500; outline-offset: -3px; }
+/* 禁用 = 母本 `.ef-pill.is-disabled` 的处置（grayscale + 压暗 + 半透），不再是「黑面 + 45% 白字」
+   —— 那一档在 #212121 上只有 4.36:1，读不清（本轮扫描第 4 条） */
+:root[data-theme='endfield'] .k-btn[disabled],
+:root[data-theme='endfield'] .btn[disabled],
+:root[data-theme='endfield'] .k-btn:disabled,
+:root[data-theme='endfield'] .btn:disabled {
+  filter: grayscale(1) brightness(0.92);
+  opacity: 0.62;
+  background: #f5f5f5;
+  color: #333333;
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  cursor: not-allowed;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   四 · 件 3 / 3b 圆钮与图标钮：黑盘 + 白形 + 一圈内缩同心线（A9）
+   母本 Ø40u/42u/44u ⇒ §八-④ 一律降档到 Ø32（密集 28）
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .icon-btn,
+:root[data-theme='endfield'] .k-icon-btn,
+:root[data-theme='endfield'] .rail-toggle,
+:root[data-theme='endfield'] .dock-toggle,
+:root[data-theme='endfield'] .ta-expand {
+  width: 32px; height: 32px;
+  border: 0; border-radius: 50%;
+  background: #212121;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 2px #212121, inset 0 0 0 3px rgba(255, 255, 255, 0.55);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: filter 0.12s linear;
+}
+:root[data-theme='endfield'] .icon-btn.sm { width: 28px; height: 28px; font-size: 13px; }
+/* 左栏 260px 里挤了一排行操作键，主档 Ø32 太压，收一档（件 3 的 --sm 密档同一关系） */
+:root[data-theme='endfield'] .rail .icon-btn { width: 26px; height: 26px; font-size: 12px; }
+:root[data-theme='endfield'] .icon-btn:hover,
+:root[data-theme='endfield'] .k-icon-btn:hover,
+:root[data-theme='endfield'] .rail-toggle:hover,
+:root[data-theme='endfield'] .dock-toggle:hover,
+:root[data-theme='endfield'] .ta-expand:hover { filter: brightness(1.12); background: #212121; color: #ffffff; }
+:root[data-theme='endfield'] .icon-btn:active,
+:root[data-theme='endfield'] .k-icon-btn:active { filter: brightness(0.86); transform: none !important; }
+:root[data-theme='endfield'] .icon-btn:focus-visible,
+:root[data-theme='endfield'] .k-icon-btn:focus-visible { outline: 2px solid #ffe500; outline-offset: 2px; }
+/* 开着的那颗：同心线换成平涂亮黄（A10），面与几何一动不动 */
+:root[data-theme='endfield'] .icon-btn.on,
+:root[data-theme='endfield'] .k-icon-btn.on {
+  background: #212121; color: #ffffff;
+  box-shadow: inset 0 0 0 2px #212121, inset 0 0 0 4px #ffe500;
+}
+/* 文字型小图标（FA 字体图标）在白底上必须是黑，不能是 accent 黄。
+   ⚠ 这一组一律带 !important：组件 scoped 编译出来是 `.sup-status i[data-v-xxx]` 这种「类+属性+元素」= (0,3,1)，
+   与我这条打平，而 scoped 的块在打包里排在后面 ⇒ 不带 !important 就会被顶回去（截图里那个黄色的「你」就是这么来的）。 */
+:root[data-theme='endfield'] .msg.role-user .who,
+:root[data-theme='endfield'] .msg.spk-supervisor .who,
+:root[data-theme='endfield'] .bc-head .busy,
+:root[data-theme='endfield'] .sb-head .busy,
+:root[data-theme='endfield'] .sup-status i,
+:root[data-theme='endfield'] .ck-run.is-run i,
+:root[data-theme='endfield'] .dock-tabs-menu i.fa-square-check,
+:root[data-theme='endfield'] .msg .who { color: #212121 !important; }
+:root[data-theme='endfield'] .s-caret { color: #c0271f !important; }
+:root[data-theme='endfield'] .icon-btn.send:hover:not(:disabled) { color: #ffffff !important; border-color: #212121; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   五 · 件 4 输入框 = 方形（他点名②）
+   出处 可参考/搜索框_2.html 第 20–30 行：2px 实描边 / radius 5u / 内阴影 / focus 追加 2.5u #ffe61a 外环
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .nu-input,
+:root[data-theme='endfield'] .nu-textarea,
+:root[data-theme='endfield'] input.k-input,
+:root[data-theme='endfield'] textarea.k-input,
+:root[data-theme='endfield'] select.k-input,
+:root[data-theme='endfield'] .ask-input,
+:root[data-theme='endfield'] .sup-input,
+:root[data-theme='endfield'] .mini-select {
+  background: #ffffff;
+  border: 2px solid #212121;
+  border-radius: 5px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: #212121;
+  padding: 7px 10px;
+  font-size: 14px;
+  transition: box-shadow 0.12s linear, filter 0.12s linear;
+}
+:root[data-theme='endfield'] input[type='text'],
+:root[data-theme='endfield'] input[type='search'],
+:root[data-theme='endfield'] input[type='number'],
+:root[data-theme='endfield'] input[type='password'],
+:root[data-theme='endfield'] input[type='url'],
+:root[data-theme='endfield'] textarea {
+  background: #ffffff;
+  color: #212121;
+}
+:root[data-theme='endfield'] .nu-input:hover,
+:root[data-theme='endfield'] .nu-textarea:hover,
+:root[data-theme='endfield'] .k-input:hover { border-color: #000000; filter: none; background: #ffffff; }
+:root[data-theme='endfield'] .nu-input:focus,
+:root[data-theme='endfield'] .nu-textarea:focus,
+:root[data-theme='endfield'] .k-input:focus,
+:root[data-theme='endfield'] .ask-input:focus,
+:root[data-theme='endfield'] .sup-input:focus {
+  border-color: #212121;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 2.5px #ffe500;   /* 母本第 23 行：外环是**追加**，不替换内阴影 */
+  outline: none;
+}
+:root[data-theme='endfield'] .nu-input::placeholder,
+:root[data-theme='endfield'] .nu-textarea::placeholder,
+:root[data-theme='endfield'] .k-input::placeholder,
+:root[data-theme='endfield'] .ask-input::placeholder,
+:root[data-theme='endfield'] textarea::placeholder { color: #767676; opacity: 1; }
+:root[data-theme='endfield'] .nu-input:disabled,
+:root[data-theme='endfield'] .nu-textarea:disabled,
+:root[data-theme='endfield'] .k-input:disabled { opacity: 0.5; }
+
+/* 上下文环：轨道黑、填充黄（件 8「轨道黑 + 填充」的配色，黄是本套的行动色） */
+:root[data-theme='endfield'] .ring-bg { stroke: rgba(33, 33, 33, 0.18); }
+:root[data-theme='endfield'] .ring-fg { stroke: #ffe500; }
+:root[data-theme='endfield'] .ring-num { color: #212121; font-size: 9px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   六 · 件 5 下拉 = 长条胶囊触发条 + 只圆远端两角的面板（他点名③）
+   触发条 母本 下拉菜单和复选框勾选框.html 第 96–109 行；面板与行 同文件第 150–227 行
+   ────────────────────────────────────────────────────────────────────────── */
+/* 原生 select 跟着件表的下拉族走同一个面（母本 .pill-btn：#f5f5f5 面 + #333 字 + r999），
+   caret 换成深色 SVG，箭头位留给它 */
+:root[data-theme='endfield'] .k-select,
+:root[data-theme='endfield'] select {
+  appearance: none;
+  min-height: 36px;
+  padding: 6px 34px 6px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  background-color: #f5f5f5;
+  color: #333333;
+  font-size: 14px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23333333'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+  transition: filter 0.12s linear;
+}
+:root[data-theme='endfield'] .k-select:hover,
+:root[data-theme='endfield'] select:hover { filter: brightness(1.12); background-color: #f5f5f5; }
+:root[data-theme='endfield'] select option { background: #ffffff; color: #212121; }
+
+/* 右栏标签条里那颗迷你下拉跟着同一形状 */
+:root[data-theme='endfield'] .mini-select { min-height: 28px; border-radius: 999px; padding: 4px 26px 4px 10px; font-size: 12px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   七 · 件 6 浮层（右键菜单 / 标题菜单 / 命令面板）：白面 + 黑 hairline + 母本影
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .ctx-menu,
+:root[data-theme='endfield'] .title-menu,
+:root[data-theme='endfield'] .cmd-pop,
+:root[data-theme='endfield'] .k-modal {
+  background: #ffffff;
+  border: 1px solid rgba(33, 33, 33, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+  color: #212121;
+}
+:root[data-theme='endfield'] .ctx-menu button,
+:root[data-theme='endfield'] .title-menu button,
+:root[data-theme='endfield'] .cmd-item {
+  min-height: 34px;
+  padding: 8px 22px 8px 18px;
+  border-radius: 0;
+  color: #212121;
+  font-size: 13px;
+}
+:root[data-theme='endfield'] .ctx-menu button:hover,
+:root[data-theme='endfield'] .title-menu button:hover,
+:root[data-theme='endfield'] .cmd-item:hover,
+:root[data-theme='endfield'] .cmd-item.on { background: rgba(33, 33, 33, 0.07); color: #212121; }
+:root[data-theme='endfield'] .ctx-menu button.danger,
+:root[data-theme='endfield'] .title-menu button.danger { color: #c0271f; }
+:root[data-theme='endfield'] .cmd-name { color: #212121; font-size: 13px; }
+:root[data-theme='endfield'] .cmd-desc,
+:root[data-theme='endfield'] .men-dir,
+:root[data-theme='endfield'] .men-empty { color: #767676; }
+:root[data-theme='endfield'] .men-tag,
+:root[data-theme='endfield'] .ap-tag {
+  border: 1px solid rgba(33, 33, 33, 0.22); border-radius: 999px; color: #4d4d4d; background: #ffffff;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   八 · 件 11 切换 tab = 胶囊盒 + 选中换反色胶囊（他点名④上半）
+   出处 可参考/切换按钮.html 第 51–53 行 `.ui-segmented`（盒 rgba(70,70,70,.9) / 未选 #9a9a98 /
+   选中 = #f5f5f5 面 + #2c2c2c 字）。纯白画布上盒改特色黑，其余照搬。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-tabs {
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(33, 33, 33, 0.12);
+  border-bottom: 1px solid rgba(33, 33, 33, 0.12);
+  border-radius: 999px;
+  background: #212121;
+}
+:root[data-theme='endfield'] .k-tab {
+  padding: 7px 14px;
+  border-radius: 999px;
+  color: #a9a9a7;
+  font-size: 13px;
+  font-weight: 700;
+}
+:root[data-theme='endfield'] .k-tabs.compact .k-tab { width: 38px; padding: 7px; }
+:root[data-theme='endfield'] .k-tab:hover { color: #ffffff; }
+:root[data-theme='endfield'] .k-tab.active { color: #2c2c2c; }
+/* 跟着选中标签滑的那块 = 母本的「反色胶囊」，白面黑字。
+   ⚠ 选择器要带上 .k-tabs 这一层：组件 scoped 那条写的是 `.k-tabs .k-tab-bar[data-v-xxx]`（两个类 + 一个属性），
+   只写 `:root[data-theme=…] .k-tab-bar` 与它是**同特异性打平**，scoped 的块在打包里排在后面 ⇒ 圆角被顶回 var(--radius-sm)。 */
+:root[data-theme='endfield'] .k-tabs .k-tab-bar {
+  background: #f5f5f5;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(33, 33, 33, 0.12);
+}
+/* 终端抽屉的标签行跟着同一族（它是深板，盒本来就黑，只把选中态换成白胶囊） */
+:root[data-theme='endfield'] .td-tab {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: transparent;
+  color: #a9a9a7;
+  font-size: 12px;
+  transition: filter 0.12s linear;
+}
+:root[data-theme='endfield'] .td-tab.on {
+  border-color: #f5f5f5;
+  background: #f5f5f5;
+  color: #2c2c2c;
+}
+:root[data-theme='endfield'] .td-pill { border-radius: 999px; background: #f5f5f5; color: #2c2c2c; border-color: #f5f5f5; }
+:root[data-theme='endfield'] .td-pill:hover { transform: none !important; filter: brightness(1.06); color: #2c2c2c; }
+/* 顶栏那排开关：关 = 白胶囊黑描边，开 = 黑胶囊白字（件 11 的正反色关系） */
+:root[data-theme='endfield'] .toggle-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(33, 33, 33, 0.22);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #212121;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: filter 0.12s linear;
+}
+:root[data-theme='endfield'] .toggle-btn:hover { filter: brightness(1.04); border-color: rgba(33, 33, 33, 0.22); }
+:root[data-theme='endfield'] .toggle-btn.on {
+  background: #212121; color: #ffffff; border-color: #212121;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   九 · 件 7 条状状态件（badge / chip / tag / level）：胶囊 + 黑包围线 + 等宽小字
+   出处 修订-图片/胶囊长条.png（r=高/2）+ BUTTON/按钮控件陈列.html L102「dk」条
+   配色口径：运行中 = 黑面白字、静态 = 白面黑描边、失败 = 橙（母本 --ef-notify，不是红）
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .badge,
+:root[data-theme='endfield'] .chip,
+:root[data-theme='endfield'] .safe-strip .chip,
+:root[data-theme='endfield'] .s-chip,
+:root[data-theme='endfield'] .level,
+:root[data-theme='endfield'] .tag,
+:root[data-theme='endfield'] .brand .tag {
+  border: 1px solid rgba(33, 33, 33, 0.22);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #212121;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+:root[data-theme='endfield'] .badge.on,
+:root[data-theme='endfield'] .level {
+  background: #212121; border-color: #212121; color: #ffffff;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.22);
+}
+:root[data-theme='endfield'] .badge.err { color: #ffffff; background: #ff7d1a; border-color: #ff7d1a; }
+:root[data-theme='endfield'] .level.red { color: #ffffff; background: #c0271f; border-color: #c0271f; }
+:root[data-theme='endfield'] .s-chip.bad { color: #c0271f; border-color: rgba(192, 39, 31, 0.5); background: #ffffff; }
+:root[data-theme='endfield'] .s-chip.note,
+:root[data-theme='endfield'] .step.fold { border-style: dashed; }
+:root[data-theme='endfield'] .chip .x,
+:root[data-theme='endfield'] .safe-strip .x { color: #767676; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十 · 件 12 圆形勾选框 + 开关
+   出处 可参考/下拉菜单和复选框勾选框.html 第 242–267 行 `.checkbox-circle`
+   （22u 正圆、未选 #bcbcbc、选中 = #333 面 + 4px 半透外圈 + 白勾 14u）
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-check {
+  width: 18px; height: 18px;
+  border: 1px solid rgba(33, 33, 33, 0.4);
+  border-radius: 50%;
+  background: #ffffff;
+}
+:root[data-theme='endfield'] .k-check::before {
+  width: 10px; height: 10px; background: #ffffff;
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+:root[data-theme='endfield'] .k-check:checked {
+  background: #212121; border-color: #212121;
+  box-shadow: 0 0 0 4px rgba(180, 180, 180, 0.5);   /* 母本第 256 行那圈半透描边，逐字值 */
+}
+:root[data-theme='endfield'] .k-check:hover { border-color: #212121; }
+:root[data-theme='endfield'] .k-switch { background: #ffffff; border: 2px solid #212121; }
+:root[data-theme='endfield'] .k-switch::after { background: #b0b0b0; }
+:root[data-theme='endfield'] .k-switch.on { background: #212121; border-color: #212121; }
+:root[data-theme='endfield'] .k-switch.on::after { background: #ffe500; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十一 · 拖动条：滚动条 + range（他点名④下半）
+   滚动条 = 件 7 的胶囊语言（深色长条 + 浅色圆盘那一族）；
+   range = 件 8 母本口径：轨道 6px **两端直角**、纯黑、无内环；旋钮 = 件 10c 的浅色圆盘 + 一圈描边。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] *::-webkit-scrollbar { width: 12px; height: 12px; }
+:root[data-theme='endfield'] *::-webkit-scrollbar-track {
+  background: rgba(33, 33, 33, 0.05);
+  border-radius: 999px;
+}
+:root[data-theme='endfield'] *::-webkit-scrollbar-thumb {
+  background: #212121;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+:root[data-theme='endfield'] *::-webkit-scrollbar-thumb:hover { background-color: #000000; }
+:root[data-theme='endfield'] *::-webkit-scrollbar-corner { background: transparent; }
+
+:root[data-theme='endfield'] input[type='range'] {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; height: 24px;
+  background: transparent;
+  border: 0; padding: 0;
+}
+:root[data-theme='endfield'] input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 0;                     /* 母本件 8：轨道 6px、两端直角、无内环 */
+  background: #212121;                  /* 母本 .ef-slider__track 没有填充段 —— 值靠旋钮位置读，不发明进度色 */
+}
+:root[data-theme='endfield'] input[type='range']::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 20px; height: 20px; margin-top: -7px;
+  border-radius: 50%;
+  background: #eeecec;
+  border: 2.6px solid #939191;          /* 母本 .ef-slider__knob 第 45 行 */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme='endfield'] input[type='range']::-moz-range-track {
+  height: 6px; border-radius: 0; background: #212121;
+}
+:root[data-theme='endfield'] input[type='range']::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: #eeecec; border: 2.6px solid #939191;
+}
+:root[data-theme='endfield'] input[type='range']:focus-visible { outline: 2px solid #ffe500; outline-offset: 2px; }
+/* 栏宽/字号这类滑杆在设置页里的宿主 */
+:root[data-theme='endfield'] .k-slider,
+:root[data-theme='endfield'] .slider-row input[type='range'] { min-width: 120px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十二 · 卡 / 面板 / 弹窗壳：白面 + 黑 hairline，板卡不反应（§八-⑤）
+   母本普通弹窗 r8；亮体系里没有「更黑的面板」，分层只靠描边与很浅的影。
+   ────────────────────────────────────────────────────────────────────────── */
+/* 左右栏不在这一组里：它们是 #484848 的深灰栏（§二），白面只给栏里的卡片 */
+:root[data-theme='endfield'] .card,
+:root[data-theme='endfield'] .k-row-card,
+:root[data-theme='endfield'] .queue-strip,
+:root[data-theme='endfield'] .skill-item,
+:root[data-theme='endfield'] .pool-item,
+:root[data-theme='endfield'] .shell-item,
+:root[data-theme='endfield'] .drop-card,
+:root[data-theme='endfield'] .err-bar,
+:root[data-theme='endfield'] .ck-tpl,
+:root[data-theme='endfield'] .ap-preview,
+:root[data-theme='endfield'] .bg-tail,
+:root[data-theme='endfield'] .chg-stat {
+  background: #ffffff;
+  border: 1px solid rgba(33, 33, 33, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .shell-item:hover:not(:disabled),
+:root[data-theme='endfield'] .skill-item.on,
+:root[data-theme='endfield'] .pool-item.selected {
+  border-color: #212121;
+  box-shadow: inset 0 0 0 1px #ffe500, 0 2px 4px rgba(0, 0, 0, 0.05);   /* 选中 = 黑描边 + 里面一圈黄 */
+}
+:root[data-theme='endfield'] .k-modal { border: 2px solid #212121; border-radius: 8px; }
+:root[data-theme='endfield'] .k-modal-root { background: rgba(20, 20, 20, 0.42); }
+:root[data-theme='endfield'] .k-modal-head h3 { font-weight: 700; letter-spacing: 0.02em; }
+/* 顶栏整块换成母本 .ef-chat-head（板边、字重都在 masters 里），这里不再自画任何一条 */
+:root[data-theme='endfield'] .dock-body h4,
+:root[data-theme='endfield'] .k-sec-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #767676;
+}
+/* 母本的「// KICKER」语气在 300px 的右栏里要给标题让位：只留等宽大写与字距，不追加前缀字符，
+   否则「计划任务」这种四字标题带上前缀会被 ellip 截断。 */
+:root[data-theme='endfield'] .row,
+:root[data-theme='endfield'] .task,
+:root[data-theme='endfield'] .bg-item,
+:root[data-theme='endfield'] .recycle-row,
+:root[data-theme='endfield'] .insert-item { border-bottom-color: rgba(33, 33, 33, 0.09); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十三 · 消息流：气泡本体（两档面 + 尾巴 + 三档间距）已经搬进 endfield-parts.css §F，
+   这里只留**气泡以外**的那些件（步骤卡 / 思考卡 / 代码块 / 审批横幅 / 左栏胶囊）的映射。
+   ⚠ 不要再在这里写 .bubble-wrap / .user-body 的面与圆角 —— 同一件两处事实源就会打架（上一版正是这样）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .reason,
+:root[data-theme='endfield'] .step {
+  background: #f0eeee;
+  border: 1px solid rgba(33, 33, 33, 0.18);
+  border-radius: 5px;
+}
+:root[data-theme='endfield'] .step.fold { background: transparent; border-color: rgba(33, 33, 33, 0.22); }
+:root[data-theme='endfield'] .step.fold:hover { transform: none !important; border-color: #212121; color: #212121; }
+:root[data-theme='endfield'] .step.err { border-color: rgba(192, 39, 31, 0.6); }
+:root[data-theme='endfield'] .step.edit { border-color: rgba(33, 33, 33, 0.3); }
+:root[data-theme='endfield'] .phase { color: #767676; }
+:root[data-theme='endfield'] .caret-dot { background: #212121; }
+/* @path 芯片：件 17 —— 圆左端、右端清零，靠形状而不是彩色从正文里切出来 */
+:root[data-theme='endfield'] .at-chip {
+  padding: 1px 7px 1px 5px;
+  border: 1px solid rgba(33, 33, 33, 0.26);
+  border-radius: 999px 2px 2px 999px;
+  background: #f2f1f1;
+  color: #222224;
+  font-size: 0.88em;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+:root[data-theme='endfield'] .at-chip i { color: #4d4d4d; }
+:root[data-theme='endfield'] .at-chip:hover { background: #ffe500; border-color: #ffe500; color: #141414; }
+:root[data-theme='endfield'] .at-chip:hover i { color: #141414; }
+
+/* 代码块 / diff：深面部件（母本认的黑底） */
+:root[data-theme='endfield'] .md pre,
+:root[data-theme='endfield'] .md-code,
+:root[data-theme='endfield'] .md-mermaid {
+  background: #212121;
+  border: 1px solid #212121;
+  border-radius: 5px;
+  color: #f2f2f2;
+}
+:root[data-theme='endfield'] .md-code-bar { background: #212121; border-bottom: 1px solid rgba(255, 255, 255, 0.14); color: #a0a0a0; }
+:root[data-theme='endfield'] .md-copy,
+:root[data-theme='endfield'] .copy-code { color: #a0a0a0; }
+:root[data-theme='endfield'] .md-copy:hover,
+:root[data-theme='endfield'] .copy-code:hover { color: #ffe500; }
+:root[data-theme='endfield'] .md code { background: #f2f1f1; color: #212121; border-radius: 3px; }
+:root[data-theme='endfield'] .md blockquote { border-left-color: #212121; color: #4d4d4d; }
+:root[data-theme='endfield'] .md th,
+:root[data-theme='endfield'] .md td { border-color: rgba(33, 33, 33, 0.18); }
+:root[data-theme='endfield'] .diff-line { color: #4d4d4d; }
+:root[data-theme='endfield'] .diff-line.meta { background: #f2f1f1; }
+:root[data-theme='endfield'] .ap-cmd { background: #212121; color: #f2f2f2; border-radius: 5px; }
+
+/* 审批 / 问答横幅：黑描边的白卡 + 左边一道黄脊（危险感靠眉与文案，不靠整片红） */
+:root[data-theme='endfield'] .approval,
+:root[data-theme='endfield'] .ask {
+  background: #ffffff;
+  border: 2px solid #212121;
+  border-radius: 8px;
+  box-shadow: inset 4px 0 0 #ffe500;
+}
+:root[data-theme='endfield'] .ap-warn { color: #9a5b00; }
+:root[data-theme='endfield'] .trace-flash { box-shadow: 0 0 0 2px #ffe500; }
+@keyframes endfield-flash {
+  0%, 55% { background: rgba(255, 229, 0, 0.35); box-shadow: 0 0 0 2px rgba(255, 229, 0, 0.9); }
+  100% { background: transparent; box-shadow: none; }
+}
+:root[data-theme='endfield'] .trace-flash { animation: endfield-flash 1.7s var(--ease); }
+
+/* 左栏（选中器 / 行 / 栏内搜索 / 拖拽线）整套已经搬进 endfield-parts.css §D，这里不再重复一份。 */
+
+/* 快速定位条（跳转轨）：黑点 + 黄峰，浮层是白卡 */
+:root[data-theme='endfield'] .jump-rail .dot { background: rgba(33, 33, 33, 0.45); }
+:root[data-theme='endfield'] .jump-rail .tick:hover .dot,
+:root[data-theme='endfield'] .jump-rail .tick.peak .dot { background: #ffe500; }
+:root[data-theme='endfield'] .jump-rail .peek {
+  background: #ffffff; border: 1px solid rgba(33, 33, 33, 0.22); border-radius: 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十四 · 窗口顶栏与三键：黑条白字，三键走件 3b 的圆盘语言
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .kh-winbar { background: #212121; color: #ffffff; }
+:root[data-theme='endfield'] .kh-winbar .wb-brand,
+:root[data-theme='endfield'] .kh-winbar .wb-tag { color: #ffffff; }
+:root[data-theme='endfield'] .kh-winbar .wb-mbtn { color: rgba(255, 255, 255, 0.78); border-radius: 999px; }
+:root[data-theme='endfield'] .kh-winbar .wb-mbtn:hover,
+:root[data-theme='endfield'] .kh-winbar .wb-mbtn.on { background: rgba(255, 255, 255, 0.14); color: #ffffff; }
+:root[data-theme='endfield'] .kh-winbar .wb-key { color: rgba(255, 255, 255, 0.78); }
+:root[data-theme='endfield'] .kh-winbar .wb-key:hover { background: rgba(255, 255, 255, 0.14); color: #ffffff; }
+:root[data-theme='endfield'] .kh-winbar .wb-close:hover { background: #c0271f; color: #ffffff; }
+:root[data-theme='endfield'] .wb-pop,
+:root[data-theme='endfield'] .wb-item { color: #212121; }
+
+/* 弹层与拖拽把手 */
+:root[data-theme='endfield'] .resizer:hover { background: #212121; }
+:root[data-theme='endfield'] .td-grip:hover { background: rgba(33, 33, 33, 0.2); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十五 · 三态收口：把原主题留在组件里的 scale()/translateY() 全清掉（A16）
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-btn:active,
+:root[data-theme='endfield'] .icon-btn:active,
+:root[data-theme='endfield'] .send:active,
+:root[data-theme='endfield'] .send:hover:not(:disabled),
+:root[data-theme='endfield'] .step.fold:hover { transform: none !important; }
+:root[data-theme='endfield'] .pulse,
+:root[data-theme='endfield'] .run-status.busy .dot { animation: none; }
+:root[data-theme='endfield'] .run-status .dot { background: #767676; }
+:root[data-theme='endfield'] .run-status.busy .dot { background: #ffe500; box-shadow: 0 0 0 3px rgba(255, 229, 0, 0.35); }
+:root[data-theme='endfield'] .run-status.warn .dot { background: #ff7d1a; }
+:root[data-theme='endfield'] .spin,
+:root[data-theme='endfield'] .fa-spin { color: #212121; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十六 · chat 页收口（按"深壳 + 细线 + 亮色只给行动"的终末地语言重排观感）
+
+   16-a 顶栏：母本 `.ef-chat-head` 是深色 app 里的顶栏，右端那一簇装饰（481×91 青色实底
+   + 点阵 + 两个灰圆 + 竖条）在原环境里是"高亮信息区"，搬进亮色主题变成一整块刺眼亮青，
+   把标题栏割成三截、还把 Agent/手机 挤到中间。只保留穿透感：左侧两道青色细竖条
+   + 底部双色 strip + 幽灵线稿（压淡当暗纹），右端整簇去掉。
+   ────────────────────────────────────────────────────────────────────────── */
+/* 左侧那两道"穿框"竖条：母本顶栏的装饰，但在 client 里顶栏左端已经有品牌区 + 折叠钮，
+   竖条正好从折叠钮中间穿过去，远看就是一个"青色圆点"，只会添乱 ⇒ 直接去掉。
+   （deco / ghost / strip 同理：母本那套顶栏装饰是给"角色名 + HUD"的独立页面用的。） */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__deco,
+:root[data-theme='endfield'] .titlebar .ef-chat-head__bar { display: none; }
+:root[data-theme='endfield'] .titlebar .ef-chat-head__ghost { opacity: 0.55; }
+/* 底边那条双色 strip：母本 8u 高，app 尺度下压到 3px —— 太高会像一条色带压住标题栏 */
+:root[data-theme='endfield'] .titlebar .ef-chat-head__strip { height: 3px; }
+/* 顶栏高度按 app 尺度收口（母本 105u 是 1920 画布的量，换算会到 55px，
+   但 client 的 .titlebar 是 44px 基线，混用会让左右两栏对不齐） */
+:root[data-theme='endfield'] .titlebar.ef-chat-head { height: 46px; overflow: hidden; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   16-b 右栏标签条：母本 `.ui-announcement__top` 是**浅色页面**里的「公告标签栏」——
+   浅灰斜纹顶带 + 上圆角页签。搬进深灰右栏后，那条斜纹带成了深底上的一块浅色胶囊，
+   观感就是"四个白方块"。这里改成深色栏上的图标页签：选中给亮黄（终末地只把亮色给行动）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__top {
+  height: 34px;
+  padding: 0 6px;
+  background: none;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tabs {
+  position: static;
+  transform: none;
+  width: auto;
+  gap: 3px;
+}
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tab {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+  background: transparent;
+  color: #b9b9b9;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tab:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tab.is-active { height: 26px; background: #ffe500; color: #212121; }
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tab-icon {
+  width: 16px;
+  height: 16px;
+  background: none;
+  border-radius: 0;
+  font-size: 12px;
+  color: inherit;
+}
+:root[data-theme='endfield'] .dock-tabs .ui-announcement__tab.is-active .ui-announcement__tab-icon { background: none; color: #212121; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   16-c 输入区：`.ef-chat-frame`（五段外框，1.5px）一直都在，问题是里面的 `.comp-wrap.comp`
+   带着母本 hk设计 的「2px 白边 + r24 + 外投影」几乎同尺寸叠在它上面 ⇒ 外框线被白边埋掉，
+   视觉上只剩一张悬浮圆角白卡（他上次打回的就是这个观感）。
+   按审美取舍：卡片退成"框内纸面"（无白边、无外影、圆角与外框对齐），把结构线让出来。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .composer .comp-wrap.comp {
+  border: 0;
+  border-radius: 0 0 12px 12px;
+  background: #f0eeee;
+  box-shadow: inset 0 0 0 1px rgb(240, 238, 238);
+}
+/* 聚焦态：母本靠 3px 亮黄外环，这里保留但收紧成 2px，免得在灰画布上糊成一团 */
+:root[data-theme='endfield'] .composer .comp-wrap.comp:focus-within {
+  box-shadow: inset 0 0 0 1px rgb(240, 238, 238), 0 0 0 2px #ffe500;
+}
+/* 外框线：母本 202 是浅背景上的值，压在 #a8a6a6 画布上等于隐形（1.1:1）。
+   终末地的结构线一向是深色 hairline ⇒ 压到 #3d3d3d；1.5px 在灰网格上仍然糊，
+   把线加到 2px（母本的 1.5 是 1920 画布上的量，app 尺度本就该重定）。
+   注：border 简写走 var()，个别压缩器会把宽度拍回 1px ⇒ 这里再显式兜一条 width。 */
+:root[data-theme='endfield'] .composer .ef-chat-frame {
+  --ef-frame-color: #3d3d3d;
+  --ef-frame-line: 2px;
+  border-width: 2px;
+  border-top-width: 2px;
+}
+/* 母本顶边是"左段 + 缺口 + 右端一小块"的三段画法（缺口留给下沉折线），但那是 1920 画布
+   上能读出的细节；app 尺度下 2px 线在缺口处断开只会看成"线没接上" ⇒ 顶边改回整条，
+   三色条直接咬在框沿上。空出来的两个伪元素改画**四角 L 形角标**（母本 composer-box 的
+   `.ef-frame-mark`，32px L；三色条本身也只是"右上角那一个角"的变体）。 */
+:root[data-theme='endfield'] .composer .ef-chat-frame::before,
+:root[data-theme='endfield'] .composer .ef-chat-frame::after {
+  content: '';
+  position: absolute;
+  display: block;
+  width: 10px;
+  height: 10px;
+  background: none;
+  border: 0;
+  pointer-events: none;
+}
+/* 左上 */
+:root[data-theme='endfield'] .composer .ef-chat-frame::before {
+  left: -2px;
+  top: -2px;
+  right: auto;
+  border-left: 2px solid #ffe500;
+  border-top: 2px solid #ffe500;
+}
+/* 右下 */
+:root[data-theme='endfield'] .composer .ef-chat-frame::after {
+  right: -2px;
+  bottom: -2px;
+  top: auto;
+  left: auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid #ffe500;
+  border-bottom: 2px solid #ffe500;
+}
+/* 框里那层纸面：`.comp-wrap` 是 block + width:auto，会撑到 878（比框内宽多 2px）把 2px 框线
+   盖掉一半 ⇒ 外框加 2px 内衬，让线完整露出来；内层圆角比外框小 2px 形成嵌套关系。 */
+:root[data-theme='endfield'] .composer .box.ef-chat-frame { padding: 2px; }
+/* 三色条：母本口径是"悬在框线之上"（top -3u），但 app 尺度下 4px 的间隙看着像飘着，
+   收到 -1px 让它咬住框沿。 */
+:root[data-theme='endfield'] .composer .ef-tri-bars { top: -1px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   16-d 消息流：AI 正文不再走"深灰大气泡"
+   母本 baker 是对话式 app，气泡 `--max:475u` 且是深灰面；KHarness 的 AI 回复是长文档，
+   masters 第 749 行把 `--max` 放开到 100% 之后，那层深灰面就变成一整块压在灰画布上的重铅
+   （半屏纯色、无边界感）。按审美取舍：
+     · AI 正文 = 白纸 + 黑字（满宽、小圆角、去掉尾巴）—— 长文本要的是可读性，不是气泡；
+     · 用户发言 = 保留母本的深块反色 + 尾巴（短、右对齐，作视觉锚点）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .body.md.ef-bubble {
+  background: #f0eeee;
+  color: #212121;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(33, 33, 33, 0.1);
+}
+/* AI 气泡不要尾巴：尾巴只属于"人说的话" */
+:root[data-theme='endfield'] .body.md.ef-bubble::before { display: none; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   16-e 质感层：斜纹（A13「内部同心包围线 + 灰色密布斜线」）
+   母本 `.ef-pill__tex` 是一张 141×61.5u 的 base64 斜纹贴图（`--tex-yel`），
+   在 app 尺度（胶囊只有 32px 高）下被压成一块糊掉的深色方块 —— 截图里黄胶囊右端
+   那块"黑补丁"就是它。改成可随尺寸自适应的 CSS 斜纹，线宽/周期按 app 尺度重定。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .ef-pill .ef-pill__tex { display: none; }
+:root[data-theme='endfield'] .ef-pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(135deg, rgba(33, 33, 33, 0.09) 0 3px, transparent 3px 7px);
+}
+/* 母本圆盘 Ø32u 塞不进 32px 高的胶囊（会被裁成方块），缩到 20 并右移让位 */
+:root[data-theme='endfield'] .ef-pill .ef-pill__ico {
+  width: 20px;
+  height: 20px;
+  right: 8px;
+  margin-top: -10px;
+}
+/* 斜纹盖在面上，字与图标要抬到它上面 */
+:root[data-theme='endfield'] .ef-pill > * { position: relative; z-index: 1; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   16-f 纹理层（A13「内部同心包围线 + 灰色密布斜线」）
+   母本的面料都不是纯色：深灰栏与浅纸面上都压着一层 135° 的密斜线，
+   远看是"材质"，近看才看清。这里给三处大面积的面补上，透明度压到 3% 上下 ——
+   斜纹是"质感"，一浓就变成"花纹"。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .rail-inner,
+:root[data-theme='endfield'] .dock-inner {
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 2px, transparent 2px 6px);
+}
+/* 输入框那层纸面：极淡斜纹，配合 2px 内环读成"印过纹的纸" */
+:root[data-theme='endfield'] .composer .comp-wrap.comp {
+  background-image: repeating-linear-gradient(135deg, rgba(33, 33, 33, 0.028) 0 2px, transparent 2px 6px);
+}
+/* 左栏两颗动作胶囊（.rail .action）的斜纹已按母本 `.ef-pill__tex` 重写进 endfield-parts.css §D，
+   这里不再画第二遍 —— 上一版那条「整颗铺满」的斜纹是我自己发明的，母本只在右端 141u 上有。
+   diff 容器：与代码块同一套"深面"语言（浅底 + 浅灰字读不出来） */
+:root[data-theme='endfield'] .diff {
+  background: #212121;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme='endfield'] .diff .diff-line { color: #c9c7c7; }
+:root[data-theme='endfield'] .diff .diff-line.meta { background: #2b2b2d; color: #a0a0a0; }
+/* 消息上方那排小动作（复制/撤回/从此回退）：原主题走 --text-3 的灰，
+   压在 #a8a6a6 画布上只有 1.6:1（截图里几乎读不出来）⇒ 压深，hover 才给亮黄。 */
+:root[data-theme='endfield'] .msg .link-btn { color: #4a4a4a; }
+:root[data-theme='endfield'] .msg .link-btn:hover { color: #212121; }
+/* 左栏分组标题前那枚"轨道节点"：13×6 的深色小方块，远看像"图标没加载"，
+   收成一条 2px 的中灰短线 —— 保留轨道语言，不再冒充图标。 */
+:root[data-theme='endfield'] .rail .tree-label::before {
+  width: 10px;
+  height: 2px;
+  margin-top: -1px;
+  border: 0;
+  background: #7a7a7a;
+}
+/* 用户那颗保持深块，但把母本的 #454444 压到底 → 与白纸拉开层次 */
+:root[data-theme='endfield'] .body.user-body.ef-bubble {
+  background: #3d3d3d;
+  color: #ffffff;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十七 · 对比度收口（本轮用扫描器逐条量出来的，不许再靠肉眼）
+   判据 WCAG 2.1：正文 4.5:1、大字（≥18.66px 或 ≥14px 且 ≥700）3:1。
+   底色的相对亮度：#a8a6a6 = .383 / #484848 = .073 / #3c3c3c = .045 / 白 = 1
+   ⇒ 浅灰底上**只有 ≤ #3a3a3a 的字过 AA**，深灰底上只有 ≥ #c2c2c2 的过。这条是硬约束。
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ① 顶栏项目名后面那截「· D:\…」：原主题按 --text-3(#3a3a3a) 画，
+      压在母本顶栏的 #3c3c3c 上只有 **1.03**（截图里等于没有）。
+      顶栏在终末地下是深板，字族必须走白 —— 取母本 --bar-light #c2c2c2（6.0:1）。 */
+:root[data-theme='endfield'] .titlebar .muted,
+:root[data-theme='endfield'] .titlebar .title .muted,
+:root[data-theme='endfield'] .titlebar .cwd,
+:root[data-theme='endfield'] .ef-chat-head__name .muted {
+  color: #c2c2c2;
+  font-weight: 400;
+}
+
+/* ② 右栏「计划任务 / 暂无计划任务。」：父级 .dock 的 muted 规则是给深灰栏写的 #c2c2c2，
+      但栏里这几块是**白卡**（.card），浅灰字压白底只有 **1.78** ⇒ 卡内按浅底取深字。 */
+:root[data-theme='endfield'] .dock:not(.composer) .card .muted,
+:root[data-theme='endfield'] .dock:not(.composer) .card p,
+:root[data-theme='endfield'] .dock:not(.composer) .k-row-card .muted {
+  color: #5a5a5a;
+}
+:root[data-theme='endfield'] .dock:not(.composer) .card .k-sec-label { color: #5a5a5a; }
+
+/* ③ 输入区那一行元信息（首字 / tok/s / 上下文 7%）：母本 .meta-bar.info 的 #7d7b7b
+      是给母本自己的浅色 dock 用的，压在 #a8a6a6 上只有 **1.74** ⇒ 收到 #3a3a3a（4.7:1）。 */
+:root[data-theme='endfield'] .composer .meta-bar.info,
+:root[data-theme='endfield'] .composer .meta-bar.info .mb-item,
+:root[data-theme='endfield'] .composer .meta-bar.info .mb-dot { color: #3a3a3a; }
+:root[data-theme='endfield'] .composer .meta-bar.info b { color: #212121; }
+
+/* ④ 左栏选中行：原主题写「文字换纯黑」，可选中面（.tree-pill）是另一层绝对定位的兄弟，
+      一旦它没铺到位，纯黑就压在 #484848 栏上 ⇒ **2.30**（截图里那行几乎读不出来）。
+      选中面改为由行自己带（母本 .ef-bar.is-selected 的 #c2c2c2 + #333），黑字随之落地。 */
+:root[data-theme='endfield'] .rail .chat-row.active,
+:root[data-theme='endfield'] .rail .proj-head.active {
+  background: #c2c2c2;
+  color: #1b1b1b;
+  box-shadow: inset 0 0 0 1px #4d4c4c;
+}
+:root[data-theme='endfield'] .rail .chat-row.active .name { color: #1b1b1b; font-weight: 700; }
+:root[data-theme='endfield'] .rail .chat-row.active .meta { color: #3a3a3a !important; }
+
+/* ⑤ 消息上方那排小动作（复制 / 撤回 / 从此回退）：#4a4a4a 在 #a8a6a6 上只有 **3.66** ⇒ #3a3a3a */
+:root[data-theme='endfield'] .msg .link-btn,
+:root[data-theme='endfield'] .msg .link-btn.unfold { color: #3a3a3a; }
+:root[data-theme='endfield'] .msg .link-btn:hover { color: #000000; }
+
+/* ⑥ 工具步骤的增删计数：绿 #0a7a43 = 2.53、红 #b3211a = 3.16（底色 #b4b2b2）。
+      要过 4.5 只能把明度压下去：绿 → #0b4a29(4.6)、红 → #8a1510(4.5)。色相不动，只压明度。 */
+:root[data-theme='endfield'] .step .num-pos { color: #0b4a29; }
+:root[data-theme='endfield'] .step .num-neg { color: #8a1510; }
+
+/* ⑦ 设置页标签条（母本 .ui-announcement__tab）：未选 #9b9b9b/#3d3d3d = 3.91、选中白/#8c8d91 = 3.32。
+      形状照母本，明度按 AA 重定：未选 → #c2c2c2（6.0）；选中 → 母本那颗浅灰页签 #f5f5f5 + #2c2c2c 字（12.8）。 */
+:root[data-theme='endfield'] .k-tab,
+:root[data-theme='endfield'] .ui-announcement__tab { color: #c2c2c2; }
+:root[data-theme='endfield'] .k-tab.active,
+:root[data-theme='endfield'] .ui-announcement__tab.is-active {
+  background: #f5f5f5;
+  color: #2c2c2c;
+  font-weight: 700;
+}
+:root[data-theme='endfield'] .k-tab:hover { color: #ffffff; }
+
+/* ⑧ 弹窗黄标头上那行 kicker（母本 .u4 .hd .lg 的 #8a6d00 压在 #ffd42d 上 = **3.45**）
+      ⇒ 取母本自己在 `.lg::before` 里用的那档 #5a4800（6.3:1）。 */
+:root[data-theme='endfield'] .u4 .hd .lg { color: #5a4800; }
+
+/* ⑨ 代码块：`.md code` 这条原意是「行内代码」，但它同时命中了 `pre > code`，
+      把整块代码的深底刷成了 #f2f1f1 —— 而语法色是给深底配的（字符串 #9be8b8 压浅底 = **1.27**）。
+      行内代码只认「不在 pre 里」的那些。 */
+:root[data-theme='endfield'] .md :not(pre) > code {
+  background: #f2f1f1;
+  color: #212121;
+  border-radius: 3px;
+}
+:root[data-theme='endfield'] .md pre,
+:root[data-theme='endfield'] .md pre > code,
+:root[data-theme='endfield'] .md-code,
+:root[data-theme='endfield'] .md-code > code {
+  background: #212121;
+  color: #f2f2f2;
+}
+:root[data-theme='endfield'] .md-code-bar { background: #212121; color: #c2c2c2; }

@@ -1,0 +1,269 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   endfield-parts.css · 终末地件表（从样张墙与母本逐字搬来，不是我自己写的近似）
+   ---------------------------------------------------------------------------
+   他 2026-10-14 的判决：「规划里说好了侧边的项目会话栏什么风格、聊天框用 baker 那个项目的、
+   下拉菜单按钮长什么样，你怎么又自己写？实在不行直接去 D:\粥味数据库\可参考 和 …\ai 搬控件」。
+   所以本文件的每一条都有一段**出处**，值取母本/样张字面，只有两类例外，都在行内标了为什么：
+     · 字号：母本按 HarmonyOS Sans 量（20.88 / 32.6 / 24.12），我们不随包那支字体
+       （tokens §⑪ 页头自己写过「凡是带母本标注的尺寸都要按系统字体重新量一遍再用」）⇒ 只换字号，几何一字不动。
+     · hover/active：母本这份没写 hover，§八-③ 是他拍的「控件放上去变亮、点下去变暗」⇒ 补上并标 §八-③。
+   整套挂在 `[data-theme='endfield']` 下，六套原主题一行都不受影响。
+   类名一律用**母本正身名**（pill-btn / dropdown-panel / list-item / chat-input__field / ef-rail / ef-tree__i / ef-bubble），
+   不再自造 —— 这样样张墙、本文件、client 三处是同一套名字，能互相对读数。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   A · 令牌：纯白 / 平涂亮黄 / 特色黑（他 2026-10-14 定的三档），其余只留 hairline
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] {
+  --ef-yellow: #ffe500;            /* 母本 --ui-accent 实测（切换按钮.html 第 16 行） */
+  --ef-action: var(--ef-yellow);
+  --ef-black: #212121;             /* 特色黑：结构面、沉下去那一层、正文 */
+  --ef-surface: #ffffff;           /* 一级面板 = 纯白（样张 §⑬ 的 #dcdcdc 被他否掉） */
+  --ef-panel: #ffffff;
+  --ef-card: #ffffff;              /* 控件面 */
+  --ef-paper: #ffffff;             /* 画布上的"纸块" */
+  --ef-inset: #212121;             /* 凹陷 / 深色字段（搜索框、栏内输入） */
+  --ef-text: #212121;
+  --ef-text-2: #4d4d4d;
+  --ef-muted: #767676;             /* 4.54:1 过 AA；§⑬ 的 #999 只有 2.61 */
+  --ef-ink: #212121;
+  --ef-ink-muted: #767676;         /* 同上：#8c8c8f 在白底只有 3.2:1，占位与次级字一律提到这一档 */
+  --ef-line: rgba(0, 0, 0, 0.10);  /* 母本 --border-light 第 31 行 */
+  --ef-line-2: rgba(0, 0, 0, 0.22);/* 母本 --border-dark 第 32 行 */
+  --ef-focus: var(--ef-yellow);
+  --ef-notify: #ff7d1a;            /* 橙：待办点 / 失败档（①-b 实测档，不吃红） */
+  --ef-danger: #c0271f;
+  --ef-confirm: #0a7a43;
+  --ef-region-on-dark: #1fc9c4;
+  --ef-bg-deep: #ffffff;
+  --ef-canvas-grid: rgba(0, 0, 0, 0.05);
+  /* —— 聊天框外框：母本 baker-chat ChatArea 的五段结构（tokens.css §⑪ 第 618–625 行字面）—— */
+  --ef-frame-line: 1.5px;
+  --ef-frame-color: rgb(202, 201, 201);   /* 母本 $color-chat-frame（_variables.scss:46）实测 */
+  --ef-frame-gap: 264px;                   /* 顶边左段右侧留的缺口 */
+  --ef-frame-seg: 32px;                    /* 缺口右端那一小块 */
+  --ef-frame-notch-w: 232px;               /* 下沉折线 */
+  --ef-frame-notch-h: 10px;
+  --ef-frame-radius: 0 0 12px 12px;        /* 只有下两角圆，上方靠折线开口 */
+  /* —— 三色条：母本实测 品红 / 青 / 黄（tokens.css §⑪ 第 628–634 行字面）—— */
+  --ef-bar-w: 64px;
+  --ef-bar-h: 2px;
+  --ef-bar-gap: 8px;
+  --ef-bar-right: 44px;
+  --ef-bar-magenta: rgb(226, 2, 226);
+  --ef-bar-yellow: rgb(243, 241, 0);
+  --ef-bar-cyan: rgb(1, 241, 241);
+  --ef-bubble-mine-bg: #f0eeee;           /* 母本 baker：我方浅纸 */
+  --ef-bubble-mine-ink: #000000;
+  --ef-bubble-other-bg: #454444;          /* 母本 可参考/聊天框顶栏与消息框.html 第 12 行 --bubble 字面值 */
+  --ef-bubble-other-ink: #ffffff;
+  /* 母本气泡按 1920 画布量（1u=1px ⇒ 字 32.6 / 内衬 17·25 / 圆角 25 / 尾巴 12×28）。
+     client 是 app 尺度 ⇒ 只换这一根旋钮，件内每个数字仍是母本字面（与样张 --ef-port-u 同一手法）。
+     .44 = 母本 32.6u 落到 14.3px 正文，与 client 默认字号同一档。 */
+  --ef-bub-u: 0.44px;
+  --ef-gap-same: 14px;  --ef-gap-cross: 33px;  --ef-gap-speaker: 60px;
+  --ef-strip-gray: #575656;  --ef-strip-dark: #2b2b2d;
+  --ef-strip-ring: #515050;  --ef-strip-under: #626262;
+  --ef-hatch-a: #dcdada;  --ef-hatch-period: 4.5px;
+  --ef-r-1: 2px;  --ef-r-2: 4px;  --ef-r-3: 6px;  --ef-r-pill: 999px;  --ef-r-round: 50%;
+  --ef-size-1: 12px;  --ef-size-2: 13px;  --ef-size-3: 16px;
+  --ef-mono: Consolas, 'Microsoft YaHei', ui-monospace, monospace;
+  --ef-tracking-micro: 0.12em;
+  --ef-numeric: tabular-nums;
+  --ef-ease-ui: cubic-bezier(0.18, 0.78, 0.22, 1);
+  --ef-t-hover: 120ms;
+  --ef-msg-max-w: 860px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   D · 左栏项目 / 会话树 —— 样张 components/rail-tree.html 的值，挂在 client 真类名上（甲路）
+   三件事一件不改：**轨道 left:22 的 1px 渐变竖线、独立斜楔选中器（三段 alpha 黄、瞬移）、
+   不对称留白（内容左 50 / 右 18）**；行高收 32、行分隔 = inset 1px hairline（不占布局）、
+   层级 20px 一档。
+   ⚠ 上一版选中 = 整行换**黑面 + 白字**（我自己拍的）。样张那一档是**整行换浅纸 + 黑粗字**，
+     真正的选中信号是轨道左边那块斜楔黄。他这次的「细节不到位」包括这里 —— 按样张改。
+   ────────────────────────────────────────────────────────────────────────── */
+/* 栏壳：不对称留白 + 轨道线（样张 .ef-rail / .ef-rail::before） */
+:root[data-theme='endfield'] .tree {
+  position: relative; padding: 12px 18px 12px 50px;
+}
+:root[data-theme='endfield'] .tree::before {
+  content: ''; position: absolute; left: 22px; top: 0; bottom: 0; width: 1px;
+  background: linear-gradient(to bottom, transparent 0, var(--ef-line-2) 5%, var(--ef-line) 92%, transparent);
+}
+/* 分组标题（样张 .ef-rail__grp）：等宽 700 12 / 字距 .12em / 大写 / 次级灰 + 轨道上一枚 13×6 小节点 */
+:root[data-theme='endfield'] .tree-label {
+  position: relative; display: flex; align-items: center; gap: 8px; height: 26px; margin: 10px 0 6px;
+  font: 700 12px/1 var(--ef-mono); letter-spacing: var(--ef-tracking-micro);
+  text-transform: uppercase; color: var(--ef-muted);
+}
+:root[data-theme='endfield'] .tree-label::before {
+  content: ''; position: absolute; left: -34px; top: 50%; margin-top: -3px;
+  width: 13px; height: 6px; border: 1px solid var(--ef-line-2); background: var(--ef-inset);
+}
+:root[data-theme='endfield'] .tree-label .icon-btn { margin-left: auto; }
+/* 行：min-height 32 + 1px hairline 分隔（不占布局）；字色走次级，hover 只提字色不换底 */
+:root[data-theme='endfield'] .proj-head,
+:root[data-theme='endfield'] .chat-row {
+  min-height: 32px; padding-top: 0; padding-bottom: 0; padding-left: 0;
+  border-radius: 2px; color: var(--ef-text-2); font-weight: 500;
+}
+:root[data-theme='endfield'] .chat-row { padding-left: 20px; font-size: 13px; }   /* 层级 20px 一档 */
+:root[data-theme='endfield'] .chat-row.free,
+:root[data-theme='endfield'] .proj-head { padding-left: 0; }
+:root[data-theme='endfield'] .proj-head.sub { padding-left: 20px; }
+:root[data-theme='endfield'] .chat-row.sub { padding-left: 40px; }
+:root[data-theme='endfield'] .chat-row.sub.free { padding-left: 20px; }
+:root[data-theme='endfield'] .proj-head + .proj-body .chat-row:first-child,
+:root[data-theme='endfield'] .chat-row + .chat-row { box-shadow: inset 0 1px 0 0 var(--ef-line); }
+:root[data-theme='endfield'] .proj-head:hover,
+:root[data-theme='endfield'] .chat-row:hover { background: none; color: var(--ef-text); }
+/* 选中器：一块浅纸 + 轨道左侧那枚斜楔（样张「选中行换浅纸面 + 黑粗字」+ .ef-rail__sel .stripe）
+   斜楔 = 50×32 · 三段 alpha 黄 82→62→16 · clip-path 右下切角 · transition:none（点行看它跳过去） */
+:root[data-theme='endfield'] .tree-pill {
+  left: 50px; right: 18px; border-radius: 2px;
+  background: #c2c2c2; color: #333333;   /* 母本 .ef-bar.is-selected 第 62 行字面值（深灰栏上唯一读得出的那一档） */
+  box-shadow: inset 0 0 0 1px #4d4c4c;   /* 母本同一行的 --bar-inner */
+  transition: none;                                      /* 母本选中器不动画 */
+}
+:root[data-theme='endfield'] .tree-pill::before {
+  content: ''; position: absolute; left: -50px; top: 0; bottom: 0; width: 50px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ef-yellow) 82%, transparent) 0%,
+    color-mix(in srgb, var(--ef-yellow) 62%, transparent) 78%,
+    color-mix(in srgb, var(--ef-yellow) 16%, transparent) 100%);
+  clip-path: polygon(0 0, 100% 0, 82% 100%, 0 100%);
+}
+:root[data-theme='endfield'] .chat-row.active { color: #000000; font-weight: 700; }
+:root[data-theme='endfield'] .chat-row.active .name { font-weight: 700; }
+/* 栏内搜索：样张「栏内搜索」那一块（32 高、深色字段、放大镜左 9、清除右 8） */
+:root[data-theme='endfield'] .rail-search { position: relative; padding: 0 0 10px; }
+:root[data-theme='endfield'] .rail-search .k-input {
+  height: 32px; min-height: 32px; padding: 0 30px;
+  background: var(--ef-inset); border: 1px solid var(--ef-line); border-radius: 2px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #ffffff; font-size: 13px;
+}
+:root[data-theme='endfield'] .rail-search .k-input::placeholder { color: rgba(255, 255, 255, 0.55); }
+:root[data-theme='endfield'] .rail-search .k-input:focus {
+  border-color: var(--ef-focus);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 2px color-mix(in srgb, var(--ef-focus) 28%, transparent);
+}
+/* 新建项目 / 新建会话两颗 = 母本 `.ef-pill` 的解剖件本体（ai/WINDOW/*.html 第 28–93 行）：
+     border 1u(--d-outer) + inset 0 0 0 1u(--ring) 内环 + r999 + 右端 __tex 交叉斜纹 + 右端 __ico 圆盘。
+   主行动取 `.ef-pill--yellow` 那一套变量（--y-fill/--y-rim/--y-ring/--y-ico）；
+   次行动在深灰栏上取母本 `.pill-btn` 的白面（#f5f5f5 + #333 字）—— 深栏上深胶囊是看不见的。
+   上一版用的是「白面 + 整颗铺满的自造斜纹」，斜纹是我发明的；母本只在右端 141u 那一条上有。 */
+:root[data-theme='endfield'] .rail .action {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 32px; padding: 0 8px 0 16px; border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f5f5f5; color: #333333;
+  font-size: 14px; line-height: 18px; font-weight: 500;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  transition: filter 0.12s linear;
+}
+/* 母本 `.ef-pill__tex`：55°/-55° 交叉细线 + 90° 渐隐遮罩，只占右端 141u */
+:root[data-theme='endfield'] .rail .action::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: calc(var(--u, 0.52px) * 141);
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(55deg, rgba(0, 0, 0, 0.07) 0 0.5px, transparent 0.5px 2.2px),
+    repeating-linear-gradient(-55deg, rgba(0, 0, 0, 0.045) 0 0.5px, transparent 0.5px 2.6px);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 25%, #000 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 25%, #000 100%);
+}
+/* 右端圆盘 = 母本 `.ef-pill__ico`（32u 正圆、面色 --ico、里面装图标） */
+:root[data-theme='endfield'] .rail .action > i {
+  order: 2; margin-left: 0; flex: none;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--d-ico); color: var(--d-fill);
+  font-size: 11px;
+  position: relative; z-index: 1;
+}
+:root[data-theme='endfield'] .rail .action > :not(i) { position: relative; z-index: 1; }
+:root[data-theme='endfield'] .rail .action.primary {
+  background: var(--y-fill); border-color: var(--y-rim); color: var(--y-text); font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--y-ring), 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .rail .action.primary > i { background: var(--y-ico); color: var(--y-fill); }
+:root[data-theme='endfield'] .rail .action.primary::after {
+  background-image:
+    repeating-linear-gradient(55deg, rgba(120, 90, 0, 0.16) 0 0.5px, transparent 0.5px 2.2px),
+    repeating-linear-gradient(-55deg, rgba(120, 90, 0, 0.1) 0 0.5px, transparent 0.5px 2.6px);
+}
+:root[data-theme='endfield'] .rail .action:hover { filter: brightness(1.06); background: #f5f5f5; }
+:root[data-theme='endfield'] .rail .action.primary:hover { background: var(--y-fill); }
+:root[data-theme='endfield'] .rail .action:active { filter: brightness(0.92); }
+/* 拖拽插入线：一条线看不出上下 ⇒ 两端加同向三角（样张 §04） */
+:root[data-theme='endfield'] .drop-above::before,
+:root[data-theme='endfield'] .drop-below::after { background: var(--ef-action); height: 2px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   E · 条状状态件 / 分段钮 / 弧线 / 滚动条 —— 逐字搬 parts.css 件 7 / 11 / 9
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .ef-strip {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  height: 22px; padding: 0 14px; border-radius: var(--ef-r-pill);
+  background: var(--ef-strip-gray); color: #ffffff;
+  box-shadow: inset 0 0 0 1px var(--ef-strip-ring), inset 0 -1px 0 var(--ef-strip-under);
+  font: 700 var(--ef-size-1)/1 var(--ef-mono); letter-spacing: 0.06em; white-space: nowrap; flex: none;
+}
+:root[data-theme='endfield'] .ef-strip--hatch::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background-image: repeating-linear-gradient(135deg, var(--ef-hatch-a) 0 2px, transparent 2px var(--ef-hatch-period));
+  opacity: 0.22;
+}
+:root[data-theme='endfield'] .ef-strip.is-run { background: #ffffff; color: var(--ef-ink); }
+:root[data-theme='endfield'] .ef-strip.is-off { background: var(--ef-strip-dark); color: var(--ef-muted); }
+:root[data-theme='endfield'] .ef-strip.is-bad { background: var(--ef-notify); color: var(--ef-ink); }
+:root[data-theme='endfield'] .ef-seg {
+  display: flex; align-items: center; gap: 4px; height: 44px; padding: 3px;
+  border: 1px solid var(--ef-line); border-radius: var(--ef-r-pill); background: #212121;
+}
+:root[data-theme='endfield'] .ef-seg > button {
+  flex: 1; height: 100%; border: 0; border-radius: var(--ef-r-pill); background: none;
+  color: #a9a9a7; font: 700 var(--ef-size-2)/1 var(--ef-font); cursor: pointer;
+  transition: filter var(--ef-t-hover) linear;
+}
+:root[data-theme='endfield'] .ef-seg > button:hover { filter: brightness(1.12); }
+:root[data-theme='endfield'] .ef-seg > button.is-on { background: #f5f5f5; color: #2c2c2c; }
+:root[data-theme='endfield'] .ef-arc {
+  width: 16px; height: 16px; flex: none; border-radius: var(--ef-r-round);
+  border: 2px solid transparent; border-top-color: var(--ef-action);
+}
+:root[data-theme='endfield'] .ef-arc--sm { width: 12px; height: 12px; border-width: 1.5px; }
+:root[data-theme='endfield'] .ef-arc--lg { width: 20px; height: 20px; border-width: 2.5px; }
+:root[data-theme='endfield'] .ef-arc.is-run { animation: ef-arc 0.9s linear infinite; }
+@keyframes ef-arc { to { transform: rotate(360deg); } }
+/* 滚动条：件 7 的胶囊语言（深色长条 + 内缩一圈，露出画布） */
+:root[data-theme='endfield'] *::-webkit-scrollbar { width: 12px; height: 12px; }
+:root[data-theme='endfield'] *::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); }
+:root[data-theme='endfield'] *::-webkit-scrollbar-thumb {
+  background: #212121; border: 3px solid transparent; border-radius: 999px; background-clip: padding-box;
+}
+:root[data-theme='endfield'] *::-webkit-scrollbar-thumb:hover { background-color: #000000; }
+:root[data-theme='endfield'] *::-webkit-scrollbar-corner { background: transparent; }
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   §G · 标签栏接线（母本 ai/TAB_BAR/公告标签栏.html 的 .ui-announcement__*）
+   KTabs 里那条跟着选的标签滑的 .k-tab-bar 是 client 自己的东西，母本没有：
+   公告栏的页签靠自己的面色分选中/未选中 ⇒ 终末地下把它藏掉，别和页签底面打架。
+   同理 .k-tabs 原本的 border-bottom 会横过页签的下缘（母本页签是要站在下缘上的）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-tabs.ui-announcement__top { border-bottom: 0; }
+:root[data-theme='endfield'] .k-tabs .k-tab-bar { display: none; }
+:root[data-theme='endfield'] .k-tabs.compact .k-tab { width: auto; }
+/* 图标方块里的 FA 图标：母本那块是 46×42 的浅底 + 深色图形，字重要够才压得住 */
+:root[data-theme='endfield'] .ui-announcement__tab-icon i { font-size: 12px; }
+/* 母本 .ef-round 的加减号是 ::before/::after 画的（16×3u 的横条 + 竖条），
+   client 那颗键里的 Font Awesome <i> 再画一遍就成了两个叠在一起的加号 ⇒ 终末地下让位 */
+:root[data-theme='endfield'] .ef-round > i { display: none; }

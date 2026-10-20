@@ -26,6 +26,33 @@ router.get('/app-info', wrap((req, res) => {
   ok(res, { version: b.version, display: b.display, packaged: b.packaged, platform: process.platform, node: process.version });
 }));
 
+// 局域网手机桥状态（前端顶栏那颗「手机」开关显示用）
+router.get('/lanbridge', wrap((req, res) => {
+  const lb = require('../utils/lanbridge');
+  ok(res, lb.status());
+}));
+
+// 局域网手机桥「测试推送」：推一条演示审批给手机，验证协议闭环（联调/自检用）。
+// 只在实际启用时可用；推的是假数据，不会触发任何真实操作。
+router.post('/lanbridge/test', wrap((req, res) => {
+  const lb = require('../utils/lanbridge');
+  if (!lb.enabled()) return fail(res, 400, '手机桥未启用');
+  // push 只写帧、不保证送达，判断「到底推没推出去」得看连接状态（有 session 才算送达）
+  const st = lb.status();
+  if (!st.connected) {
+    return ok(res, { sent: false }, '手机桥未连接，推送未送达（请先启动手机 App 并配对）');
+  }
+  lb.push({
+    kind: 'approval',
+    id: 'test-' + Date.now(),
+    tool: 'run_command',
+    reason: '联调测试：这条审批来自手机桥自检，批准/拒绝都不会执行任何操作',
+    args: { command: 'echo test' },
+    chat_id: null,
+  });
+  ok(res, { sent: true }, '已推送一条测试审批到手机');
+}));
+
 // 布尔型设置统一存成 '1' / '0'
 function boolSetting(v) {
   if (v === true || v === 1 || v === '1' || v === 'true') return '1';
@@ -57,6 +84,9 @@ const SETTING_KEYS = {
   proxy_disabled: boolSetting,
   // 内置浏览器 UA 形态：只有这两种，工具与界面开关共用
   browser_ua_mode: v => (['desktop', 'mobile'].includes(String(v || '').trim()) ? String(v).trim() : null),
+  /* 开屏加载动画开关。它不只被前端读：server/index.js 在返回 index.html 那一刻就要拿它决定
+     往页面里注入 boot=1 还是 boot=0 —— 首帧就得知道播不播，等 uiPrefs.load() 回来再决定已经晚了。 */
+  boot_plate: boolSetting,
   /* 界面尺寸类偏好也放这儿，不放 localStorage：
      桌面端每次启动的端口都可能变，origin 带端口，localStorage 就跟着分家，
      存在那里的东西每启动一次回一次默认值（终端字体「设置了不记住」就是这么来的）。 */
@@ -94,7 +124,11 @@ const SETTING_KEYS = {
   compress_threshold: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 10 && n <= 95 ? String(n) : null; },
   // 同一条会话同时在跑的子智能体上限。0 = 不限（他自己盯着额度时用），判定点 utils/subagent.js。
   // 上限给到 50：再高就已经不是「开几个分身」而是拿它刷接口了，误填一个三位数只会把机器压死。
-  subagent_max_parallel: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 50 ? String(n) : null; }
+  subagent_max_parallel: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 0 && n <= 50 ? String(n) : null; },
+  /* 局域网手机审批/回答桥（lanbridge）：总开关（默认关）+ TCP 端口（默认 45678）。
+     判定点 utils/lanbridge.js 的 enabled()/tcpPort()。开关在聊天页顶栏那颗「手机」，不设到设置页。 */
+  lanbridge_enabled: boolSetting,
+  lanbridge_port: v => { const n = parseInt(v); return Number.isInteger(n) && n >= 1024 && n <= 65535 ? String(n) : null; }
 };
 router.put('/', wrap((req, res) => {
   const updates = [];
@@ -122,6 +156,10 @@ router.put('/', wrap((req, res) => {
   tx();
   // 代理总闸是缓存着读的（每条请求都要判一次），改完立刻失效，不然要等 5 秒才生效
   if (updates.includes('proxy_disabled')) require('../utils/proxy').cacheBust();
+  // 局域网手机桥开关/端口变更：立即启停，不用等重启
+  if (updates.some((k) => k === 'lanbridge_enabled' || k === 'lanbridge_port')) {
+    try { require('../utils/lanbridge').sync(); } catch (e) { /* 启动失败不阻塞保存 */ }
+  }
   ok(res, null, '设置已保存');
 }));
 

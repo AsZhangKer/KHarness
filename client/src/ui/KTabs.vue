@@ -1,26 +1,31 @@
 <template>
-  <div ref="rootEl" class="k-tabs" :class="{ compact: iconMode }" role="tablist">
-    <button
-      v-for="t in items"
-      :key="t.id"
-      :ref="(el) => setRef(t.id, el)"
-      class="k-tab"
-      :class="{ active: t.id === modelValue }"
-      type="button"
-      role="tab"
-      :title="t.label"
-      :aria-selected="t.id === modelValue"
-      @click="select(t.id)"
-    >
-      <i v-if="iconMode && t.icon" :class="t.icon"></i>
-      <template v-else>{{ t.label }}</template>
-    </button>
-    <span class="k-tab-bar" :style="barStyle"></span>
+  <!-- 终末地下这条栏换成母本 ai/TAB_BAR/公告标签栏.html 的页签（hatch 顶带 + 下缘站立的页签 + 图标方块），
+       类名用母本自己的 .ui-announcement__*；其余六套主题照旧走 .k-tabs 那套滑动胶囊。 -->
+  <div ref="rootEl" class="k-tabs ui-announcement__top" :class="{ compact: iconMode }" role="tablist">
+    <div class="ui-announcement__tabs">
+      <button
+        v-for="t in items"
+        :key="t.id"
+        :ref="(el) => setRef(t.id, el)"
+        class="k-tab ui-announcement__tab ui-interactive"
+        :class="{ active: t.id === modelValue, 'is-active': t.id === modelValue }"
+        type="button"
+        role="tab"
+        :title="t.label"
+        :aria-selected="t.id === modelValue"
+        @click="select(t.id)"
+      >
+        <span v-if="t.icon && (iconMode || ef)" class="ui-announcement__tab-icon"><i :class="t.icon"></i></span>
+        <template v-if="!iconMode">{{ t.label }}</template>
+      </button>
+      <span class="k-tab-bar" :style="barStyle"></span>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { themeState } from '../stores/theme';
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -40,6 +45,7 @@ const barW = ref(0);
 const barH = ref(0);
 
 const iconMode = computed(() => props.iconsOnly || compact.value);
+const ef = computed(() => themeState.id === 'endfield');
 
 function setRef(id, el) {
   if (el) refs[id] = el;
@@ -91,6 +97,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', measure));
   padding: 0 8px;
   border-bottom: 1px solid var(--border-soft);
 }
+/* 母本那层 .ui-announcement__tabs 只是终末地页签的定位盒；其余六套主题里让它从盒树里消失，
+   按钮仍旧直接排在 .k-tabs 这条 flex 上 —— 不然六套主题会平白少掉 4px 间距。
+   终末地下母本规则 (0,3,0) 把它改回 display:flex，这条 (0,1,0) 自然让位。 */
+.ui-announcement__tabs {
+  display: contents;
+}
 .k-tab {
   position: relative;
   z-index: 1;
@@ -121,7 +133,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', measure));
     height 0.2s var(--ease), opacity 0.15s ease;
 }
 .k-tab { z-index: 1; }
-@media (prefers-reduced-motion: reduce) {
-  .k-tab-bar { transition: none; }
-}
+
+  html[data-motion='off'] .k-tab-bar{ transition: none; }
+
 </style>

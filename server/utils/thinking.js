@@ -125,22 +125,34 @@ function createReasoningSplitter() {
     push(chunk) {
       let s = carry + String(chunk || '');
       carry = '';
-      const out = { content: '', reasoning: '' };
+      const out = { content: '', reasoning: '', pieces: [] };
+      /* pieces 是按**扫描顺序**切出来的段：同一块里 "甲 <thinking>想</thinking> 乙" 会得到
+         [content 甲, reason 想, content 乙]。
+         只给 content / reasoning 两个聚合串的话，这个块内交替就丢了 —— 发出去只剩「甲乙 | 想」，
+         界面上看到的正是「一段连续正文被思考强行劈开」（他报的那个症状）。
+         聚合串仍保留：入库、用量估算、老调用方都在用。 */
+      const put = (text, isReason) => {
+        if (!text) return;
+        const kind = isReason ? 'reason' : 'content';
+        if (isReason) out.reasoning += text; else out.content += text;
+        const last = out.pieces[out.pieces.length - 1];
+        if (last && last.kind === kind) last.text += text;
+        else out.pieces.push({ kind, text });
+      };
       let pos = 0;
       for (;;) {
         const tags = inReasoning || nativeOpen ? closeTags() : openTags();
         const hit = findTag(s, pos, tags);
         if (!hit) {
           const tail = s.slice(pos);
-          const hold = inReasoning || nativeOpen ? holdLength(tail) : holdLength(tail);
+          const hold = holdLength(tail);
           const emitText = hold ? tail.slice(0, tail.length - hold) : tail;
-          if (inReasoning || nativeOpen) out.reasoning += emitText; else out.content += emitText;
+          put(emitText, inReasoning || nativeOpen);
           carry = hold ? tail.slice(tail.length - hold) : '';
           pos = s.length;
           break;
         }
-        const before = s.slice(pos, hit.index);
-        if (inReasoning || nativeOpen) out.reasoning += before; else out.content += before;
+        put(s.slice(pos, hit.index), inReasoning || nativeOpen);
         const hitStr = s.substr(hit.index, hit.length).toLowerCase();
         // 标签切换：成对标签按开/闭切换；原生 token 开启思考段，遇到下一个 token 或闭标签结束
         const isPairOpen = TAG_PAIRS.some(p => p[0] === hitStr);
@@ -164,7 +176,13 @@ function createReasoningSplitter() {
     flush() {
       const rest = carry;
       carry = '';
-      return rest ? (inReasoning || nativeOpen ? { content: '', reasoning: rest } : { content: rest, reasoning: '' }) : { content: '', reasoning: '' };
+      if (!rest) return { content: '', reasoning: '', pieces: [] };
+      const isReason = inReasoning || nativeOpen;
+      return {
+        content: isReason ? '' : rest,
+        reasoning: isReason ? rest : '',
+        pieces: [{ kind: isReason ? 'reason' : 'content', text: rest }]
+      };
     }
   };
 }

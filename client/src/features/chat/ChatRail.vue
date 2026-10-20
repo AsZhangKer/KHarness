@@ -14,7 +14,7 @@
 
       <div class="actions">
         <button class="action primary" type="button" @click="$emit('new-project')">
-          <i class="fas fa-folder-plus"></i> 新建项目
+          <i class="fas fa-folder"></i> 新建项目
         </button>
         <button class="action" type="button" @click="$emit('new-chat')">
           <i class="fas fa-plus"></i> 新建会话
@@ -41,7 +41,7 @@
       <span class="tree-pill" :style="treePillStyle"></span>
       <div v-if="!filtering || shownProjects.length" class="tree-label">
         <span>项目</span>
-        <button class="icon-btn" type="button" title="新建项目" @click="$emit('new-project')">
+        <button class="icon-btn ef-round ef-round--add" type="button" title="新建项目" @click="$emit('new-project')">
           <i class="fas fa-plus"></i>
         </button>
       </div>
@@ -103,7 +103,7 @@
       <!-- 远程连接：与「项目」「最近」同级的一棵大树。展开后是这台机器下的远端项目与会话 -->
       <div v-if="!filtering || shownHosts.length" class="tree-label" style="margin-top:8px">
         <span>远程连接</span>
-        <button class="icon-btn" type="button" title="新建 SSH 连接" @click="$emit('new-host')">
+        <button class="icon-btn ef-round ef-round--add" type="button" title="新建 SSH 连接" @click="$emit('new-host')">
           <i class="fas fa-plus"></i>
         </button>
       </div>
@@ -603,9 +603,9 @@ function onDragEnd() {
   overflow: hidden;
   min-height: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .proj-body { transition: none; }
-}
+
+  html[data-motion='off'] .proj-body{ transition: none; }
+
 .tree-label {
   position: relative;
   z-index: 1;

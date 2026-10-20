@@ -1,7 +1,11 @@
 // 工具参数 schema 单一来源：既用于入参校验，也用于向「文本协议」模型生成格式说明
 const TOOL_SCHEMAS = {
   run_command: { command: { type: 'string', required: true, desc: '要执行的 shell 命令' } },
-  read_file: { path: { type: 'string', required: true, desc: '文件路径' } },
+  read_file: {
+    path: { type: 'string', required: true, desc: '文件路径' },
+    offset: { type: 'number', required: false, desc: '从第几行开始返回（1 起），默认 1 = 文件开头' },
+    limit: { type: 'number', required: false, desc: '本次最多返回多少行（上限 4000），默认到文件末尾' }
+  },
   write_file: { path: { type: 'string', required: true, desc: '文件路径' }, content: { type: 'string', required: true, desc: '完整文件内容' } },
   edit_file: { path: { type: 'string', required: true, desc: '要替换的原文所在文件路径' }, old_text: { type: 'string', required: true, desc: '要替换的原文（唯一匹配）' }, new_text: { type: 'string', required: true, desc: '替换后的新内容' } },
   list_dir: { path: { type: 'string', required: false, desc: '目录路径，默认当前目录' } },

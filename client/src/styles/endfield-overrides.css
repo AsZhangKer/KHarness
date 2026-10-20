@@ -1,0 +1,957 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   终末地 · 覆盖层（本文件必须是 import 链里的**最后一份**）
+   ---------------------------------------------------------------------------
+   为什么单独一份、且必须最后加载：母本（masters / dialogs）与组件 scoped 样式经常
+   特异度打平 —— 例如 scoped 的 `.title-actions.expanded .ta-expand` =(0,3,0) 与
+   `:root[data-theme='endfield'] .ta-expand` 也是 (0,3,0)；同分时**后加载者赢**。
+   上一轮把 `>` 那颗钮改成黑盘白字，结果展开后被 scoped 的 `color: var(--text)`
+   （#212121）顶回去 ⇒ 黑图标画在黑盘上，等于"图标消失了"。
+   把这一轮的修正集中到最后加载的一份文件里，就不用再为每一处去数 0,4,1 还是 0,5,2。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   一 · 顶栏最右那颗 `>`：把颜色钉死（修"展开了 fontawesome 就没了"）
+   实测：collapsed 时白字（1 级），expanded 后 scoped 的
+   `.title-actions.expanded .ta-expand{color:var(--text)}` 把字改成 #212121，
+   而底盘是 #212121 ⇒ 差值 1.0，肉眼看就是"图标消失"。这里按 (0,6,0) 压回去。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .titlebar .title-actions .ta-expand,
+:root[data-theme='endfield'] .titlebar .title-actions .ta-expand:hover,
+:root[data-theme='endfield'] .titlebar .title-actions .ta-expand:focus,
+:root[data-theme='endfield'] .titlebar .title-actions.expanded .ta-expand {
+  background: #ffffff;
+  color: #212121;
+}
+:root[data-theme='endfield'] .titlebar .title-actions .ta-expand i {
+  color: inherit;
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+}
+
+/* 顺带把"折起来那一排"的收缩风险堵掉：.ta-fold 用 grid 0fr→1fr 动画，
+   0fr 那一帧里 flex 子项会被压到 0 宽，图标跟着没（只在动画中间一闪，但看着像掉字）。
+   这里让每颗开关和里面的 <i> 一律不参与收缩。 */
+:root[data-theme='endfield'] .title-actions .ta-fold-in > *,
+:root[data-theme='endfield'] .title-actions .toggle-btn > i {
+  flex: 0 0 auto;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   二 · 圆形图标钮改白盘（他：这些圆形的按钮都改成白色的）
+   母本件 3 的解剖件是"盘 + 同心内环"，只把正负色翻过来：
+     白盘 #ffffff / 深形 #212121 / 一圈内缩同心线 rgba(33,33,33,.5)
+   开着的（.on）保持黑盘白形 —— 这是开关的"接通"语义，也是这套语言里唯一的反色档，
+   翻成白就跟没开一样了。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .icon-btn,
+:root[data-theme='endfield'] .k-icon-btn,
+:root[data-theme='endfield'] .rail-toggle,
+:root[data-theme='endfield'] .dock-toggle,
+:root[data-theme='endfield'] .ta-expand {
+  background: #ffffff;
+  color: #212121;
+  box-shadow: inset 0 0 0 2px #ffffff, inset 0 0 0 3px rgba(33, 33, 33, 0.5);
+}
+:root[data-theme='endfield'] .icon-btn:hover,
+:root[data-theme='endfield'] .k-icon-btn:hover,
+:root[data-theme='endfield'] .rail-toggle:hover,
+:root[data-theme='endfield'] .dock-toggle:hover {
+  background: #f2f0f0;
+  color: #212121;
+}
+:root[data-theme='endfield'] .icon-btn.on,
+:root[data-theme='endfield'] .k-icon-btn.on {
+  background: #212121;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 2px #212121, inset 0 0 0 4px #ffe500;
+}
+/* 圆钮里的 Font Awesome 字形：显式钉一次字体族，防止组件 scoped 的 font-family 复位把它换成正文体
+   （换成正文体后 ::before 的私用区码位就没有字形，浏览器画成空白 = 又一种"消失"）。 */
+:root[data-theme='endfield'] .icon-btn i,
+:root[data-theme='endfield'] .k-icon-btn i,
+:root[data-theme='endfield'] .rail-toggle i,
+:root[data-theme='endfield'] .dock-toggle i {
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   三 · 白色长条胶囊也要有黑色内圈（他：白色的长条胶囊按钮内部也和黄色的一样要有一个黑色的内圈）
+   黄色那颗的内圈是母本 `inset 0 0 0 2u var(--y-ring)`（--y-ring:#363533）；
+   白面这批原来只有一圈 rgba(0,0,0,.1) 的外描边，没有内环 ⇒ 看着是"扁的"。
+   这里补同一道 1px 深内环，值直接取母本 --y-ring，不另造颜色。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .toggle-btn {
+  box-shadow: inset 0 0 0 1px #363533;
+}
+:root[data-theme='endfield'] .toggle-btn.on {
+  background: #212121;
+  color: #ffffff;
+  border-color: #212121;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+:root[data-theme='endfield'] .k-btn:not(.ghost),
+:root[data-theme='endfield'] .btn:not(.ghost),
+:root[data-theme='endfield'] .pill:not(.ghost),
+:root[data-theme='endfield'] .k-pill:not(.ghost) {
+  box-shadow: inset 0 0 0 1px #363533, 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .k-btn.primary,
+:root[data-theme='endfield'] .btn.primary,
+:root[data-theme='endfield'] .send--primary {
+  box-shadow: inset 0 0 0 1px var(--y-ring), 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+/* 左栏两颗动作胶囊：次行动（白面）同样补内环 */
+:root[data-theme='endfield'] .rail .action:not(.primary) {
+  box-shadow: inset 0 0 0 1px #363533, 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+/* 白面胶囊右端那颗圆盘：母本深胶囊用的是 --d-ico #eeeeee（浅盘），那是给深面配的；
+   白面上再铺 #eeeeee 就等于没有盘（截图里「新建会话 / 回收站 / 选项」的图标是裸的）。
+   面翻成白的，盘就跟着翻成黑的（与黄色那颗 --y-ico #333 同一档）。 */
+:root[data-theme='endfield'] .rail .action:not(.primary) > i {
+  background: #333333;
+  color: #ffffff;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   四 · 左栏父子级换成 ai_generate/HIGHLIGHT_STROKE/子项展开栏.html 的 ui-accordion
+   母本读数（原样搬，只按 app 尺度等比缩）：
+     __header  rgba(46,46,46,.92) / r6 / h56→34 / padding 0 14→0 10 / 字 20→13 / 600
+     __chevron 30×30 圆 + 2px #ddd 边，收起时 rotate(180deg) → 18×18 + 1.5px
+     __item   rgba(205,205,203,.55) / #3a3a3a / r6 / h48→30 / padding 0 20→0 10 / 字 17→12.5
+     is-active #2e2e2e 面 + #f2f2f2 字 + inset 4px 0 0 #ffe500
+   ⚠ 唯一偏离母本的一处：__item 的字色。母本 #3a3a3a 压在它自己那块 rgba(205,205,203,.55)
+     上（母本栏底 #1b1c1b）只有 2.6:1，我们的栏底 #484848 更亮、只会更糟。改成 #1b1b1b
+     （≈5.9:1），面料与几何一个数没动。
+   ────────────────────────────────────────────────────────────────────────── */
+/* 列表：母本 .ui-accordion__list = 缩进 10 + 行距 10 */
+:root[data-theme='endfield'] .rail .proj-body-in {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0 6px 10px;
+}
+/* 父级 = 手风琴标头 */
+:root[data-theme='endfield'] .rail .proj-head {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 8px 0 10px;
+  border-radius: 6px;
+  background: rgba(46, 46, 46, 0.92);
+  color: #f2f2f2;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: none;
+}
+:root[data-theme='endfield'] .rail .proj-head:hover {
+  background: rgba(62, 62, 62, 0.95);
+  color: #ffffff;
+}
+/* 项目 / 主机那枚图标 = 母本 __pin 的黄（装饰位，不承载字） */
+:root[data-theme='endfield'] .rail .proj-head > i.fa-folder,
+:root[data-theme='endfield'] .rail .proj-head > i.fa-folder-tree,
+:root[data-theme='endfield'] .rail .proj-head > i.fa-server {
+  color: #ffff0e;
+}
+/* 折角钮 = 母本 __chevron（30 圆 + 2px #ddd 边），缩到 app 档 18 圆 + 1.5px；
+   用 order 把它挪到行尾，模板不动。 */
+:root[data-theme='endfield'] .rail .proj-head > i.fa-chevron-down,
+:root[data-theme='endfield'] .rail .proj-head > i.fa-chevron-right {
+  order: 10;
+  margin-left: auto;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid #dddddd;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 8px;
+  line-height: 1;
+  color: #dddddd;
+  opacity: 1;
+}
+/* 子项 = 母本 __item */
+:root[data-theme='endfield'] .rail .chat-row {
+  min-height: 30px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: rgba(205, 205, 203, 0.55);
+  color: #1b1b1b;
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: none;
+}
+/* 母本行与行之间没有分隔线（靠 6px 缝），把旧的那道 inset 1px 撤掉 */
+:root[data-theme='endfield'] .rail .proj-head + .proj-body .chat-row:first-child,
+:root[data-theme='endfield'] .rail .chat-row + .chat-row {
+  box-shadow: none;
+}
+:root[data-theme='endfield'] .rail .chat-row:hover {
+  background: rgba(222, 222, 220, 0.75);
+  color: #111111;
+}
+/* 选中 = 母本 is-active：整行换深面 + 白字 + 左侧 4px 亮黄竖条（竖条在行内，不再往外挑） */
+:root[data-theme='endfield'] .rail .chat-row.active,
+:root[data-theme='endfield'] .rail .proj-head.active {
+  background: #2e2e2e;
+  color: #f2f2f2;
+  box-shadow: inset 4px 0 0 #ffff0e;
+}
+:root[data-theme='endfield'] .rail .chat-row.active .name,
+:root[data-theme='endfield'] .rail .chat-row.active .meta {
+  color: #f2f2f2 !important;
+  font-weight: 600;
+}
+/* 旧的滑动选中器（绝对定位那层）带着一道伸到栏外的黄楔子，和手风琴的 is-active 是两套语言 ⇒ 撤掉 */
+:root[data-theme='endfield'] .rail .tree-pill {
+  display: none;
+}
+/* 远程连接里嵌套的项目行：再缩一档，保持母本"一层缩 10"的关系 */
+:root[data-theme='endfield'] .rail .proj-head.sub {
+  min-height: 30px;
+  height: 30px;
+  font-size: 12.5px;
+  background: rgba(60, 60, 60, 0.92);
+}
+/* 自由会话那批是 .tree 的直接孩子（没有父级包着）⇒ 自己补上母本列表那 10px 缩进，
+   否则它们比项目下的会话宽 10px、左右都不齐；顺带补母本 6px 的行距。
+   ⚠ 必须同时收掉那 10px 宽度：.chat-row 自己的 width:100% 是「内容盒 100%」，
+     加了左边距之后右沿整体右移 10px ⇒ .tree 的 scrollWidth 比 clientWidth 多 10
+     （实测 258 vs 248），overflow:auto 于是长出一条横向滚动条。
+     width:calc(100% - 10px) 是把它压回去的唯一写法：只改 margin 不改宽度就是本条 bug。 */
+:root[data-theme='endfield'] .rail .tree > .chat-row.free {
+  margin: 0 0 6px 10px;
+  width: calc(100% - 10px);
+}
+/* 兜底：即便以后又有谁把行顶宽（超长标题、内联图标、远程主机名），
+   也让横向溢出被裁掉而不是长出滚动条。overflow-y 仍走 auto 保留竖向滚动。 */
+:root[data-theme='endfield'] .tree {
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
+/* 右栏标签条给那颗"收起右栏"的圆钮让位：实测它钉在 x1286..1318（z-index:5, absolute），
+   而第一个页签从 1308 起 ⇒ 圆盘压掉页签左边 10px（截图里白色圆盘和白色页签糊成一坨）。
+   页签条本身只有 4 颗 30 宽的页签、横向余量很大，往右让 22px 不会挤到它们。 */
+:root[data-theme='endfield'] .dock > .k-tabs.ui-announcement__top {
+  padding-left: 22px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   五 · diff / 返回值那块：改成 ai_generate/MESSAGE_BOX/返回值条框.html 的 .ef-notice__bar
+   母本读数：rgba(0,0,0,.33) 面 / r6 / padding 11.5 20 / 字 #e7e7e7 / line-height 1.5
+   ⚠ 两处偏离母本，都是为了在实际底色上还能读：
+     ① 母本那页底是 #121818（近黑），.33 的黑叠上去仍是黑；我们这块卡是 #f0eeee 白面，
+        .33 叠出来是 #a1a1a1，配 #e7e7e7 只有 1.6:1 ⇒ alpha 提到 .62（#5b5b5b，5.6:1）。
+     ② 母本靠"整行不换色"读增删；我们这里如果整行铺 12% 黄，一整个新建文件就全是新增行 ⇒
+        整块又变成那种橄榄褐（实测 rgb(60,57,29)，就是他说"屎黄"的那块）。
+        改成**不铺行底色**，增删只在左侧给一道 3px 竖条 + 行首 +/- 上色。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .diff {
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: 6px;
+  box-shadow: none;
+  padding: 8px 16px;
+  color: #e7e7e7;
+}
+:root[data-theme='endfield'] .diff .diff-line,
+:root[data-theme='endfield'] .diff .diff-line.add,
+:root[data-theme='endfield'] .diff .diff-line.del {
+  color: #e7e7e7;
+  background: transparent;
+}
+:root[data-theme='endfield'] .diff .diff-line.add {
+  box-shadow: inset 3px 0 0 #eecb0e;
+}
+:root[data-theme='endfield'] .diff .diff-line.del {
+  box-shadow: inset 3px 0 0 #ff6b5e;
+}
+:root[data-theme='endfield'] .diff .diff-line.meta {
+  background: transparent;
+  color: #c2c2c2;
+}
+:root[data-theme='endfield'] .diff .diff-line .gutter {
+  color: #c2c2c2;
+}
+:root[data-theme='endfield'] .diff .diff-line.add .gutter {
+  color: #ffe500;
+}
+:root[data-theme='endfield'] .diff .diff-line.del .gutter {
+  color: #ff8a7a;
+}
+/* add/del 行里那一整段被强制成同一个色的语法色，压到正文色（#e7e7e7）就够读，
+   不必再吃 --diff-add-fg 那一档 */
+:root[data-theme='endfield'] .diff .diff-line.add .code [class^='hljs-'],
+:root[data-theme='endfield'] .diff .diff-line.add .code [class*=' hljs-'],
+:root[data-theme='endfield'] .diff .diff-line.del .code [class^='hljs-'],
+:root[data-theme='endfield'] .diff .diff-line.del .code [class*=' hljs-'] {
+  color: #e7e7e7;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   五之二 · 工具返回内容（web_search / web_fetch / run_command 的 .step-body）
+   他：这类 tool calling 的返回 box 对比度还是偏低，改成和「修改文件」那块一样。
+   原来 scoped 里 .step-body 是 color:var(--text-3) 压在 --bg-panel（终末地 = #f0eeee 白面）上，
+   弱灰压白面就是读不清。这里直接套上面 .diff 同一块面料（同一条取值，不另造颜色）：
+     rgba(0,0,0,.62) 面 / r6 / padding 8 16 / #e7e7e7 字 / line-height 1.5
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .step-body {
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: 6px;
+  padding: 8px 16px;
+  margin: 0 8px 8px;
+  color: #e7e7e7;
+  line-height: 1.5;
+}
+/* 返回内容里的语法高亮：同一块深面上不能再让它按白面主题取色，一律跟正文 */
+:root[data-theme='endfield'] .step-body [class^='hljs-'],
+:root[data-theme='endfield'] .step-body [class*=' hljs-'],
+:root[data-theme='endfield'] .step-body code {
+  color: inherit;
+}
+/* 这张卡自己的标头行也提一档：它原来是 --text-2，与其下深面之间层次太弱 */
+:root[data-theme='endfield'] .step > .step-head {
+  color: #2b2b2b;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   六 · 下拉面板：文案比触发条长时「横向变长」，不再一律砍成省略号
+   母本 ai/DROPDOWN_MENU/下拉菜单.html 第 37 行写的是 left:0;right:0（面板 = 胶囊那么宽），
+   那是给「337u 定宽的一整颗 select」量的；我们这排是内容撑宽的胶囊，
+   模型名 / 分支名 / 审批档位都比胶囊长 ⇒ 一律省略号等于看不全。
+   改法：right 让位、面板按内容撑开（min-width 仍不小于触发条，保留母本的「连体等宽」底线），
+   上限定在视口右沿（inline style 由 KDropdown.positionMenu() 写，随窗口尺寸重算）。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .k-dd-menu.pop.ef-dd__menu {
+  right: auto;
+  min-width: 100%;
+  width: max-content;
+  max-width: 90vw;                 /* 下一行由 inline style 收成「视口右沿 - 触发条 left」 */
+  overflow-x: clip;                /* 真长到顶格时由 .ef-dd__label 的省略号收尾，别长横条 */
+  overflow-y: auto;
+}
+/* 省略号降级成「最后一道」：面板还有空间时标签按内容撑开，顶到上限才裁 */
+:root[data-theme='endfield'] .k-dd-menu.ef-dd__menu .ef-dd__label {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   七 · 下拉「白色胶囊本体」按内容撑开（他：还是只有弹出的变、本体不变）
+   ---------------------------------------------------------------------------
+   上一版给文字钉了 max-width:280px，tight 态再钉 140px —— 两个硬上限都是错的：
+   实测（headless，把标签换成用户库最长那 266px 的名字跑宽度扫描）：
+     win 1600 → 不 tight，胶囊 189→312，文字 266 全显 ✓
+     win 1440 → tight，胶囊卡 186，文字只剩 140、省略号 ✗  而此时垫片还空着 174px
+     win 1280 → tight，胶囊卡 186，垫片空 16              ✗
+   也就是说：**一旦掉进 tight 分支，胶囊就再也不长了**，不管行里还有多少余地。
+   
+   改法（不再有任何硬编码像素）：
+     · 文字上限撤掉 ⇒ 胶囊 = 文字自然宽 + 内距 + 尾巴三角；
+     · 多出来的宽度照旧由母本那颗 flex:1 的 .sp 垫片吸收（有余地时垫片缩、胶囊长）；
+     · 整行真挤不下时，只让这颗胶囊收缩（flex:0 1 auto + min-width:0），
+       其余圆钮/发送钮仍是 flex:0 0 auto 不参与收缩 ⇒ 收缩是最后一道，且只牺牲长名字。
+   也就是说「变长」由内容和垫片决定，「缩短」只在溢出时才发生，中间没有死档位。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .comp .bar-txt,
+:root[data-theme='endfield'] .comp .bar.tight .bar-txt {
+  max-width: none;
+}
+/* 胶囊本体的收缩权：只给下拉这一层（scoped 的 `.bar > *{flex:0 0 auto}` 是 (0,1,1)，
+   这里靠限定宿主抬到 (0,5,1) 才压得住）。 */
+:root[data-theme='endfield'] .comp .bar > .k-dropdown {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* 收缩时的下限：至少要留得下「内距 + 尾巴三角 + 两个字」，否则会被压成一道缝。
+   ⚠ 只能给「里面还带着文字」的那颗（模型），不能给整排下拉：
+     降级（tight）时审批/Git 的文字是用 v-if 摘掉的，胶囊本该缩到只剩图标（36px 左右）；
+     一律给 92px 下限等于给三颗空胶囊各白占 56px —— 实测 1440 那档就是这样让模型名
+     差 13px 咬不到自然宽、仍然挂省略号。 */
+:root[data-theme='endfield'] .comp .bar > .k-dropdown:has(.bar-txt) {
+  min-width: 92px;
+}
+/* 触发条里的文字按自然宽度排，胶囊跟着它长；只有被外层压窄时才省略 */
+:root[data-theme='endfield'] .comp .k-dd-trigger.sel > span {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   七之二 · 「本体也跟着变」：按钮与面板同宽（母本 combo 的连体语义）
+   ---------------------------------------------------------------------------
+   他连着两轮说「只有弹出的变，本体不变」。根子在母本那一件的宽度是**一个源**：
+     .dropdown.combo{width:240px} / .combo>.pill-btn{width:240px} / 面板 width:auto(=100%)
+   按钮和面板都读容器那一个宽度 —— 所以母本里不可能出现两者不同宽。
+   我们这排胶囊是「内容撑宽」，容器宽度 = 按钮自己的内容宽（"master" 就 100px），
+   面板却是 max-content ⇒ 两者必然不同宽，看着就是"脱节"。
+   改法：KDropdown.positionMenu() 量出面板自然宽后写进容器 --dd-w，下面让容器取它、
+   按钮取 100% —— 回到母本那一个宽度源。
+   但 --dd-w 只是**打开期间**的临时量：收起时由 KDropdown 的 watch(open) 清掉，
+   容器回到 width:auto ⇒ 按当前标签的自然宽重排。
+   留着不清是错的（他：关掉下拉菜单之后不会自动还原）—— 长名字会话关掉菜单后
+   胶囊一直挂在展开时那个宽度上，看着像卡住了。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .comp .bar > .k-dropdown.ef-dd {
+  /* 特异性要压过第五条那条 (0,5,1) 的 `flex:0 1 auto; min-width:0`。
+     只有**带 .bar-txt 的那颗（模型）**才允许被压窄（它有省略号兜底）；
+     其余几颗（审批 / 思考 / Git）一律不参与收缩 —— 否则模型那颗长到 229/333 时，
+     Git 会被压成 0 宽，整颗消失、连点都点不到（实测 ddW 0，两轮都踩在这里）。 */
+  flex: 0 0 auto;
+  width: var(--dd-w, auto);
+}
+:root[data-theme='endfield'] .comp .bar > .k-dropdown.ef-dd > .k-dd-trigger.sel {
+  width: 100%;
+}
+/* 带 .bar-txt 的那颗（模型）自己要能被压到省略号，所以下限回到 92（三个字 + 三角） */
+:root[data-theme='endfield'] .comp .bar > .k-dropdown.ef-dd:has(.bar-txt) {
+  flex: 0 1 auto;
+  min-width: 92px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   十一 · 设置页 / 模型页（他：给设置、模型页先改改）
+   这两页缺的是**页的语言**：白卡直接铺在灰网格上、页头与卡片之间没有分界、
+   标签栏搬的是「公告标签栏」那条横贯的斜纹带（那件是浅色页面里的横贯标签带，
+   铺在 844px 上就是一条大贴纸）、右上那排动作钮是"图标在左、文字居中"的白胶囊
+   （母本是圆盘在右、文字贴右）。这一节只补「页 / 卡 / 章节 / 标签 / 动作钮 / 行」
+   这六层的语言，不改这两页的 DOM，也不碰六套原主题。
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ① 页头：一条 2px 黑底线把「页」与下面的白卡分开；标题前一枚亮黄竖条（母本的门闩语汇） */
+:root[data-theme='endfield'] .page-head {
+  align-items: flex-end;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #212121;
+  margin-bottom: 18px;
+}
+/* 带动作排的页头（模型页那 7 颗）：动作排**固定另起一行**并右对齐。
+   原先是同一行里让位，7 颗胶囊挤不下就自己折成两行 ⇒ 页头高度不由标题决定，
+   那条 2px 黑线时不时压在按钮中间。排成「标题 / 动作 / 线 / 卡」四段就稳定了。 */
+:root[data-theme='endfield'] .page-head:has(.page-actions) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+:root[data-theme='endfield'] .page-head .page-actions { justify-content: flex-end; }
+:root[data-theme='endfield'] .page-head > div:first-child { flex: 1 1 auto; min-width: 0; }
+:root[data-theme='endfield'] .page-head h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+}
+:root[data-theme='endfield'] .page-head h1::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 17px;
+  background: #ffe500;
+}
+:root[data-theme='endfield'] .page-head p { margin-top: 5px; font-size: 12px; color: #3a3a3a; }
+
+/* ② 页级标签栏 → 母本 .ui-segmented（TAB切换器.html 第 51–53 行）：
+      一颗深色胶囊盒 + 3px 内衬 + 选中那颗换反色白胶囊；盒宽取内容（max-content），
+      不再横贯整页。右栏那排（.dock-tabs，只有图标）不动 —— 它才是"公告标签栏"的用途。 */
+:root[data-theme='endfield'] .page > .k-tabs {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+  height: auto;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+  background: #212121;
+  background-image: none;
+  margin-bottom: 16px;
+  overflow: visible;
+}
+:root[data-theme='endfield'] .page > .k-tabs .ui-announcement__tabs {
+  position: static;
+  transform: none;
+  width: auto;
+  display: flex;
+  gap: 2px;
+}
+:root[data-theme='endfield'] .page > .k-tabs .k-tab {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: transparent;
+  color: #b5b5b3;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+:root[data-theme='endfield'] .page > .k-tabs .k-tab:hover { color: #ffffff; }
+/* 选中的面由那颗滑动的 .k-tab-bar 给（§八 已定义成白胶囊 + 1px 内环），
+   标签自己只把字换成反色 —— 两边都铺一层会变成双层白框 */
+:root[data-theme='endfield'] .page > .k-tabs .k-tab.active,
+:root[data-theme='endfield'] .page > .k-tabs .k-tab.is-active {
+  height: 32px;
+  /* 面自己带：那颗滑动的 .k-tab-bar 在这一页量不到宽度（refs 在 onMounted 那一刻还没有值，
+     barW 停在 0）⇒ 只靠它就是"深字压黑盒"。自带白面后有没有那颗 bar 都读得出来。 */
+  background: #f5f5f5;
+  color: #2c2c2c;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgba(33, 33, 33, 0.12);
+}
+
+/* ③ 白卡：圆角与描边按母本板（r10 / 22% 黑），内距放宽一档，让章节标题有呼吸位 */
+:root[data-theme='endfield'] .page .card {
+  border-radius: 10px;
+  border-color: rgba(33, 33, 33, 0.22);
+  padding: 16px 18px;
+}
+
+/* ④ 章节标题（卡片里那层 h3）= 母本的「门闩 + 细线」：亮黄竖条 + 一道 14% 黑底线。
+      0.08em 字距是母本 kicker 的语气，中文加了读起来像小标题、不像正文。 */
+:root[data-theme='endfield'] .page .card > h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 14px;
+  padding: 0 0 9px;
+  border-bottom: 1px solid rgba(33, 33, 33, 0.14);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #212121;
+}
+:root[data-theme='endfield'] .page .card > h3::before {
+  content: '';
+  flex: none;
+  width: 3px;
+  height: 12px;
+  background: #ffe500;
+}
+:root[data-theme='endfield'] .page .card > h3 .muted {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: #5a5a5a;
+}
+/* 二级标题（h4.sub）：不加竖条，只压字重与色阶，与 h3 拉开一级 */
+:root[data-theme='endfield'] .page .card h4.sub {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #3a3a3a;
+}
+
+/* ⑤ 表单字段名：12px/600 近黑。原先是 --text-3 的 12px/400 —— 一行七个小字段时
+      字段名比输入框里的值还弱，标签与值分不开。 */
+:root[data-theme='endfield'] .field > span,
+:root[data-theme='endfield'] .field > label > span { font-size: 12px; font-weight: 600; color: #212121; }
+
+/* ⑥ 动作钮 = 母本 .ef-pill 的解剖件：右端圆盘 + 两端带点的横线 + 文字贴右。
+      圆盘里放的仍是按钮自己的 FA 图标（母本圆盘里放的也是那颗图标），
+      所以模板一个字节不用改 —— 只是把「图标在左」掰成「圆盘在右」。
+
+      两条踩过的坑写在这里，免得下次再犯：
+      · 横线宽度必须是**定值**。上一版写 `flex: 0 1 112px`，而胶囊是 shrink-to-fit
+        ⇒ 横线一律被压成 0，截图上只剩「文字 + 圆盘」，母本那道线整个消失。
+        母本 __line 119u / 胶囊 306u ≈ 39%，按 32px 高的胶囊折算约 40px。
+      · 只能有**一套**尺寸。先前另写了一条「卡内图标钮」的小档（30px 线 / 22px 盘），
+        它带 `:has()`（0,6,1）压过了这一组（0,4,0）⇒ 页头那排和「保存配置」全都套上了小档，
+        线还保持着灰的 --d-line。这里只留一套，用变量分档，不再让两条规则互相压。
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme='endfield'] .page-actions .k-btn,
+:root[data-theme='endfield'] .page-actions .btn,
+:root[data-theme='endfield'] .form > .k-btn.primary,
+:root[data-theme='endfield'] .form > .btn.primary,
+:root[data-theme='endfield'] .k-btn:has(> i.fas):not(.ghost):not(.xs),
+:root[data-theme='endfield'] .btn:has(> i.fas):not(.ghost):not(.xs) {
+  --ef-line: #9e9c9f;        /* 母本 --d-line */
+  --ef-dot: #9e9c9f;         /* 母本 --lc */
+  --ef-disc: 24px;
+  --ef-disc-bg: #333333;
+  --ef-disc-fg: #f5f5f5;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+  min-height: 32px;
+  padding: 0 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;   /* .k-btn 的基类没带这条：不写就会把「保存配置」折成四行竖排 */
+  overflow: hidden;
+}
+/* 母本两条硬口径落在这里：文字贴右、圆盘占右端 17u ⇒ 有图标的才让出这 40px */
+:root[data-theme='endfield'] .page-actions .k-btn:has(> i),
+:root[data-theme='endfield'] .page-actions .btn:has(> i),
+:root[data-theme='endfield'] .form > .k-btn.primary:has(> i),
+:root[data-theme='endfield'] .form > .btn.primary:has(> i),
+:root[data-theme='endfield'] .k-btn:has(> i.fas):not(.ghost):not(.xs),
+:root[data-theme='endfield'] .btn:has(> i.fas):not(.ghost):not(.xs) { padding-right: 40px; }
+:root[data-theme='endfield'] .page-actions .k-btn > i,
+:root[data-theme='endfield'] .page-actions .btn > i,
+:root[data-theme='endfield'] .form > .k-btn.primary > i,
+:root[data-theme='endfield'] .form > .btn.primary > i,
+:root[data-theme='endfield'] .k-btn:has(> i.fas):not(.ghost):not(.xs) > i,
+:root[data-theme='endfield'] .btn:has(> i.fas):not(.ghost):not(.xs) > i {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  width: var(--ef-disc);
+  height: var(--ef-disc);
+  margin-top: calc(var(--ef-disc) / -2);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  background: var(--ef-disc-bg);
+  color: var(--ef-disc-fg);
+  font-style: normal;
+  z-index: 2;
+}
+/* 横线：三层背景画一条实线 + 两端各一颗点（母本 .ef-pill__line 的 ::before / ::after） */
+:root[data-theme='endfield'] .page-actions .k-btn::before,
+:root[data-theme='endfield'] .page-actions .btn::before,
+:root[data-theme='endfield'] .form > .k-btn.primary::before,
+:root[data-theme='endfield'] .form > .btn.primary::before,
+:root[data-theme='endfield'] .k-btn:has(> i.fas):not(.ghost):not(.xs)::before,
+:root[data-theme='endfield'] .btn:has(> i.fas):not(.ghost):not(.xs)::before {
+  content: '';
+  order: -1;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 5px;
+  margin-right: 10px;
+  background-image:
+    radial-gradient(circle, var(--ef-dot) 0 2px, transparent 2px),
+    radial-gradient(circle, var(--ef-dot) 0 2px, transparent 2px),
+    linear-gradient(var(--ef-line), var(--ef-line));
+  background-position: left center, right center, center center;
+  background-size: 4px 4px, 4px 4px, 100% 1px;
+  background-repeat: no-repeat;
+}
+/* 黄面那颗（保存 / 导入）：线取母本 --y-line #948b12、点取 --lc #9a9118
+   （白线压在黄底上等于没有）；圆盘仍是深盘 + 亮黄图标（母本 --y-ico 的同一关系） */
+:root[data-theme='endfield'] .page-actions .k-btn.primary,
+:root[data-theme='endfield'] .form > .k-btn.primary,
+:root[data-theme='endfield'] .k-btn.primary:has(> i.fas):not(.ghost):not(.xs),
+:root[data-theme='endfield'] .btn.primary:has(> i.fas):not(.ghost):not(.xs) {
+  --ef-line: #948b12;
+  --ef-dot: #9a9118;
+  --ef-disc-bg: #333333;
+  --ef-disc-fg: #ffef01;
+}
+/* 右端斜纹只在**有圆盘**的那几颗上出现（母本 __tex 是垫在圆盘底下的纹理）：
+   没有圆盘时它正好铺在文字下面，看着像"标签纸被划了"。宽度也从 74px 收到 32px。 */
+:root[data-theme='endfield'] .page-actions .k-btn:has(> i)::after,
+:root[data-theme='endfield'] .page-actions .btn:has(> i)::after,
+:root[data-theme='endfield'] .form > .k-btn.primary:has(> i)::after,
+:root[data-theme='endfield'] .form > .btn.primary:has(> i)::after,
+:root[data-theme='endfield'] .k-btn:has(> i.fas):not(.ghost):not(.xs)::after,
+:root[data-theme='endfield'] .btn:has(> i.fas):not(.ghost):not(.xs)::after { width: 32px; }
+:root[data-theme='endfield'] .page-actions .k-btn:not(:has(> i))::after,
+:root[data-theme='endfield'] .page-actions .btn:not(:has(> i))::after,
+:root[data-theme='endfield'] .form > .k-btn.primary:not(:has(> i))::after,
+:root[data-theme='endfield'] .form > .btn.primary:not(:has(> i))::after { display: none; }
+/* 表单里那颗「保存配置」不要铺满整列 —— 母本的钮是定宽胶囊，一条横贯 560px 的黄条不成形 */
+:root[data-theme='endfield'] .form > .k-btn,
+:root[data-theme='endfield'] .form > .btn { align-self: flex-start; }
+/* 网格里的钮同理：grid 子项默认横向拉伸，「添加规则」那颗就成了横贯整格的大黄条 */
+:root[data-theme='endfield'] .page .card .k-btn,
+:root[data-theme='endfield'] .page .card .btn { justify-self: start; }
+
+/* ⑦ 模型页：提供商行 / 折叠标题 / 章 / 表 */
+/* 行：hover 叠一层 5% 黑（母本 .list-item:hover 的同一关系） */
+:root[data-theme='endfield'] .page .card .row {
+  padding: 9px 8px;
+  margin: 0 -8px;
+  border-radius: 5px;
+  border-bottom-color: rgba(33, 33, 33, 0.1);
+  transition: background 0.12s linear;
+}
+:root[data-theme='endfield'] .page .card .row:hover { background: rgba(33, 33, 33, 0.05); }
+:root[data-theme='endfield'] .page .card .row .name { font-size: 13px; font-weight: 600; color: #212121; }
+:root[data-theme='endfield'] .page .card .row .mono.muted { font-size: 11px; color: #4a4a4a; }
+/* 卡内那条折叠标题（.prov-title）与「N / N」计数走同一套 kicker */
+:root[data-theme='endfield'] .prov-head {
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(33, 33, 33, 0.14);
+}
+:root[data-theme='endfield'] .prov-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #212121;
+}
+:root[data-theme='endfield'] .prov-title i { color: #4a4a4a; }
+
+/* 代理那枚（模板里不带 badge-* 修饰的那个 .badge）= 黑面白字；
+   协议那枚（badge-openai / badge-anthropic / badge-custom）保持白面黑描边。
+   这是 §九 的「运行中 = 黑面 / 静态 = 白描边」两档，两枚章一眼分得开。 */
+:root[data-theme='endfield'] .page .card .row .badge:not([class*='badge-']) {
+  background: #212121;
+  border-color: #212121;
+  color: #ffffff;
+}
+
+/* 表格：表头换等宽微字 + 一条 30% 黑底线（母本 .ui-table__row--head 的语气） */
+:root[data-theme='endfield'] .page .table th {
+  padding: 9px 8px;
+  border-bottom: 1px solid rgba(33, 33, 33, 0.3);
+  color: #4a4a4a;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+:root[data-theme='endfield'] .page .table td {
+  padding: 9px 8px;
+  border-bottom-color: rgba(33, 33, 33, 0.1);
+  font-size: 12.5px;
+}
+:root[data-theme='endfield'] .page .table tbody tr:hover { background: rgba(33, 33, 33, 0.05); }
+
+/* ⑧ 小钮字号：.btn.sm / .k-btn.sm 原来是 11px，比正文小两档，在表里读不出来 */
+:root[data-theme='endfield'] .btn.sm,
+:root[data-theme='endfield'] .k-btn.sm { font-size: 12px; }
+
+/* ⑨ 行内文字链（工具清单的「全开 / 全关」、MCP 的「展开工具清单」）：
+      一律 --text-3 压在白卡上偏灰 ⇒ 收到 #3a3a3a 过 AA，hover 才给纯黑 */
+:root[data-theme='endfield'] .link-btn { color: #3a3a3a; }
+:root[data-theme='endfield'] .link-btn:hover:not(:disabled) { color: #000000; }
+
+/* ⑩ 白卡上的胶囊：母本 `.pill-btn` 的 1px rgba(0,0,0,.1) 是给深色底配的 ——
+      同一颗压在 #fff 卡上，边线等于没有，观感是一块"灰圆角块"，看不出可点。
+      按母本 --d-outer 那一族的明度压到 26% 黑（形状、面料、内距一个值不动）。
+      黄面（primary）、红边（danger）、透明档（ghost）各有自己的边，排除掉。 */
+:root[data-theme='endfield'] .page .card :is(.k-btn, .btn, .k-dd-trigger):not(.primary):not(.danger):not(.ghost) {
+  border-color: rgba(33, 33, 33, 0.26);
+}
+/* 主题卡选中态：原先是 1px var(--accent) 亮黄边 —— 亮黄压在白卡上等于没有，
+      选中的那张和没选中的看着一样。改用 §十二 已有的「黑描边 + 里面一圈黄」口径。 */
+:root[data-theme='endfield'] .theme-card.on {
+  border-color: #212121;
+  box-shadow: inset 0 0 0 1px #ffe500;
+}
+:root[data-theme='endfield'] .theme-card:hover { border-color: #212121; }
+
+/* ⑪ 用量页的四张读数卡（.stat）：底色是 --bg-panel(#484848)，而卡里的 .label 仍用 --text-3(#3a3a3a)
+      ⇒ 深字压深面，比值约 1.05，四张卡的标题等于看不见。
+      按白卡口径改成「白面 + 22% 黑线」，标题走等宽微字（§九 的 kicker 语气），数值近黑。 */
+:root[data-theme='endfield'] .page .card .stat {
+  background: #ffffff;
+  border: 1px solid rgba(33, 33, 33, 0.22);
+  border-radius: 8px;
+}
+:root[data-theme='endfield'] .page .card .stat .label {
+  color: #4a4a4a;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+:root[data-theme='endfield'] .page .card .stat .value { color: #212121; }
+
+/* ⑪b 控制页的四张读数卡：它们直接挂在 .page 下（section.grid > .stat），不在 .card 里，
+      ⑪ 那条 `.page .card .stat` 完全够不到 ⇒ 仍是 --bg-elev(#b4b2b2) 灰面 + 8px 圆角，
+      而紧挨着的「快捷入口」白卡是 10px。这里按 .card 同一口径收口（白面 / 22% 黑线 / r10），
+      读数标题沿用等宽微字，数值近黑。内距也对齐 .card，四张卡与白卡才有同一档的呼吸位。 */
+:root[data-theme='endfield'] .page > .grid > .stat {
+  background: #ffffff;
+  border: 1px solid rgba(33, 33, 33, 0.22);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='endfield'] .page > .grid > .stat .label {
+  color: #4a4a4a;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+:root[data-theme='endfield'] .page > .grid > .stat .value { color: #212121; }
+
+/* ============================================================================
+   十、设置 / 模型页收口（⑫–⑭）
+   ============================================================================ */
+
+/* ⑫ 滑动调节器 —— 照 SWITCH_TOGGLE/滑动调节器.html 的 .ui-slider 搬
+      几何/结构一个数没动：轨道 6px + 圆角 3，拇指 34×20 胶囊、margin-top -7，hover 提亮 / active 压暗。
+      只有两处按「亮底」调了色（母本那页底是 #1b1c1b，这里是白卡）：
+        · 轨道「已走过」段：母本 #c9c9c7（暗底上更亮）；白卡上换成 #212121（亮底上更暗），
+          保留母本「走过=高对比、未走=低对比」这层关系；
+        · 拇指：母本的边框是 border:0（暗底上白胶囊自己浮起来）；白卡上必须补一圈深描边，
+          否则一块 #fff→#e4e4e4 的胶囊压在 #f5f5f5 卡面上完全看不见。描边取 §十二 的 #212121。 */
+:root[data-theme='endfield'] .slider-line.ui-slider {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  max-width: 420px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input {
+  --ui-slider-percent: 80%;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  accent-color: auto; /* 关掉原生着色：轨道改由下面的渐变画 */
+  cursor: pointer;
+}
+/* 已走段 #212121 / 未走段 #c9c9c7 —— 与母本同款两段式渐变 */
+:root[data-theme='endfield'] .slider-line .ui-slider__input::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #212121 var(--ui-slider-percent), #c9c9c7 var(--ui-slider-percent));
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #c9c9c7;
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input::-moz-range-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: #212121;
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  margin-top: -7px;
+  border: 1.5px solid #212121;
+  border-radius: 999px;
+  background: linear-gradient(#fff, #e4e4e4);
+  transition: filter 0.16s ease, transform 0.16s ease;
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input::-moz-range-thumb {
+  width: 34px;
+  height: 20px;
+  border: 1.5px solid #212121;
+  border-radius: 999px;
+  background: #f4f4f4;
+}
+/* 与 .ui-interactive 同一套高光：提亮 1.1 / 按压 0.94 */
+:root[data-theme='endfield'] .slider-line .ui-slider__input:hover::-webkit-slider-thumb { filter: brightness(1.1); }
+:root[data-theme='endfield'] .slider-line .ui-slider__input:active::-webkit-slider-thumb { filter: brightness(0.94); transform: scale(0.96); }
+:root[data-theme='endfield'] .slider-line .ui-slider__input:hover::-moz-range-thumb { filter: brightness(1.1); }
+:root[data-theme='endfield'] .slider-line .ui-slider__input:active::-moz-range-thumb { filter: brightness(0.94); }
+:root[data-theme='endfield'] .slider-line .ui-slider__input:focus-visible { outline: 2px solid #ffe500; outline-offset: 2px; }
+/* 禁用（关掉提示音时）：拇指去色、轨道整条变浅，别让它看着还能拖 */
+:root[data-theme='endfield'] .slider-line .ui-slider__input:disabled { cursor: not-allowed; }
+:root[data-theme='endfield'] .slider-line .ui-slider__input:disabled::-webkit-slider-runnable-track {
+  background: #c9c9c7;
+}
+:root[data-theme='endfield'] .slider-line .ui-slider__input:disabled::-webkit-slider-thumb {
+  border-color: #9b9b9b;
+  background: #eeeeec;
+  filter: none;
+}
+/* 轨道/拇指那些伪元素在 Chromium 里必须挂在**元素本身**的选择器上；
+   scoped 里那条 `accent-color: var(--accent)` 已被上面的 accent-color:auto 盖掉。 */
+
+/* ⑬ 「返回」被压扁 —— 实测 .nav-link.back 的 padding 是 0、高 20.14px（其余导航项 36px）。
+      根因：AppShell 里那颗是 <button>，而母本 TAB_BAR 复位写了
+      `:root[data-theme='endfield'] button {padding:0}`（0,2,1），
+      压过 `.nav-link`（0,1,0）；同一排别的项是 <a>，所以只有它塌了。
+      这里把 padding 按 .nav-link 的 8px 10px 补回去（连带 min-height 兜底）。 */
+:root[data-theme='endfield'] .shell-nav .nav-link.back {
+  padding: 8px 10px;
+  min-height: 36px;
+  border: 0;
+  background: none;
+}
+/* 滑块右侧那颗「试听」被压成竖排两个字：.k-btn.ghost 带 min-width:0（endfield.css:238），
+   在 .ui-slider 这个定宽 flex 里就被当成可压缩项，一路缩到只剩一个字宽。补回不可压缩。 */
+:root[data-theme='endfield'] .slider-line .k-btn {
+  flex: 0 0 auto;
+  min-width: auto;
+  white-space: nowrap;
+}
+
+/* ⑭ 模型页的两颗主动作（新建提供商 / 添加模型）走黄面档。
+      这里用 .ef-primary 而不是通用 .primary：tokens.css 的 `.k-btn.primary{background:var(--accent)}`
+      对所有主题生效，直接改 .primary 会把其余六套主题的这两颗一起变色。
+      面料/线/点/圆盘全部取母本黄档那套变量（与「保存配置」同一关系），不另造颜色。 */
+:root[data-theme='endfield'] .page-actions .k-btn.ef-primary {
+  background: var(--y-fill);
+  border-color: var(--y-rim);
+  color: var(--y-text);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--y-ring), 0 2px 4px rgba(0, 0, 0, 0.05);
+  --ef-line: #948b12;
+  --ef-dot: #9a9118;
+  --ef-disc-bg: #333333;
+  --ef-disc-fg: #ffef01;
+}
+/* 右端纹理在黄底上要压深（白线压在黄底等于没有），取母本 --y-line 同档 */
+:root[data-theme='endfield'] .page-actions .k-btn.ef-primary::after {
+  background-image:
+    repeating-linear-gradient(55deg, rgba(120, 90, 0, 0.16) 0 0.5px, transparent 0.5px 2.2px),
+    repeating-linear-gradient(-55deg, rgba(120, 90, 0, 0.1) 0 0.5px, transparent 0.5px 2.6px);
+}
+:root[data-theme='endfield'] .page-actions .k-btn.ef-primary:hover { filter: brightness(1.04); }
+
+/* ============================================================================
+   ⑮ 设置/模型页「卡内次级面」的深灰块 —— MCP / 工具页那一片灰层
+   ──────────────────────────────────────────────────────────────────────────
+   现象（实测）：MCP 页「新增服务器」里两块 .cfg 是 806×177 / 806×72 的 rgb(72,72,72)，
+   压在白色卡片上；里面的字段标签（名称 / transport / command / args / env，色 #3a3a3a）
+   在有那块灰时对比度只有 1.2 —— 等于看不见。工具页的 .tool-card 里同款，两页共 19 块。
+
+   根因是**变量语义错配**，不是某条规则写错：
+     SettingsPage.vue 的 .cfg 写 `background: var(--bg-panel)`，
+     这个变量在其余六套主题里是「比页面底色略亮的次级面」（tokens.css --bg-panel #141414），
+     但终末地给它的是 **#484848 —— endfield.css:46 注释明写「左右栏」**（深色栏专用）。
+   所以凡是「卡内用 --bg-panel 当分组/输出底」的地方，搬进亮色卡片就成了一块深灰。
+
+   处理按语义分两类（与 ⑦ 的 .step-body、diff 保持同一套口径）：
+     · 表单分组 / 输入面 → 不要填充，靠 hairline 圈组（终末地的结构线语言）
+     · 输出 / 报错面    → 深底浅字（与 .diff 同一块面料，本来就是「代码面」）
+   ========================================================================== */
+
+/* 表单分组：去掉深灰填充，只留一圈细线 —— 分组语义还在，灰层消失。
+   字段标签 #3a3a3a 回到白卡上 = 9.8:1。 */
+:root[data-theme='endfield'] .page .card .cfg {
+  background: transparent;
+  border-color: rgba(0, 0, 0, 0.14);
+}
+
+/* 手写输入面（旧类名 .input/.textarea，未走 KInput）：与 .k-input 同款白面黑边 */
+:root[data-theme='endfield'] .page .card .input,
+:root[data-theme='endfield'] .page .card .textarea {
+  background: var(--bg-input);
+  border-color: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+}
+
+/* 输出 / 报错面：深底浅字（逐项对齐 .diff 的计算值，不另造颜色） */
+:root[data-theme='endfield'] .page .card .perm-out,
+:root[data-theme='endfield'] .page .card .tool-out,
+:root[data-theme='endfield'] .page .card pre.cu-err {
+  background: rgba(0, 0, 0, 0.62);
+  border-color: rgba(0, 0, 0, 0.28);
+  border-radius: 6px;
+  color: #e7e7e7;
+}
+/* 报错那档保留 danger 语义色，但在深底上取更亮的一档（原 --danger 压在 .62 黑上只有 2.4:1） */
+:root[data-theme='endfield'] .page .card .tool-out.err,
+:root[data-theme='endfield'] .page .card pre.cu-err {
+  color: #ff9a90;
+}
