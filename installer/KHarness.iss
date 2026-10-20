@@ -15,7 +15,7 @@
 ; 注意这个 d 是「自用测试版」的标志，要和正式版区分开：
 ;   d 版 → pack-prep 带 --dev（version.json 的 packaged:false）→ 界面显示 v1.3.8d、带「调试」板块
 ;   正式版 → pack-prep 不带参数（packaged:true）→ v1.3.8，且安装包文件名不带 d
-#define MyAppVersion "1.4.5d"
+#define MyAppVersion "1.4.5"
 #define AppPublisher "KHarness"
 ; 相对本 .iss 文件所在目录解析
 #define UnpackedDir "..\release-new\win-unpacked"
