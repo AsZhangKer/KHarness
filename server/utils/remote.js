@@ -267,7 +267,7 @@ const SFTP_TYPE = { 2: 'dir', 1: 'file', 5: 'link', 4: 'fifo', 6: 'sock', 7: 'bl
  * （lib/protocol/SFTP.js 里只有 mode/uid/gid/size/atime/mtime + isDirectory() 一组方法），
  * 只有 libssh2/SFTP v4 那种 attrs.type 才有 1=普通 2=目录。
  * 早先按 attrs.type 查表，真机上永远 undefined → 所有条目都被当成文件，
- * 于是「进不去目录」「/home/user 说它不是目录」「mkdirP 以为目录已存在所以不建」一串现象全来了，
+ * 于是「进不去目录」「/home/ker 说它不是目录」「mkdirP 以为目录已存在所以不建」一串现象全来了，
  * 而自测里的假 SFTP 恰好返回了 type 字段，所以测试全绿、真机全废。
  * 现在优先用 isDirectory() 这些判定，再退回按 mode 的 S_IFMT 位算，两条路都不依赖 type。
  */

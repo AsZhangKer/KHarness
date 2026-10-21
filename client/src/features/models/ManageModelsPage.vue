@@ -11,19 +11,17 @@
              一改别的主题这两颗也会变色 —— 那不在本轮范围里。 -->
         <button class="k-btn sm ef-primary" type="button" @click="openProvider()"><i class="fas fa-plus"></i> 新建提供商</button>
         <button class="k-btn sm ef-primary" type="button" @click="openModel()"><i class="fas fa-cube"></i> 添加模型</button>
-        <button class="k-btn sm" type="button" :disabled="testing" @click="testAll">
-          <i class="fas fa-vial"></i> 测试全部
-        </button>
-        <button class="k-btn sm" type="button" :disabled="!sel.length || testing" @click="testSelected">
-          <i class="fas fa-flask"></i> 测试选中 {{ sel.length ? `(${sel.length})` : '' }}
-        </button>
-        <button class="k-btn sm" type="button" :disabled="!sel.length" @click="openBatchEdit">
-          <i class="fas fa-pen-to-square"></i> 批量修改信息
-        </button>
-        <button class="k-btn sm" type="button" :disabled="!sel.length" @click="tsOpen = true">
-          <i class="fas fa-wand-magic-sparkles"></i> 修改Tool风格 {{ sel.length ? `(${sel.length})` : '' }}
-        </button>
-        <button class="k-btn sm danger" type="button" :disabled="!sel.length" @click="batchDelete">批量删除</button>
+        <!-- 其余五颗收进 ⋮：它们都依赖「选中了哪几行」，堆在页头只会把标题挤成两行、
+             而且七颗按钮两行右对齐时参差得像没排版。菜单项沿用同一套 disabled 条件。 -->
+        <KDropdown
+          class="more-dd"
+          :items="moreActions"
+          :model-value="''"
+          width="210px"
+          @update:model-value="onMore"
+        >
+          <template #trigger><i class="fas fa-ellipsis-vertical" aria-hidden="true"></i></template>
+        </KDropdown>
       </div>
     </header>
 
@@ -33,7 +31,7 @@
           <i class="fas" :class="provOpen ? 'fa-caret-down' : 'fa-caret-right'"></i> 提供商
         </button>
         <template v-if="provOpen">
-          <input v-model="qProvList" class="nu-input prov-search" placeholder="搜索提供商名称 / 地址…" />
+          <EfSearch v-model="qProvList" class="prov-search" placeholder="搜索提供商名称 / 地址…" fallback-class="nu-input prov-search" />
           <span class="muted">{{ shownProviders.length }} / {{ providers.length }}</span>
         </template>
       </div>
@@ -219,7 +217,7 @@
     </section>
 
     <!-- 提供商编辑（含上游协议） -->
-    <KModal :open="pOpen" :title="pForm.id ? '编辑提供商' : '新建提供商'" width="620px" @close="pOpen = false">
+    <KModal :open="pOpen" :title="pForm.id ? '编辑提供商' : '新建提供商'" board="panel" tall ef-width="1080" width="620px" @close="pOpen = false" auto-footer ok-text="保存" @ok="saveProvider">
       <div class="form">
         <KInput v-model="pForm.name" label="提供商名称 *" block />
         <KInput v-model="pForm.base_url" label="Base URL（截止到 /v1）*" block placeholder="https://api.example.com/v1" />
@@ -275,14 +273,11 @@
           </label>
         </div>
       </div>
-      <template #footer>
-        <button class="btn" type="button" @click="pOpen = false">取消</button>
-        <button class="btn primary" type="button" @click="saveProvider">保存</button>
-      </template>
+      
     </KModal>
 
     <!-- 模型编辑 -->
-    <KModal :open="mOpen" :title="mForm.id ? '编辑模型' : '添加模型'" width="560px" @close="mOpen = false">
+    <KModal :open="mOpen" :title="mForm.id ? '编辑模型' : '添加模型'" board="panel" tall ef-width="1080" width="560px" @close="mOpen = false" auto-footer ok-text="保存" @ok="saveModel">
       <div class="form">
         <label class="field">
           <span>提供商</span>
@@ -310,14 +305,11 @@
           <textarea class="nu-textarea" rows="2" v-model="mForm.remark"></textarea>
         </label>
       </div>
-      <template #footer>
-        <button class="btn" type="button" @click="mOpen = false">取消</button>
-        <button class="btn primary" type="button" @click="saveModel">保存</button>
-      </template>
+      
     </KModal>
 
     <!-- 批量改别名 / 价格：逐条填，一次提交 -->
-    <KModal :open="bOpen" :title="`批量编辑 ${batchRows.list.length} 个模型`" width="760px" @close="bOpen = false">
+    <KModal :open="bOpen" :title="`批量编辑 ${batchRows.list.length} 个模型`" board="panel" tall ef-width="1080" width="760px" @close="bOpen = false" auto-footer ok-text="应用到全部" @ok="applyBatchEdit">
       <p class="muted">别名留空则保持原样；价格不勾「改」就不会提交该列。</p>
       <div class="table-wrap">
         <table class="table">
@@ -345,14 +337,11 @@
           </tbody>
         </table>
       </div>
-      <template #footer>
-        <button class="btn" type="button" @click="bOpen = false">取消</button>
-        <button class="btn primary" type="button" @click="applyBatchEdit">应用到全部</button>
-      </template>
+      
     </KModal>
 
     <!-- 批量改工具风格：所选模型一次定调 -->
-    <KModal :open="tsOpen" :title="`批量改工具风格 · 已选 ${sel.length} 个`" width="480px" @close="tsOpen = false">
+    <KModal :open="tsOpen" :title="`批量改工具风格 · 已选 ${sel.length} 个`" board="panel" tall ef-width="1080" width="480px" @close="tsOpen = false">
       <div class="form">
         <label class="field">
           <span>工具风格</span>
@@ -368,20 +357,26 @@
         </label>
       </div>
       <template #footer>
-        <button class="btn" type="button" @click="tsOpen = false">取消</button>
-        <button class="btn primary" type="button" :disabled="tsBusy" @click="applyToolStyle">
-          {{ tsBusy ? '应用中…' : `应用到 ${sel.length} 个模型` }}
+        <button class="ef-pill ef-pill--float" type="button" @click="tsOpen = false">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">取消</span>
+          <span class="ef-pill__ico" v-html="ICO_X"></span>
+        </button>
+        <button class="ef-pill ef-pill--yellow ef-pill--float" type="button" :disabled="tsBusy" @click="applyToolStyle">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">{{ tsBusy ? '应用中…' : `应用到 ${sel.length} 个模型` }}</span>
+          <span class="ef-pill__ico" v-html="ICO_LOOP"></span>
         </button>
       </template>
     </KModal>
 
     <!-- 管理这个提供商的模型：远程列表和库里已有的并排勾；取消勾掉一个「已有」的就是删它 -->
-    <KModal :open="rOpen" :title="'管理模型 · ' + (rProvider?.name || '')" width="620px" @close="rOpen = false">
+    <KModal :open="rOpen" :title="'管理模型 · ' + (rProvider?.name || '')" board="panel" tall ef-width="1080" width="620px" @close="rOpen = false">
       <div class="form">
         <div v-if="rLoading" class="muted">拉取中…</div>
         <template v-else>
           <div class="remote-head">
-            <input v-model="mgFilter" class="nu-input prov-search" placeholder="筛选模型 ID（模糊）…" />
+            <EfSearch v-model="mgFilter" class="prov-search" placeholder="筛选模型 ID（模糊）…" fallback-class="nu-input prov-search" />
             <button class="btn sm" type="button" @click="mgCheckAll(true)">全选</button>
             <button class="btn sm" type="button" @click="mgCheckAll(false)">清空</button>
             <button class="btn sm" type="button" @click="mgResetKeep()">只留已有</button>
@@ -421,15 +416,21 @@
       </div>
       <template #footer>
         <span class="muted mg-sum">将新增 {{ mgAdds.length + mgManualNew.length }} / 将删除 {{ mgDeletes.length }}</span>
-        <button class="btn" type="button" @click="rOpen = false">取消</button>
-        <button class="btn primary" type="button" @click="applyManage" :disabled="mgBusy">
-          {{ mgBusy ? '提交中…' : '确定' }}
+        <button class="ef-pill ef-pill--float" type="button" @click="rOpen = false">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">取消</span>
+          <span class="ef-pill__ico" v-html="ICO_X"></span>
+        </button>
+        <button class="ef-pill ef-pill--yellow ef-pill--float" type="button" :disabled="mgBusy" @click="applyManage">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">{{ mgBusy ? '提交中…' : '确定' }}</span>
+          <span class="ef-pill__ico" v-html="ICO_LOOP"></span>
         </button>
       </template>
     </KModal>
 
     <!-- 添加时的单项详细参数：一次填完直接进库，省掉「先加进来再逐个编辑」 -->
-    <KModal :open="bdOpen" :title="'详细参数 · ' + (bdId || '')" width="560px" @close="bdOpen = false">
+    <KModal :open="bdOpen" :title="'详细参数 · ' + (bdId || '')" board="panel" tall ef-width="1080" width="560px" @close="bdOpen = false">
       <div class="form">
         <KInput v-model="bdForm.display_name" label="显示名" block :placeholder="bdId || '留空 = 用模型 ID'" />
         <KInput v-model="bdForm.max_context" label="最大上下文（token）" type="number" block />
@@ -454,9 +455,20 @@
         <p v-if="mgAdds.length > 1" class="muted">下面这个按钮会把这份参数套到当前将要新增的 {{ mgAdds.length }} 个模型上。</p>
       </div>
       <template #footer>
-        <button class="btn" type="button" @click="bdOpen = false">取消</button>
-        <button v-if="mgAdds.length > 1" class="btn" type="button" @click="applyBatchDetailToAll">应用到所有将新增的</button>
-        <button class="btn primary" type="button" @click="saveBatchDetail">保存到这一项</button>
+        <button class="ef-pill ef-pill--float" type="button" @click="bdOpen = false">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">取消</span>
+          <span class="ef-pill__ico" v-html="ICO_X"></span>
+        </button>
+        <button v-if="mgAdds.length > 1" class="ef-pill ef-pill--float" type="button" @click="applyBatchDetailToAll">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">应用到所有将新增的</span>
+        </button>
+        <button class="ef-pill ef-pill--yellow ef-pill--float" type="button" @click="saveBatchDetail">
+          <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+          <span class="ef-pill__label">保存到这一项</span>
+          <span class="ef-pill__ico" v-html="ICO_LOOP"></span>
+        </button>
       </template>
     </KModal>
   </div>
@@ -471,6 +483,12 @@ import KModal from '../../ui/KModal.vue';
 import KInput from '../../ui/KInput.vue';
 import KEmpty from '../../ui/KEmpty.vue';
 import KDropdown from '../../ui/KDropdown.vue';
+import EfSearch from '../../ui/EfSearch.vue';
+
+/* 母本胶囊右端圆盘里那两枚图标（与 KModal 的默认 footer 同一份）：
+   取消 = 两条 3.6 描边的叉；确认 = 6.7 半径的双弧循环箭。 */
+const ICO_X = '<svg viewBox="0 0 24 24"><path d="M7.4 7.4l9.2 9.2M16.6 7.4l-9.2 9.2" fill="none" stroke="#454444" stroke-width="3.6" stroke-linecap="round"/></svg>';
+const ICO_LOOP = '<svg viewBox="0 0 24 24"><g fill="none" stroke="#ffef01" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9.6A6.7 6.7 0 0 0 6.5 8.6M6 14.4a6.7 6.7 0 0 0 11.5 1"/><path d="M18.4 5.6v4h-4M5.6 18.4v-4h4"/></g></svg>';
 
 const SORT_ITEMS = [
   { value: 'id', label: '按添加时间' },
@@ -499,6 +517,31 @@ const viewMode = ref(localStorage.getItem('nu_mm_view') || 'list');
 const sel = ref([]);
 const testing = ref(false);
 const oneTesting = ref(null);
+/** 「⋮」里那五颗动作：全部依赖「选中了哪几行」，堆在页头只会把标题挤成两行。
+    禁用条件与原来逐颗一致 —— 收进菜单不是把限制去掉。 */
+const moreActions = computed(() => [
+  { value: 'testAll', label: '测试全部', disabled: testing.value },
+  {
+    value: 'testSelected',
+    label: sel.value.length ? `测试选中（${sel.value.length}）` : '测试选中',
+    disabled: !sel.value.length || testing.value,
+  },
+  { value: 'batchEdit', label: '批量修改信息', disabled: !sel.value.length },
+  { sep: true },
+  {
+    value: 'toolStyle',
+    label: sel.value.length ? `修改 Tool 风格（${sel.value.length}）` : '修改 Tool 风格',
+    disabled: !sel.value.length,
+  },
+  { value: 'batchDelete', label: '批量删除', disabled: !sel.value.length, danger: true },
+]);
+function onMore(v) {
+  if (v === 'testAll') testAll();
+  else if (v === 'testSelected') testSelected();
+  else if (v === 'batchEdit') openBatchEdit();
+  else if (v === 'toolStyle') tsOpen.value = true;
+  else if (v === 'batchDelete') batchDelete();
+}
 /** 异常模型折叠区：默认收起（迁移后 280 个模型里 135 个异常，铺开会把页面撑满） */
 const showErrors = ref(false);
 const openErrIds = ref(new Set());

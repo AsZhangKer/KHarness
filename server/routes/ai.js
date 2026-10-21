@@ -546,8 +546,8 @@ function decideApproval2(chatId, name, args, cwd, projectRoot, bypass, cuPre) {
 }
 
 // 收集一次工具调用的判定对象：命令原文 + 全部涉及路径（绝对化）+ 参数文本
-// remote=true 时路径按 posix 绝对化（远程会话的 cwd 是 /home/user 这种远端路径，
-// 用 path.resolve 会得出 D:\home\user，越界判定立刻全错 → 每次操作都弹审批）
+// remote=true 时路径按 posix 绝对化（远程会话的 cwd 是 /home/ker 这种远端路径，
+// 用 path.resolve 会得出 D:\home\ker，越界判定立刻全错 → 每次操作都弹审批）
 function collectToolSubjects(name, args, cwd, remote = false) {
   const paths = [];
   const keywords = [];
@@ -692,6 +692,27 @@ const pendingApprovals = new Map();
 
 // 每个模型「已验证可用」的思考参数样式（modelId|mode|effort → 样式序号）
 const thinkingStyleCache = new Map();
+
+/**
+ * 解析「这一发该直接用第几种思考参数样式」。
+ *   返回 undefined = 没结论，从第一种开始试；
+ *         -1        = 已证实全都不支持，一个参数都不发；
+ *         n         = 第 n 种可用。
+ * 内存 cache 优先（同一进程内刚测出来的结论），其次读持久的 thinking_style ——
+ * 重启后 cache 是空的，只靠内存的话每个模型都要重新七连试。
+ */
+function resolveThinkingVariant(row, norm, variants, variantKey, cache = thinkingStyleCache) {
+  const hit = cache.get(variantKey);
+  if (hit !== undefined) return hit;
+  const saved = String((row && row.thinking_style) || '');
+  if (saved === 'unsupported') return -1;
+  const m = saved.match(/^([a-z]+):(.+)$/);
+  if (m && m[1] === norm.mode) {
+    const i = variants.findIndex((v) => v.label === m[2]);
+    if (i >= 0) return i;
+  }
+  return undefined;
+}
 
 // 记住某模型的工具体征（native/text），下次直接按可用方式发起，不再重复试错
 function persistToolStyle(row, style) {
@@ -3263,6 +3284,21 @@ const SUMMARY_PER_MSG_CHARS = 4000;
 const SUMMARY_TRANSCRIPT_CHARS = 60000;
 /** 摘要本身的长度上限。它会跟着之后每一发请求一起发出去，不能无限涨 */
 const SUMMARY_MAX_CHARS = 12000;
+/** 摘要必须覆盖的标题（用来判断模型有没有按要求输出结构，见 compressChat 的重试） */
+const SUMMARY_HEADINGS = ['## 目标', '## 要求与约束', '## 已定决策', '## 工作进展', '## 下一步', '## 关键事实'];
+/**
+ * 压缩时**至少**保留多少 token 的最近对话原样（opencode 的 `keep` 默认值 15,000）。
+ *
+ * 以前只按「消息条数」保留（默认 2 条）：最后两轮里可能挂着几条 16k tok 的工具结果，
+ * 压完只少了摘要以外的一点点，接着又过线 —— 表现就是「压了跟没压一样」。
+ * 现在条数是下限，token 是真正的目标：留够 15k 或留到没得留为止。
+ */
+const COMPRESS_KEEP_TOKENS = 15000;
+/**
+ * 待压缩的部分少于这么多 token 时干脆不压（opencode 的 `NOTHING_TO_COMPACT`）。
+ * 只剩一两千 token 可压时，摘要本身也要一两千 token，净收益≈0，还白丢一段原话。
+ */
+const COMPRESS_MIN_PENDING_TOKENS = 2000;
 
 /** 单条消息进摘要输入的裁剪（保头保尾，中间标注省略了多少字） */
 function clipForSummary(text, cap = SUMMARY_PER_MSG_CHARS) {
@@ -3312,6 +3348,34 @@ function buildSummaryTranscript(rows) {
   return out.join('\n');
 }
 
+/**
+ * 压缩时「保留最近多少条消息」的计数（opencode 的 `keep` 口径）。
+ *
+ * rows 按时间升序（最旧在前）；partsByTurn 是 turn_id → 部件数组（工具往返也算进保留量）。
+ * 规则：至少 keepFloor 条；从最新往回一直加，直到累计 token 达到 keepTokens 或没有更多消息。
+ * 返回【要保留的条数】（0..rows.length）。
+ */
+function compressKeepCount(rows, partsByTurn, keepFloor, keepTokens = COMPRESS_KEEP_TOKENS) {
+  const list = Array.isArray(rows) ? rows : [];
+  const floor = Math.min(Math.max(Number(keepFloor) || 0, 0), list.length);
+  const target = Math.max(0, Number(keepTokens) || 0);
+  const tokOf = (r) => {
+    let n = estimateTokens(r.content || '');
+    for (const p of (partsByTurn && partsByTurn.get(r.id)) || []) {
+      n += Number(p.meta && p.meta.tokens) || estimateTokens(p.payload || '');
+    }
+    return n;
+  };
+  let keep = 0;
+  let acc = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    acc += tokOf(list[i]);
+    keep = list.length - i;
+    if (keep >= floor && acc >= target) break;
+  }
+  return keep;
+}
+
 // 用当前模型把可读上下文压缩为摘要：写入 ai_chats.summary，被压缩消息归档（保留最近几条由设置决定）
 async function compressChat(chatId, modelRow, dispatcher, signal, send = null) {
   const chat = db.prepare('SELECT summary FROM ai_chats WHERE id = ?').get(chatId);
@@ -3323,10 +3387,20 @@ async function compressChat(chatId, modelRow, dispatcher, signal, send = null) {
   // 下限 2 是硬性的：只留最后 1 条（他库里就是 1）时，等于把「模型刚说的那句」连同提问一起换成了摘要，
   // 而摘要又是有损的 —— 表现就是「模型刚说完就忘」。留 2 条刚好是最近一整轮交换
   // （上一条 assistant 回复 + 刚插入的这条 user），模型接得上话。
-  const keep = Math.min(Math.max(numSetting('compress_keep_messages', 2, 0, 50), COMPRESS_KEEP_FLOOR), rows.length);
+  //
+  // 条数只是下限：从最新往回数，直到攒够 COMPRESS_KEEP_TOKENS（opencode 的 keep=15k）或没有更多消息。
+  // 只按条数留是 1.4.5 的老毛病 —— 最后两条挂着几万 tok 的工具结果时，压完等于没压。
+  const keepFloor = Math.min(Math.max(numSetting('compress_keep_messages', 2, 0, 50), COMPRESS_KEEP_FLOOR), rows.length);
+  const keepParts = loadChatParts(chatId);
+  const keep = compressKeepCount(rows, keepParts, keepFloor, COMPRESS_KEEP_TOKENS);
   const toCompress = rows.slice(0, rows.length - keep);
   if (toCompress.length === 0) {
     return { skipped: true, length: (chat.summary || '').length, message: rows.length ? '最近交互保留中，暂无需要压缩的内容' : '没有可压缩的对话内容' };
+  }
+  // 可压的那一段太小 → 不压（摘要本身也要花 token，净收益≈0，还白丢原话）
+  const pendingTok = toCompress.reduce((n, r) => n + estimateTokens(r.content || ''), 0);
+  if (pendingTok < COMPRESS_MIN_PENDING_TOKENS) {
+    return { skipped: true, length: (chat.summary || '').length, message: '可压缩的内容太少（保留段已经够长），这次不压' };
   }
 
   const transcript = buildSummaryTranscript((() => {
@@ -3348,39 +3422,64 @@ async function compressChat(chatId, modelRow, dispatcher, signal, send = null) {
   })());
 
   const prev = chat.summary ? `[此前摘要]\n${chat.summary}\n\n` : '';
-  const prompt =
-    '请将以下网站对话记录压缩为一份简洁摘要，必须保留：讨论的主题与结论、关键命令/文件路径/数字、未完成的任务与约定、语气要点。' +
-    '若输入里已带 [此前摘要]，请把它记载的事实一并保留下去（那是更早的对话，丢了就再也找不回来）。' +
-    '直接输出摘要正文，不要任何多余说明。\n\n' +
-    prev + '[对话记录]\n' + transcript;
+  /* 摘要模板照 opencode 的结构化 checkpoint：固定几个标题，逼模型把「下一步」和「关键事实」写清楚。
+   * 以前是一句自由散文要求（"保留主题与结论、关键命令/文件路径、未完成任务…"），压两三次之后
+   * 摘要就开始漂：越写越泛、把 AGENTS.md 里的约定又复述一遍、真正该记住的下一步反而没了。
+   * 另外明确告诉它「不要复述系统提示词/AGENTS.md/工具说明」—— 那部分是下一个 AI 一定会重新收到的，
+   * 写进摘要纯属浪费 token。 */
+  const prompt = [
+    '请把下面的对话记录压缩成一份结构化摘要，供另一个 AI 接手继续做。',
+    '严格按这些 Markdown 标题输出（不适用的写「（无）」）：',
+    '## 目标', '## 要求与约束', '## 已定决策', '## 工作进展', '### 已完成', '### 进行中', '### 受阻', '## 下一步', '## 关键事实',
+    '规则：',
+    '- 短句、单行要点；不要散文段落，不要嵌套列表。',
+    '- 精确保留文件路径、命令、函数名、报错原文、数字、URL、标识符。',
+    '- 只保留仍然没被回答、仍然需要行动的需求；新记录已经解决的就不要重复。',
+    '- 不要复述系统提示词、AGENTS.md、工具说明、环境信息（下一个 AI 会重新收到这些）。',
+    '- 不要提「上下文被压缩」「摘要」这类关于摘要过程本身的话，也不要调用工具。',
+    '- 若输入已带 [此前摘要]，把其中仍然成立的事实合并进来；被新记录推翻的就更新掉。',
+    '直接输出摘要正文（Markdown），不要前言、不要解释。',
+    '',
+    prev + '[对话记录]\n' + transcript,
+  ].join('\n');
 
-  const req = protocols.buildChatRequest(modelRow, { model: modelRow.model_id, messages: [{ role: 'user', content: prompt }], stream: false });
-  const resp = await fetch(req.url, {
-    method: req.method,
-    headers: req.headers,
-    body: JSON.stringify(req.body),
-    dispatcher,
-    signal
-  });
-  if (!resp.ok) {
-    const detail = (await resp.text().catch(() => '')).substring(0, 200);
-    throw new Error(`压缩请求失败 HTTP ${resp.status}: ${detail}`);
+  // 摘要请求：一次不够再来一次（opencode 的 nudge）。模型偶尔会无视模板、回一段散文，
+  // 这时追加一句提醒重发；两次都不成也只接受内容（格式不完美不该让整轮对话压不了）。
+  const summaryFilled = (t) => SUMMARY_HEADINGS.filter((h) => String(t || '').includes(h)).length >= 2;
+  const callSummary = async (messages) => {
+    const req = protocols.buildChatRequest(modelRow, { model: modelRow.model_id, messages, stream: false });
+    const resp = await fetch(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: JSON.stringify(req.body),
+      dispatcher,
+      signal
+    });
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).substring(0, 200);
+      throw new Error(`压缩请求失败 HTTP ${resp.status}: ${detail}`);
+    }
+    const data = await resp.json();
+    return stripThinking(protocols.normalizeReply(modelRow, data).choices?.[0]?.message?.content || '');
+  };
+  let summary = (await callSummary([{ role: 'user', content: prompt }])).substring(0, SUMMARY_MAX_CHARS);
+  if (!summaryFilled(summary)) {
+    const nudged = await callSummary([
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: summary || '（无输出）' },
+      { role: 'user', content: '你上一次没有按要求的 Markdown 标题输出。不要调用工具，直接用上面列出的那些标题重写一份摘要。' },
+    ]);
+    if (nudged.trim()) summary = nudged.substring(0, SUMMARY_MAX_CHARS);
   }
-  const data = await resp.json();
-  const summary = stripThinking(protocols.normalizeReply(modelRow, data).choices?.[0]?.message?.content || '').substring(0, SUMMARY_MAX_CHARS);
   if (!summary.trim()) throw new Error('压缩结果为空');
 
-  // 压缩前先记下「不随历史变的那一坨」：system 提示词 + AGENTS.md + 技能清单 + 几十个工具 schema。
-  // 压缩后它一分不少，必须继续算进上下文。**取用量对象自己带回来的 overhead_tok**（每次真发请求前用
-  // 同一把尺实测的），而不是像以前那样拿「锚点 − 正文」倒推 —— 锚点里躺着那一轮的工具结果，
-  // 倒推出来的值随着「上一轮跑没跑工具」忽大忽小，压缩后落到的数也跟着失真。
-  const beforeCompress = chatContextUsage(chatId);
-  const fixedOverhead = Number(beforeCompress.overhead_tok) || 0;
+  // 压缩前先取一次用量对象，让「生成期那份旧估算」跟着退场（见 reanchorAfterCompress）。
+  // 不再需要 fixedOverhead：用量按库算，压缩后库自己就小了，system/工具 schema 本来就不在库里。
   db.prepare('UPDATE ai_chats SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(summary, chatId);
   const archive = db.prepare('UPDATE ai_chat_messages SET archived = 1 WHERE id = ?');
   db.transaction(ids => { for (const id of ids) archive.run(id); })(toCompress.map(r => r.id));
   // 库变了：用量本来就按库算，所以它自己就对了；这里只需让生成期那份旧估算退场、把高水位落到新值。
-  reanchorAfterCompress(chatId, fixedOverhead);
+  reanchorAfterCompress(chatId);
   return { skipped: false, length: summary.length, summary, archived: toCompress.length };
 }
 
@@ -3398,6 +3497,12 @@ function ceilingTokens(chatId) {
  * 也不能是本会话峰值（那会让百分比恒等于 100%）。20 万是这两家都认的经验中位数。
  */
 const UNKNOWN_WINDOW = 200000;
+/**
+ * 一张图按多少 token 计（opencode 同值）。以前写 1000，比 opencode 的 1500 低了三分之一：
+ * 图多的会话会低估整包、压缩触发得比该触发的更晚。三处估算（packageTokens / assembledMsgTokens /
+ * assembleHistoryBase 的超额扣减）都引用这一个常量，别再各写一个数。
+ */
+const IMAGE_TOKEN_ESTIMATE = 1500;
 
 /**
  * 记下「上游真的以输入超长拒了这一包」。
@@ -3445,7 +3550,6 @@ function noteCeilingFromLive(chatId) {
  * 那不是推断，是既成事实。撞过一次之后窗口封顶到它、压缩线随之落下，于是只撞一次。
  */
 function resolveContextWindow(chatId) {
-  const ceil = ceilingTokens(chatId);
   const chat = db.prepare(
     'SELECT c.context_limit, m.max_context FROM ai_chats c LEFT JOIN ai_models m ON c.model_row_id = m.id WHERE c.id = ?'
   ).get(chatId) || {};
@@ -3458,11 +3562,15 @@ function resolveContextWindow(chatId) {
   else if (n(chat.max_context)) { configured = n(chat.max_context); source = 'model'; }
   else if (g) { configured = g; source = 'default'; }
 
-  // 撞过墙：那是唯一有资格压低分母的证据（并且只往下收，不往上抬）
-  if (ceil > 0 && (!configured || ceil < configured)) {
-    return { limit: ceil, configured, source: 'ceiling', effective_limit: ceil, effective_source: 'ceiling' };
-  }
-  // 一条能算的数都没有（没设窗口、模型没声明、也没撞过墙）：兜底 20 万。
+  /* 分母**只认你设的那个数**，撞过墙也不改（第一百一十八轮，按他的要求「取 opencode / DSH 的长处」）。
+   *
+   * 以前这里会把分母压到 `ctx_ceiling_tokens`（被上游拒收那一发的本地估算）。两个毛病：
+   *   ① 本地估算系统性偏高（实测真实/估算 ≈ 0.83），压出来的分母比真实窗口还大，压缩线仍旧到不了；
+   *   ② 屏幕上会出现「设定 1,000,000，按实测上限 XXX 计」，他明确骂过这种「分母偷偷改小」。
+   * opencode 与 DSH 的共同做法是**永不改窗口**：窗口是声明出来的量，撞墙由「overflow 立刻压缩」来兜。
+   * 我们现在也这样：见 maybeAutoCompress 的 force 参数。`ctx_ceiling_tokens` 仍记录（诊断用），不再参与判定。
+   */
+  // 一条能算的数都没有（没设窗口、模型没声明）：兜底 20 万。
   // 这是 opencode 的 UNKNOWN_WINDOW —— 没有它，百分比和压缩线都无从谈起。
   const limit = configured || UNKNOWN_WINDOW;
   return {
@@ -3494,13 +3602,20 @@ function resolveContextWindow(chatId) {
 function resolveCompressLine(chatId, limit, thrPct) {
   if (!limit || !(limit > 0)) return 0;
   const pct = Math.min(100, Math.max(1, Number(thrPct) || 80));
-  const HEADROOM = 65536;              // DSH 的 headroomTokens 默认值
   const outReserve = outputReserveTokens(chatId);
+  /* 余量（headroom）以前是 DSH 的常量 65,536，照抄在 12.8 万 / 20 万的窗口上等于把阈值架空：
+   *   200k 设 80% → min(160,000, 200,000−8,192−65,536=126,272) = 126,272
+   *   200k 设 95% → 还是 126,272 —— 用户改设置一点用没有，屏幕上永远停在 63%。
+   * 118 轮他点名要求「压缩线按我设的阈值来」，所以余量改成**随窗口缩放**：
+   *   8% 窗口，夹在 [8k, 64k]（64k 仍是 DSH 那头上限，大窗口行为不变）。
+   * 这样 200k 设 80% 就是 160,000（80%），设 95% 是 176,000（88%，被输出预留与余量兜住）。
+   */
+  const HEADROOM_MIN = 8192;
+  const HEADROOM_MAX = 65536;
+  const headroom = Math.min(HEADROOM_MAX, Math.max(HEADROOM_MIN, Math.round(limit * 0.08)));
   // 分母就是传进来的 limit —— 也就是**你设的那个窗口**（撞过墙时它已经是实测天花板）。
-  // 这里以前又乘了一遍「历史最大一发 × 1.25」，等于把用户设的 100 万换成 47 万：
-  // 屏幕上写着「按实测能力 478,320 计」，那不是实测，是从历史峰值反推的（第一百一十四轮已删）。
   const byRatio = Math.round(limit * pct / 100);
-  const byCeilingOfWindow = Math.floor(limit - outReserve - HEADROOM);
+  const byCeilingOfWindow = Math.floor(limit - outReserve - headroom);
   const line = Math.min(byRatio, byCeilingOfWindow > 0 ? byCeilingOfWindow : byRatio);
   return Math.max(line, 8000);
 }
@@ -3538,7 +3653,7 @@ function packageTokens(msgs, tools) {
       for (const part of m.content) {
         if (!part || typeof part !== 'object') continue;
         if (part.type === 'text') n += estimateTokens(String(part.text || ''));
-        else if (part.type === 'image_url' && imagesLeft > 0) { n += 1000; imagesLeft--; }
+        else if (part.type === 'image_url' && imagesLeft > 0) { n += IMAGE_TOKEN_ESTIMATE; imagesLeft--; }
       }
     } else {
       n += estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''));
@@ -3879,7 +3994,7 @@ function assembledMsgTokens(msg, cacheId, img) {
     for (const part of c) {
       if (!part || typeof part !== 'object') continue;
       if (part.type === 'text') n += contentTokens(cacheId ? `${cacheId}:${block}` : '', String(part.text || ''));
-      else if (part.type === 'image_url') { n += 1000; if (img) img.n++; }   // 与 packageTokens 同一个口径
+      else if (part.type === 'image_url') { n += IMAGE_TOKEN_ESTIMATE; if (img) img.n++; }   // 与 packageTokens 同一个口径
       block++;
     }
     return n;
@@ -3946,23 +4061,32 @@ function loadChatParts(chatId) {
 }
 
 /**
- * 历史工具结果的**总量** pruner：超出预算就把最旧的一批整条换成占位符，并**写回库**。
+ * 历史工具结果的**总量** pruner（第二层，削「可逆的」）。
  *
- * 为什么写回库而不是只在装配时临时替换：写回之后「界面显示的」「下一发要发的」「库里存的」
- * 是三份一模一样的东西。只在装配时替换的话，中途 rebuild base 或重启就会把旧内容又捞回来，
- * 数字跟着跳 —— 那正是这一百多轮反复出问题的模式。
+ * 只用在一个地方：**上下文已达压缩线**、准备压缩之前先试一次。
+ *
+ * 第一百一十八轮的事故就是这里：以前它在 maybeAutoCompress 的最前面被无条件调用，
+ * 预算按「窗口 10%」算，W=200k 时只有 20,000 tok —— 而单条工具结果硬顶就有 16,000 tok。
+ * 于是读了两个文件就「超出预算」，模型刚看过的内容被抹成占位符，用户在 16% 就被迫压缩。
+ * 现在两道闸门：
+ *   ① 调用方必须先确认 used >= 压缩线，没到线一条都不动（见 maybeAutoCompress）；
+ *   ② 目标水位是「压缩线 × 0.85」而不是窗口百分比 —— 只削到刚好不必牺牲对话摘要，
+ *      而不是把工具结果砍到窗口的十分之一；
+ *   ③ 当前回合的工具结果永不清理（模型下一步就要用）。
  *
  * 返回清理条数（>0 时调用方要 rebuild base）。
  */
-function pruneToolParts(chatId, limit) {
+function pruneToolParts(chatId, limit, opts = {}) {
   if (!chatId) return 0;
   const win = Number(limit) || resolveContextWindow(chatId).limit || 0;
-  const budget = ctxparts.budgetForWindow(win);
-  const protect = ctxparts.protectForWindow(win);
+  const line = Number(opts.line) || 0;
+  const used = Number(opts.used);
+  // 闸门①：没给压缩线、或还没到线 —— 一条都不动。宁可留给压缩，也不悄悄删用户的历史。
+  if (!(line > 0) || !(used > 0) || used < line) return 0;
   let rows = [];
   try {
     rows = db.prepare(
-      `SELECT p.id, p.name, p.payload, p.meta
+      `SELECT p.id, p.turn_id, p.name, p.payload, p.meta
          FROM ai_chat_parts p
          JOIN ai_chat_messages m ON m.id = p.turn_id AND m.chat_id = p.chat_id
         WHERE p.chat_id = ? AND p.kind = 'tool_result' AND COALESCE(m.archived, 0) = 0
@@ -3974,12 +4098,27 @@ function pruneToolParts(chatId, limit) {
     let meta = {};
     try { meta = r.meta ? JSON.parse(r.meta) : {}; } catch (e) { meta = {}; }
     return {
-      id: r.id, name: r.name, text: r.payload || '', meta,
+      id: r.id, name: r.name, turn_id: r.turn_id, text: r.payload || '', meta,
       tokens: Number(meta.tokens) || estimateTokens(r.payload || ''),
       chars: String(r.payload || '').length,
     };
   });
-  const pr = ctxparts.pruneHistoryResults(items, { budget, protect });
+  // 闸门②：目标 = 压缩线 × 0.85。工具结果只准占到「目标 − 非工具部分」，
+  // 非工具部分（正文、system、schema）本身就把水位顶过目标时，只保最近的 protect。
+  const total = items.reduce((n, it) => n + Math.max(0, it.tokens), 0);
+  const nonTool = Math.max(0, used - total);
+  const target = Math.max(1, Math.floor(line * ctxparts.PRUNE_TARGET_RATIO));
+  const protect = ctxparts.protectForWindow(win);
+  const budget = Math.max(protect, target - nonTool);
+  // 闸门③：当前回合一整段受保护
+  let curTurn = 0;
+  try {
+    const r = db.prepare(
+      "SELECT MAX(id) AS id FROM ai_chat_messages WHERE chat_id = ? AND role = 'user' AND COALESCE(archived, 0) = 0"
+    ).get(chatId);
+    curTurn = Number(r && r.id) || 0;
+  } catch (e) { curTurn = 0; }
+  const pr = ctxparts.pruneHistoryResults(items, { budget, protect, keepTurnId: curTurn });
   if (!pr.pruned) return 0;
   const upd = db.prepare('UPDATE ai_chat_parts SET payload = ?, meta = ? WHERE id = ?');
   try {
@@ -4072,6 +4211,7 @@ function replayTurnParts(parts, push) {
  * 返回 { msgs, tok, count, images, parts, prunedParts }：
  *   msgs 是**新对象**（调用方会就地改写，绝不能把共享引用交出去）；
  *   tok 与 packageTokens 同口径，供用量显示直接读。
+ *   prunedParts 恒为 0（118 轮起装配不再做任何清理，字段留着是为了不改调用方与旧日志的形状）。
  */
 function assembleHistoryBase(chatId, opts = {}) {
   const meta = db.prepare('SELECT summary FROM ai_chats WHERE id = ?').get(chatId) || {};
@@ -4087,36 +4227,16 @@ function assembleHistoryBase(chatId, opts = {}) {
 
   const partsByTurn = loadChatParts(chatId);
 
-  /* 历史工具结果的总预算清理（opencode 同款 pruner 的第二层）。
-   * 单条裁剪（落库时）保证「一条不撑爆」；这一层保证「几十条不把窗口慢慢吃满」：
-   * 总量超预算就从最旧的开始整条换成一行占位符，最近那一小段（当前依据）永不清理。
-   * 只在装配时算、不写库 —— 调整预算或窗口不用改历史数据。 */
-  const toolResults = [];
-  for (const [, list] of partsByTurn) {
-    for (const p of list) {
-      if (p.kind !== 'tool_result') continue;
-      toolResults.push({ id: p.id, name: p.name, tokens: Number(p.meta && p.meta.tokens) || estimateTokens(p.payload), chars: String(p.payload || '').length, text: p.payload, part: p });
-    }
-  }
-  let prunedParts = 0;
-  if (toolResults.length) {
-    const win = opts.limit || resolveContextWindow(chatId).limit || 0;
-    const pr = ctxparts.pruneHistoryResults(toolResults, {
-      budget: ctxparts.budgetForWindow(win),
-      protect: ctxparts.protectForWindow(win),
-    });
-    if (pr.pruned) {
-      prunedParts = pr.pruned;
-      const byId = new Map(pr.items.map((it) => [it.id, it]));
-      for (const [, list] of partsByTurn) {
-        for (const p of list) {
-          if (p.kind !== 'tool_result') continue;
-          const it = byId.get(p.id);
-          if (it && it.pruned) p.payload = it.text;
-        }
-      }
-    }
-  }
+  /* 装配阶段**不做**任何工具结果清理。
+   *
+   * 以前这里还有一份「总量超预算就把最旧的换成占位符（不写库）」的实现，和
+   * pruneToolParts（写库那份）是同一件事的两份拷贝 —— 于是「库里是全文、发出去是占位符、
+   * 界面显示又是另一份」三处对不上，数字随装配次数跳。第一百一十八轮统一成一条路：
+   *   · 单条裁剪在**写入时**做（appendToolResultPart → pruneToolOutput）；
+   *   · 历史总量削减（pruneToolParts）现在**没有自动调用点**了：到压缩线直接压缩会话，
+   *     不再先用剪裁顶替（见 maybeAutoCompress ①）。函数留着给手动调用/测试；
+   *   · 装配只负责原样重放库里的事实。
+   */
 
   const msgs = [];
   let tok = 0;
@@ -4163,8 +4283,8 @@ function assembleHistoryBase(chatId, opts = {}) {
   // 图片只算「真会发出去的那几张」：buildChatRequest 只保留最近 MAX_IMAGES_PER_REQUEST 张，
   // 更早的不会出现在这一发里。每张权重相同，所以把超出预算的那几张一次性减掉即可。
   const maxImg = protocols.MAX_IMAGES_PER_REQUEST || 1;
-  if (img.n > maxImg) tok -= (img.n - maxImg) * 1000;
-  return { msgs, tok, count: rows.length, images: img.n, parts: partsByTurn.size, prunedParts };
+  if (img.n > maxImg) tok -= (img.n - maxImg) * IMAGE_TOKEN_ESTIMATE;
+  return { msgs, tok, count: rows.length, images: img.n, parts: partsByTurn.size, prunedParts: 0 };
 }
 
 /**
@@ -4178,15 +4298,18 @@ function measureHistory(chatId) {
       const r = db.prepare(
         'SELECT COUNT(*) AS n, IFNULL(MAX(id), 0) AS mx, IFNULL(SUM(LENGTH(content)), 0) AS ln FROM ai_chat_messages WHERE chat_id = ? AND COALESCE(archived, 0) = 0'
       ).get(chatId) || {};
-      // 部件（工具往返）也会变：新的一段工具结果必须让缓存失效，否则用量会停在上一次的数上
-      let pn = 0, pmx = 0;
+      // 部件（工具往返）也会变：新的一段工具结果必须让缓存失效，否则用量会停在上一次的数上。
+      // 注意还要带上 **payload 的总长度** —— pruner 是把 payload 就地改成占位符（UPDATE），
+      // 只比 COUNT/MAX(id) 的话签名一模一样，改完之后用量会装作没变（118 轮踩到）。
+      let pn = 0, pmx = 0, pln = 0;
       try {
-        const p = db.prepare('SELECT COUNT(*) AS n, IFNULL(MAX(id), 0) AS mx FROM ai_chat_parts WHERE chat_id = ?').get(chatId) || {};
+        const p = db.prepare('SELECT COUNT(*) AS n, IFNULL(MAX(id), 0) AS mx, IFNULL(SUM(LENGTH(payload)), 0) AS ln FROM ai_chat_parts WHERE chat_id = ?').get(chatId) || {};
         pn = Number(p.n) || 0;
         pmx = Number(p.mx) || 0;
+        pln = Number(p.ln) || 0;
       } catch (e) { /* 旧库还没建表 */ }
       const s = (db.prepare('SELECT summary FROM ai_chats WHERE id = ?').get(chatId) || {}).summary || '';
-      return `${r.n}|${r.mx}|${r.ln}|${s.length}|${s.slice(0, 24)}|${pn}|${pmx}`;
+      return `${r.n}|${r.mx}|${r.ln}|${s.length}|${s.slice(0, 24)}|${pn}|${pmx}|${pln}`;
     } catch (e) { return null; }
   })();
   const key = Number(chatId) || 0;
@@ -5281,6 +5404,15 @@ router.put('/models/:id', wrap((req, res) => {
   try {
     db.prepare('UPDATE ai_models SET provider_id = ?, model_id = ?, display_name = ?, remark = ?, price_in = ?, price_out = ?, price_cache = ?, max_context = ?, supports_search = ?, supports_thinking = ?, thinking_levels = ? WHERE id = ?')
       .run(v.provider_id, v.model_id, v.display_name, v.remark, v.price_in, v.price_out, v.price_cache, v.max_context, v.supports_search, v.supports_thinking, v.thinking_levels, id);
+    /* 思考能力被改动过 → 之前学到的「样式」和「全不支持」都作废，下次请求重新探测。
+       不清的话：用户把「支持思考」从关改回开，thinking_style='unsupported' 还留着，
+       于是永远不发思考参数。 */
+    const thinkingChanged = Number(existing.supports_thinking) !== Number(v.supports_thinking)
+      || String(existing.thinking_levels || '') !== String(v.thinking_levels || '');
+    if (thinkingChanged) {
+      db.prepare("UPDATE ai_models SET thinking_style = '' WHERE id = ?").run(id);
+      for (const k of [...thinkingStyleCache.keys()]) if (String(k).startsWith(id + '|')) thinkingStyleCache.delete(k);
+    }
     ok(res, null, '更新成功');
   } catch (e) {
     if (/UNIQUE/i.test(e.message)) return fail(res, 400, '该提供商下已存在相同的模型ID');
@@ -5669,7 +5801,7 @@ router.post('/chat', (req, res) => {
   let cwd = null;
   const bodyCwd = typeof req.body?.cwd === 'string' ? req.body.cwd.trim() : '';
   // 远程会话的 cwd 是「远端路径」，上面那套本机 fs.statSync / path.resolve 校验一条都不能用：
-  // Windows 上 '/home/user' 会被看成 'D:\home\user' → 判不存在 → 掉回本机默认目录（装机版里就是
+  // Windows 上 '/home/ker' 会被看成 'D:\home\ker' → 判不存在 → 掉回本机默认目录（装机版里就是
   // resources/server），于是每条远端命令前置的 cd 都失败，整轮工具调用全废（真机踩过）。
   const turnRemoteId = chatRow?.remote_id || project?.remote_id || null;
   if (turnRemoteId) {
@@ -5715,32 +5847,36 @@ router.post('/chat', (req, res) => {
   // 本轮的压缩卡片：一次压缩一张卡（start → done/skipped/failed 就地改同一张），回合结束时随消息落库，
   // 刷新后消息流里仍看得到。别按阶段各推一条 —— 那样重载后会并排出现「进行中」和「已压缩」两张卡。
   const turnCompressSteps = [];
-  const maybeAutoCompress = async (modelRow, live) => {
+  const maybeAutoCompress = async (modelRow, opts = {}) => {
     if (!chatId) return false;
+    /* force：上游刚刚以「输入超长」拒了这一包（opencode 的 overflow trigger）。
+     * 这时跳过百分比闸门直接压缩 —— 窗口是你设的（可能比模型真实容量大），
+     * 光等百分比到线永远等不到，只能靠这次拒收把历史压下去，然后重发。
+     * 这是 opencode / DSH 的共同做法：**不改窗口，溢出即压缩重试**。 */
+    const force = !!(opts && opts.force);
     const { limit, configured, source } = resolveContextWindow(chatId);
     if (!limit) return false;
-    /* ① 先跑 pruner：历史工具结果的总量超预算时，把最早的一批整条换成占位符。
-     *
-     * 工具结果现在就在上下文里（ai_chat_parts），所以「上下文太长」有两条互不相同的解法：
-     *   · 削工具结果 —— 无损可逆（模型要细节还能重新读），先做；
-     *   · 压缩历史   —— 有损不可逆（摘要），后做。
-     * 顺序反了就会出现「明明只是读的文件多，却把对话压成摘要」。
-     * 返回 true 告诉调用点：库里变了，必须 rebuild base 才能让发送的那一包跟上。
-     */
-    if (pruneToolParts(chatId, limit)) {
-      send({ t: 'note', message: '工具结果总量超出预算：已把最早的一批换成占位符（需要细节可重新读取），历史对话保持不变' });
-      step({ type: 'note', message: '工具结果 pruner：清理最早一批，重建上下文' });
-      return true;
-    }
-    if (autoCompressCount >= 2) return false;
     // 用量就是「下一发那一包」：工具结果入库之后，界面显示的、这里判定的、真正发出去的是同一个量，
     // 不再需要「生成期整包 vs 下一发」两套数字互相取大。
     const usage = chatContextUsage(chatId);
-    const liveUsed = usage.used;
+    let liveUsed = usage.used;
     const thr = compressThresholdPct();
     // 触发线独立算（见 resolveCompressLine）：窗口可能被设成 100 万，而真包装不下那么多。
     const line = resolveCompressLine(chatId, limit, thr);
-    if (liveUsed < line) return false;
+
+    /* ① 到线就**直接压缩会话**，不再走「先削工具结果、削够了就不压」那条老路。
+     *
+     * 老设计（118 轮）的理由是「无损优先」：工具结果能重读，摘要不能。听着对，实际是他
+     * 设了 60% 之后看到的现象 —— 一过 60% 就只把旧工具结果换成占位符，压缩卡片一次都不弹，
+     * 等于用「偷偷删历史」顶替了「压缩」。他要的是到边界压缩自己动起来。
+     *
+     * 单条工具结果的裁剪不受影响，仍然在读入那一刻做（appendToolResultPart →
+     * ctxparts.pruneToolOutput）：那是单条 50KiB / 2000 行的物理上限，与历史总量无关。
+     *
+     * force 分支（上游报输入超长）本来就是直接压缩，两者现在统一。
+     */
+    if (!force && autoCompressCount >= 2) return false;
+    if (!force && liveUsed < line) return false;
     const effThr = Math.max(1, Math.min(100, Math.round(line / limit * 100)));
     const pct = Math.round(liveUsed / limit * 100);
     if (!modelRow) {
@@ -6010,12 +6146,20 @@ const insertAssistantMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, ro
         // Anthropic 只有 thinking:{type,budget_tokens} 一种形状，不参与 OpenAI 系的多样式轮转
         const thinkingVariants = protocols.styleOf(row) === 'anthropic' ? protocols.anthropicVariants(norm) : thinking.variantsFor(norm);
         const variantKey = `${row.id}|${norm.mode}|${eff || ''}`;
-        const remembered = thinkingStyleCache.get(variantKey);
+        /* 记住的结论有三种：undefined = 没试过；-1 = 已证实「全都不支持」；n = 第 n 种可用。
+         *
+         * 第一百一十八轮修的 bug：原来读 cache 写的是 `remembered >= 0`，于是 -1（全不支持）
+         * 永远不生效 —— 每次请求都从第一种开始把七种样式挨个试一遍，开头刷一屏
+         * 「思考参数样式 X 不受支持，尝试 Y…」。而且 cache 只在内存里，进程重启又归零。
+         * 现在 -1 直接命中「不发思考参数」，并把结论持久化到 thinking_style='unsupported'；
+         * 成功的样式也从持久化字段读回来（'<mode>:<label>'），重启后不用再试错。 */
+        const remembered = resolveThinkingVariant(row, norm, thinkingVariants, variantKey);
         // off：主动发送各家的「关闭思考」参数（逐样式尝试）；全被拒则不带参数（个别默认思考模型关不掉，
         // 由 consumeStream 侧把 reasoning 当正文输出）
         if (norm.mode === 'off') thinkOffRequested = true;
         let variantIdx = thinkingVariants.length ? 0 : -1;
-        if (remembered !== undefined && remembered >= 0 && remembered < thinkingVariants.length) variantIdx = remembered;
+        if (remembered === -1) variantIdx = -1;
+        else if (remembered !== undefined && remembered >= 0 && remembered < thinkingVariants.length) variantIdx = remembered;
         if (variantIdx >= 0) Object.assign(payload, thinkingVariants[variantIdx].fields(eff));
         const variantFieldRx = (v) => {
           const keys = Object.keys(v.fields(eff));
@@ -6105,13 +6249,21 @@ const insertAssistantMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, ro
               for (const k of Object.keys(bad.fields(eff))) delete payload[k];
               variantIdx++;
               if (variantIdx < thinkingVariants.length) {
-                send({ t: 'note', message: `[${row.display_name}] 思考参数样式 ${bad.label} 不受支持，尝试 ${thinkingVariants[variantIdx].label}…` });
+                // 不再每换一种就推一条 note：七种全不支持时开头会连刷八条（他报的那屏）。
+                // 这里在 connectStream 的作用域里，**没有** step()（那是外面 maybeAutoCompress 的局部函数，
+                // 118 轮在这里写了 step → ReferenceError 把整轮流式输出打断），所以只写日志。
+                logbus.upstream({ model: row.display_name, note: `thinking style ${bad.label} rejected, try ${thinkingVariants[variantIdx].label}` });
                 Object.assign(payload, thinkingVariants[variantIdx].fields(eff));
               } else {
                 thinkingStyleCache.set(variantKey, -1);
+                // 持久化「全都不支持」：内存 cache 重启就没了，不落库的话下次启动又是七连试。
+                if (row.thinking_style !== 'unsupported') {
+                  row.thinking_style = 'unsupported';
+                  try { db.prepare('UPDATE ai_models SET thinking_style = ? WHERE id = ?').run('unsupported', row.id); } catch (e) { /* 旧库无列时忽略 */ }
+                }
                 send({ t: 'note', message: norm.mode === 'off'
-                  ? `[${row.display_name}] 关闭思考的参数均不受支持，若模型仍输出思考将把思考内容作为正文处理…`
-                  : `[${row.display_name}] 思考参数均不受支持，按模型默认模式继续（默认思考的模型仍会输出思考）…` });
+                  ? `[${row.display_name}] 关闭思考的参数均不受支持，若模型仍输出思考将把思考内容作为正文处理（以后不再逐个尝试）…`
+                  : `[${row.display_name}] 该模型不支持任何思考参数样式，已按默认模式继续（以后不再逐个尝试）…` });
               }
               continue;
             }
@@ -6372,13 +6524,12 @@ const insertAssistantMsg = db.prepare('INSERT INTO ai_chat_messages (chat_id, ro
               // 现在按 Agent 那套口径自救 —— 就地裁尾巴、压一次、按新摘要重建基底，最多三次。
               if (isContextLengthError(resp.status, detail) && plainSheds < 3) {
                 plainSheds++;
-                // 这一发被上游判超长 —— 把它的大小记成这条会话的「实测天花板」。
-                // 之后 resolveContextWindow 会拿它给窗口封顶，压缩线随之落到能真正触发的位置，
-                // 不会再出现「窗口写着 100 万、压缩永远不触发、历史只能静默截断」那种局面。
+                // 这一发被上游判超长 —— 记一笔诊断值（ctx_ceiling_tokens），**不再用它改分母**：
+                // 窗口只认你设的那个数（118 轮按 opencode/DSH 的口径改），溢出靠下面的 force 压缩治。
                 noteCeilingFromLive(chatId);
                 const ratio = [0.2, 0.4, 0.6][plainSheds - 1];
                 let s = shedTailForOverflow(outMsgs, null, ratio);
-                await maybeAutoCompress(row, { msgs: outMsgs, tools: null });
+                await maybeAutoCompress(row, { force: true });
                 const keepHead = outMsgs.length - msgs.length;   // 开头那段 system（AGENTS.md）原地留着
                 outMsgs.length = keepHead;
                 outMsgs.push(...buildBaseMsgs());
@@ -6596,16 +6747,16 @@ const runAgent = async (msgs, rows) => {
          * 它是在「工具结果压根不进上下文」的年代补的窟窿：既然回合结束就蒸发，中途折掉不心疼。
          * 现在工具结果**入库并参与下一发**（见 assembleHistoryBase），折掉就是真的丢了上下文，
          * 而模型只能重读，重读回来又把后脚读的挤掉（设置页那条「部分模型反复读取」说的就是它）。
-         * 现在由两道 pruner 接管，都是「保留头尾、可用 read_file offset/limit 重新取」：
-         *   · 写入时：ctxparts.pruneToolOutput（单条 50KiB/2000 行触发，头 800 行 + 尾 200 行）；
-         *   · 超预算时：pruneToolParts（最旧的一批整条换占位符，见 maybeAutoCompress）。
+         * 现在由一道 pruner 接管（保留头尾、可用 read_file offset/limit 重新取）：
+         *   · 写入时：ctxparts.pruneToolOutput（单条 50KiB/2000 行触发，头 800 行 + 尾 200 行）。
+         * 历史总量不再在到线时被剪：到压缩线就是压缩会话本身（见 maybeAutoCompress ①）。
          */
         // 实验室「未提交变更提醒」：回合开始时若工作区脏，往上下文里塞一条界面提醒（不入库，不冒充用户输入）
         let uncommittedChecked = false;
         const remindUncommitted = async () => {
           if (!labs.uncommittedTip || uncommittedChecked) return;
           uncommittedChecked = true;
-          // 远程会话要去那台机器上问 git（本机对 /home/user 跑 git 只会静默失败，等于这个开关对远程无效）
+          // 远程会话要去那台机器上问 git（本机对 /home/ker 跑 git 只会静默失败，等于这个开关对远程无效）
           const tipHost = remoteHostFor(chatId);
           const st = tipHost ? await gitRunRemote(tipHost, cwd, ['status', '--porcelain']) : await gitRun(cwd || process.cwd(), ['status', '--porcelain']);
           if (!st.ok) return;   // 不是仓库或 git 不可用：不打扰
@@ -6689,7 +6840,7 @@ const runAgent = async (msgs, rows) => {
                 step({ type: 'note', message: `手动压缩生效：重建上游基底（${rebuilt.length} 条）` });
               }
               // 一轮里连开几十个工具时，上下文是在回合中间爆掉的，这里补一道
-              if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
+              if (await maybeAutoCompress(row)) {
                 const rebuilt = buildBaseMsgs();
                 upstreamMsgs.splice(1, baseLen, ...rebuilt);
                 baseLen = rebuilt.length;
@@ -6711,11 +6862,11 @@ const runAgent = async (msgs, rows) => {
               // 晚判一步就会被下面那条「不接受 tools 参数 → 降级文本协议」误当成协议问题去治。
               if (isContextLengthError(resp.status, errBody) && overflowSheds < 3) {
                 overflowSheds++;
-                // 同普通对话那条：把被拒的这一发记成这条会话的「实测天花板」，给窗口封顶（见 resolveContextWindow）
+                // 同普通对话那条：记一笔诊断值，不再改分母（窗口只认你设的数）。
                 noteCeilingFromLive(chatId);
                 const ratio = [0.2, 0.4, 0.6][overflowSheds - 1];
                 let s = shedTailForOverflow(upstreamMsgs, textMode ? null : activeAgentTools(planMode), ratio);
-                if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
+                if (await maybeAutoCompress(row, { force: true })) {
                   // 重建基底会把基底里裁掉的占位换回原文（基底来自库），所以重建后再裁一次尾巴
                   const rebuilt = buildBaseMsgs();
                   upstreamMsgs.splice(1, baseLen, ...rebuilt);
@@ -6742,11 +6893,16 @@ const runAgent = async (msgs, rows) => {
               // 拼接漏了字段，当场补齐再发一次，不要把 400 丢给用户（他报的那次就是这个错误）。
               if (protocols.isReasoningBackError(resp.status, errBody) && reasoningHeals < 2) {
                 reasoningHeals++;
-                const all = reasoningHeals > 1;   // 第 2 次：连纯文本 assistant 也补
-                const fixed = protocols.ensureReasoningBack(upstreamMsgs, { all });
-                send({ t: 'note', message: `[${row.display_name}] 上游要求回传思考字段，已补齐 ${fixed} 处后重试…` });
-                step({ type: 'note', message: `补齐 reasoning_content ${fixed} 处后重试${all ? '（含纯文本 assistant）' : ''}` });
-                continue;
+                /* 一次补到位：网关的两种形态（只要求带 tool_calls 的 / 要求所有 assistant）
+                   都补上。以前第一次只补带 tool_calls 的，补完 0 处也照样 continue ——
+                   等于把同一包原样再发一次，白等一轮、还多刷一屏思考参数 note。
+                   补无可补就说明这条 400 不是「缺字段」，重发不会有不同结果。 */
+                const fixed = protocols.ensureReasoningBack(upstreamMsgs, { all: true });
+                if (fixed > 0) {
+                  send({ t: 'note', message: `[${row.display_name}] 上游要求回传思考字段，已补齐 ${fixed} 处后重试…` });
+                  step({ type: 'note', message: `补齐 reasoning_content ${fixed} 处后重试（含纯文本 assistant）` });
+                  continue;
+                }
               }
               // 上游拒绝 tools 参数 → 降级为文本工具协议，同一模型重试（不换模型、不报错）
               if (!textMode && String(row.tool_style || 'auto') !== 'native' && resp.status === 400 && /tool/i.test(errBody)) {
@@ -6928,7 +7084,7 @@ const runAgent = async (msgs, rows) => {
             // 回合开头和「结果回喂完之后」判，工具一批批执行途中涨上去的那段没人管）。
             // 放在这里还有一个硬好处：此刻 upstreamMsgs 尾巴上还没有「带 tool_calls 的 assistant 消息」
             // （下一条语句才 push），压缩换基底不会把待配对的工具调用切掉 —— 那会被上游 400 拒包。
-            if (await maybeAutoCompress(row, { msgs: upstreamMsgs, tools: textMode ? null : activeAgentTools(planMode) })) {
+            if (await maybeAutoCompress(row)) {
               const rebuilt = buildBaseMsgs();
               upstreamMsgs.splice(1, baseLen, ...rebuilt);
               baseLen = rebuilt.length;
@@ -8308,5 +8464,7 @@ module.exports._internal = {
   // 工具往返入库 + pruner（第一百一十五轮）
   appendChatPart, appendToolResultPart, loadChatParts, pruneToolParts, replayTurnParts,
   readFileWindow, READ_FILE_MAX_LINES, execTool,
-  COMPRESS_KEEP_FLOOR, HISTORY_MAX_MESSAGES, SUMMARY_TRANSCRIPT_CHARS, SUMMARY_PER_MSG_CHARS,
+  COMPRESS_KEEP_FLOOR, COMPRESS_KEEP_TOKENS, compressKeepCount, compressChat, IMAGE_TOKEN_ESTIMATE,
+  resolveThinkingVariant,
+  HISTORY_MAX_MESSAGES, SUMMARY_TRANSCRIPT_CHARS, SUMMARY_PER_MSG_CHARS, SUMMARY_HEADINGS,
 };

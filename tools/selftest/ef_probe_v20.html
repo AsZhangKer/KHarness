@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>v20 附图缩略图 + 动效开关（1440×900 iframe，量真实布局）</title>
+<style>html,body{margin:0;background:#101010}iframe{display:block;border:0;width:1440px;height:900px}#out{color:#d8ffe8;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;padding:8px}</style>
+</head>
+<body>
+<iframe id="f" width="1440" height="900"></iframe>
+<div id="out">loading…</div>
+<script>
+/* 两件事一次量完：
+   ① /chat/3 里那颗用户附图：img 真尺寸、盒子尺寸（0×0 = 盒子塌了）、正文不许留 [[img:
+   ② 动效开关：kh.motion=on/off 两种载入下，同一批元素的 transitionDuration / animationName 读数 */
+const rows = [];
+const checks = [];
+const ck = (n, want, got, pass) => checks.push({ n, want, got, pass: !!pass });
+const doc = () => document.getElementById('f').contentDocument;
+const win = () => document.getElementById('f').contentWindow;
+const cs = (sel, prop) => { const e = doc().querySelector(sel); return e ? win().getComputedStyle(e)[prop] : 'NO-EL'; };
+const boxOf = (sel) => { const e = doc().querySelector(sel); if (!e) return 'NO-EL'; const r = e.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function boot() { document.getElementById('f').addEventListener('load', () => setTimeout(onLoad, 2600)); document.getElementById('f').src = src; }
+let src = '/chat/3';
+let phase = 0;
+function onLoad() { if (phase === 0) shotPhase(); else motionPhase(); }
+
+async function shotPhase() {
+  const img = doc().querySelector('.user-shot img');
+  rows.push({
+    tag: '① 用户附图',
+    hasShot: !!img,
+    natural: img ? img.naturalWidth + 'x' + img.naturalHeight : '-',
+    complete: img ? img.complete : null,
+    shotBox: boxOf('.user-shot'),
+    imgBox: boxOf('.user-shot img'),
+    bubbleBox: boxOf('.user-body'),
+    bubbleText: (doc().querySelector('.user-body') || {}).innerText,
+    markerLeft: doc().body.innerText.includes('[[img:'),
+  });
+  ck('附图画出来了（naturalWidth>0）', '>0', String(img ? img.naturalWidth : 0), img && img.naturalWidth > 0);
+  ck('缩略图盒子不是 0 高', '>40px', boxOf('.user-shot img'), img && img.getBoundingClientRect().height > 40);
+  ck('正文里不留 [[img: 字样', '无', doc().body.innerText.includes('[[img:') ? '有' : '无', !doc().body.innerText.includes('[[img:'));
+  ck('气泡文字还是那句', '看这张图', String((doc().querySelector('.user-body') || {}).innerText || '').trim(), (doc().querySelector('.user-body') || {}).innerText.trim() === '看这张图');
+  // 下一段：切到设置页量动效开关（开）
+  phase = 1; src = '/settings';
+  win().location.href = '/settings';
+}
+
+async function motionPhase() {
+  const firstPass = !onPassDone;
+  onPassDone = true;
+  const on = { tag: '② 动效开（默认）', caret: cs('.caret-dot', 'animationName'), tabBar: cs('.k-tab-bar', 'transitionDuration'), btn: cs('.k-btn', 'transitionDuration'), modal: cs('.theme-card', 'transitionDuration'), attr: doc().documentElement.dataset.motion };
+  rows.push(on);
+  if (firstPass) ck('data-motion 属性是 on', 'on', String(on.attr), on.attr === 'on');
+  if (firstPass) ck('开着时按钮有过渡（transitionDuration 非 0s）', '>0s', on.btn, on.btn !== '0s' && on.btn !== 'NO-EL');
+  if (firstPass) ck('开着时主题卡有过渡（关掉后归 0s）', '>0s', on.modal, on.modal !== '0s' && on.modal !== 'NO-EL');
+  win().localStorage.setItem('kh.motion', 'off');
+  await sleep(120);
+  win().location.reload();
+  // reload 之后 onLoad 再跑一次 motionPhase（phase 仍是 1）
+  setTimeout(afterOff, 3600);
+}
+let offDone = false;
+let onPassDone = false;
+async function afterOff() { offDone = true;
+  const off = { tag: '③ 动效关', caret: cs('.caret-dot', 'animationName'), tabBar: cs('.k-tab', 'transitionDuration'), btn: cs('.k-btn', 'transitionDuration'), modal: cs('.theme-card', 'transitionDuration'), attr: doc().documentElement.dataset.motion, stored: win().localStorage.getItem('kh.motion') };
+  rows.push(off);
+  ck('data-motion 属性是 off', 'off', String(off.attr), off.attr === 'off');
+  ck('关掉后按钮过渡变 0s', '0s', off.btn, off.btn === '0s');
+  ck('关掉后主题卡过渡归 0s', '0s', off.modal, off.modal === '0s');
+  win().localStorage.setItem('kh.motion', 'on');
+  finish();
+}
+function finish() {
+  const fail = checks.filter((c) => !c.pass).length;
+  const lines = checks.map((c) => (c.pass ? 'PASS ' : 'FAIL ') + c.n + '  [want ' + c.want + '] [got ' + c.got + ']');
+  document.getElementById('out').textContent = lines.join('\n') + '\n' + rows.map((r) => JSON.stringify(r)).join('\n')
+    + '\nPROBE' + JSON.stringify({ total: checks.length, fail, diag: { rows, checks } });
+}
+boot();
+</script>
+</body>
+</html>

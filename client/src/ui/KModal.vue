@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="kpop">
       <!-- 终末地：**母本的 DOM 原样渲染**，只把面板里的占位文字换成真内容。
-           四份母本（D:\ArknightsDesignLearning\design\ai_generate\WINDOW\）：
+           四份母本（设计稿 WINDOW 目录）：
              banner → 弹窗 · 普通长条横幅按钮框.html
              dialog → 弹窗 · 危险解锁框.html
              panel  → 弹窗 · 更多文字面板框.html
@@ -17,8 +17,16 @@
             <i class="tri"></i><span class="tag">{{ code }}</span>
             <i class="s0"></i><i class="s1"></i><i class="s2"></i><i class="s3"></i>
             <h1 class="ttl">{{ title }}</h1>
-            <p class="msg"><slot /></p>
+            <!-- 内容宿主必须是 div：<p> 不能包含列表/div 这类块级元素，浏览器会当场把 <p> 闭合，
+                 slot 内容就掉到 .msg 外面（绝对定位的 .b3 里没有它该在的位置）。 -->
+            <div class="msg"><slot /></div>
             <i class="ln a"></i><i class="ln m"></i><i class="ln b"></i>
+            <!-- 关闭钮照搬 BUTTON/按钮控件陈列.html 的 .ef-icon--exit：
+                 42u 白圆盘 + 虚线细边 + 黑色 X（fill evenodd），hover 压暗、按下缩到 .94。
+                 位置钉在各自板的右上角（不是视口右上），四块板各放一颗。 -->
+            <button class="ef-close" type="button" title="关闭" aria-label="关闭" @click.stop="$emit('close')">
+              <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="50" fill="#fff"/><circle cx="50" cy="50" r="48.4" fill="none" stroke="#d8d8d8" stroke-width=".35" stroke-dasharray="1 .8"/><path d="M75.2,14.9 51.2,38.9 49.5,38.9 26.5,15.9 16.4,25.9 39.2,49.1 39.2,50.9 15.5,74.7 25.4,84.7 49.6,60.8 51.1,60.8 76.6,86.3 86.7,76.2 61.4,50.9 61.4,49.0 85.4,25.0Z M49.5,41.6 51.2,41.6 58.7,49.1 58.7,50.8 51.2,58.4 49.5,58.4 41.9,50.8 41.9,49.1Z" fill="#0c0c0a" fill-rule="evenodd"/></svg>
+            </button>
           </section>
           <div class="efd-actions">
             <slot name="footer">
@@ -55,6 +63,9 @@
               <svg class="ck ck2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#444" stroke-width="2.2"/><path d="M7.2 12.4l3.2 3.2 6.2-7.4" fill="none" stroke="#444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <span class="tx tx2">{{ note }}</span>
             </template>
+            <button class="ef-close" type="button" title="关闭" aria-label="关闭" @click.stop="$emit('close')">
+              <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="50" fill="#fff"/><circle cx="50" cy="50" r="48.4" fill="none" stroke="#d8d8d8" stroke-width=".35" stroke-dasharray="1 .8"/><path d="M75.2,14.9 51.2,38.9 49.5,38.9 26.5,15.9 16.4,25.9 39.2,49.1 39.2,50.9 15.5,74.7 25.4,84.7 49.6,60.8 51.1,60.8 76.6,86.3 86.7,76.2 61.4,50.9 61.4,49.0 85.4,25.0Z M49.5,41.6 51.2,41.6 58.7,49.1 58.7,50.8 51.2,58.4 49.5,58.4 41.9,50.8 41.9,49.1Z" fill="#0c0c0a" fill-rule="evenodd"/></svg>
+            </button>
           </section>
           <div class="efd-actions">
             <slot name="footer">
@@ -82,15 +93,35 @@
               <small>{{ code }}</small>
             </div>
             <i class="lbl"></i>
-            <p class="desc"><slot /></p>
+            <!-- 同 banner：内容宿主用 div，不能用 <p> —— 模型选择器那种「搜索条 + 分组 + 一排按钮」
+                 全是块级元素，放进 <p> 会被浏览器自动闭合、整块掉出面板的绝对定位坐标系，
+                 表现就是「弹窗打开了但列表点不动 / 看不见」。 -->
+            <div class="desc"><slot /></div>
           </section>
-          <div v-if="$slots.footer" class="efd-actions">
-            <slot name="footer" />
+          <button class="ef-close" type="button" title="关闭" aria-label="关闭" @click.stop="$emit('close')">
+            <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="50" fill="#fff"/><circle cx="50" cy="50" r="48.4" fill="none" stroke="#d8d8d8" stroke-width=".35" stroke-dasharray="1 .8"/><path d="M75.2,14.9 51.2,38.9 49.5,38.9 26.5,15.9 16.4,25.9 39.2,49.1 39.2,50.9 15.5,74.7 25.4,84.7 49.6,60.8 51.1,60.8 76.6,86.3 86.7,76.2 61.4,50.9 61.4,49.0 85.4,25.0Z M49.5,41.6 51.2,41.6 58.7,49.1 58.7,50.8 51.2,58.4 49.5,58.4 41.9,50.8 41.9,49.1Z" fill="#0c0c0a" fill-rule="evenodd"/></svg>
+          </button>
+          <!-- 动作行留在板外：母本那颗胶囊本来就是压在板底往外凸一截的（他确认过）。
+               放在 .b3 里会被 max-height 一起裁掉。
+               调用点没给 #footer 时（autoFooter=true）渲染母本那对长条胶囊：
+               左「取消」右「确认」，右侧圆盘里分别是叉与循环箭头。 -->
+          <div v-if="$slots.footer || autoFooter" class="efd-actions">
+            <slot name="footer">
+              <button v-if="!hideCancel" class="ef-pill ef-pill--float" type="button" @click="$emit('close')">
+                <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+                <span class="ef-pill__label">{{ cancelText }}</span>
+                <span class="ef-pill__ico" v-html="ICO_X"></span>
+              </button>
+              <button class="ef-pill ef-pill--yellow ef-pill--float" type="button" :disabled="okDisabled" @click="$emit('ok')">
+                <i class="ef-pill__tex"></i><i class="ef-pill__line"></i>
+                <span class="ef-pill__label">{{ okText }}</span>
+                <span class="ef-pill__ico" v-html="ICO_LOOP"></span>
+              </button>
+            </slot>
           </div>
         </div>
 
-        <!-- ── 表单框（白卡 + 胶囊输入） ───────────────────────────── -->
-        <div v-else class="efd-form" :style="kStyle">
+        <!-- ── 表单框（白卡 + 胶囊输入） ───────────────────────────── -->        <div v-else class="efd-form" :style="kStyle">
           <div class="form-group">
             <div class="form-title">{{ title }}</div>
             <slot />
@@ -109,9 +140,11 @@
               </slot>
             </div>
           </div>
+          <button class="ef-close" type="button" title="关闭" aria-label="关闭" @click.stop="$emit('close')">
+            <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="50" fill="#fff"/><circle cx="50" cy="50" r="48.4" fill="none" stroke="#d8d8d8" stroke-width=".35" stroke-dasharray="1 .8"/><path d="M75.2,14.9 51.2,38.9 49.5,38.9 26.5,15.9 16.4,25.9 39.2,49.1 39.2,50.9 15.5,74.7 25.4,84.7 49.6,60.8 51.1,60.8 76.6,86.3 86.7,76.2 61.4,50.9 61.4,49.0 85.4,25.0Z M49.5,41.6 51.2,41.6 58.7,49.1 58.7,50.8 51.2,58.4 49.5,58.4 41.9,50.8 41.9,49.1Z" fill="#0c0c0a" fill-rule="evenodd"/></svg>
+          </button>
         </div>
       </div>
-
       <!-- 其余六套主题：原来那一套 -->
       <div v-else-if="open" class="k-modal-root" @click.self="$emit('close')">
         <div class="k-modal" :style="{ width: legacyWidth }" role="dialog" :aria-label="title">
@@ -235,6 +268,30 @@ const ICO_LOOP = '<svg viewBox="0 0 24 24"><g fill="none" stroke="#ffef01" strok
 /* 终末地的板可能比视口高（母本板是定高定宽的样板），允许整层滚动；
    其余六套主题保持原样（.k-modal 自己有 max-height + body 内滚，不需要它）。 */
 .k-modal-root--ef { overflow: auto; }
+/* 关闭钮 = 母本 BUTTON/按钮控件陈列.html 的 .ef-icon--exit：
+   42u 白圆盘（100×100 SVG：白底圆 + 0.35 描边虚线内圈 + 黑 X 路径 evenodd）。
+   hover 压暗到 .88、按下缩到 .94、键盘聚焦一圈 2u 亮黄 —— 母本三态原样。
+   位置：绝对定位在各自板的右上角（--k 从板上继承），不是在视口右上角。 */
+.ef-close {
+  position: absolute;
+  top: calc(var(--k) * 20);
+  right: calc(var(--k) * 22);
+  z-index: 5;
+  width: calc(var(--k) * 42);
+  height: calc(var(--k) * 42);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: filter 0.12s linear, transform 0.06s linear;
+}
+.ef-close svg { display: block; width: 100%; height: 100%; }
+.ef-close:hover { filter: brightness(0.88); }
+.ef-close:active { transform: scale(0.94); }
+.ef-close:focus-visible { outline: calc(var(--k) * 2) solid #ffe500; outline-offset: calc(var(--k) * 2); }
 .k-modal {
   background: var(--surface-pop);
   border: 1px solid var(--border);

@@ -1,8 +1,8 @@
 <template>
-  <KModal :open="open" title="选择模型" board="panel" tall code="MODEL.BOX" ghost="MODEL" width="640px" ef-width="1280" @close="$emit('close')">
+  <KModal :open="open" title="选择模型" board="panel" tall code="MODEL.BOX" ghost="MODEL" width="640px" ef-width="1080" @close="$emit('close')">
     <div ref="listEl" class="picker-body">
       <div class="picker-bar">
-        <input v-model="q" class="nu-input search" placeholder="搜索模型 / 提供商…" />
+        <EfSearch v-model="q" class="search" placeholder="搜索模型 / 提供商…" fallback-class="nu-input search" />
         <button
           v-if="badCount"
           class="k-btn sm fold"
@@ -62,6 +62,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue';
 import KModal from '../../ui/KModal.vue';
+import EfSearch from '../../ui/EfSearch.vue';
 
 const props = defineProps({
   open: Boolean,

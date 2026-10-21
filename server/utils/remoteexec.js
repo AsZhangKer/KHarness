@@ -45,7 +45,7 @@ function posixAbs(x) {
 
 /**
  * 远程会话这一轮的工作目录怎么定：候选顺序与本机同构，但**只认远端路径**。
- * 早先这里借用了本机的 fs.statSync 校验，'/home/user' 在 Windows 上被看成 'D:\home\user'，
+ * 早先这里借用了本机的 fs.statSync 校验，'/home/ker' 在 Windows 上被看成 'D:\home\ker'，
  * 判成「目录不存在」后掉回本机默认目录（装机版里就是 resources/server），
  * 于是 run_command 的 cd 前置、read_file 的相对解析全部指向远端不存在的路径。
  * 库里已经存了 Windows 路径的旧行，这里会被跳过 —— 下一次发送即自愈。

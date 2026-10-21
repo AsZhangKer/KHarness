@@ -386,8 +386,8 @@ const DATA_FIXUPS = [
   "UPDATE ai_model_results SET status = 'error', latency_ms = NULL, " +
   "error = COALESCE(NULLIF(error, ''), '历史空回复记录，已按不可用处理') " +
   "WHERE status = 'ok' AND (reply IS NULL OR trim(reply) = '' OR reply LIKE '%空回复%')",
-  // 早期回合级 cwd 校验借用了本机 fs.statSync：远程会话的 '/home/user' 在 Windows 上被看成
-  // 'D:\home\user' → 判「目录不存在」→ 掉回本机默认目录并写回库里，之后每条远端命令的 cd 前置都失败。
+  // 早期回合级 cwd 校验借用了本机 fs.statSync：远程会话的 '/home/ker' 在 Windows 上被看成
+  // 'D:\home\ker' → 判「目录不存在」→ 掉回本机默认目录并写回库里，之后每条远端命令的 cd 前置都失败。
   // 这里按「远端项目根 → 连接起始目录 → 家目录」重填；判据是首字符不是 '/'（含空串与盘符路径）。
   "UPDATE ai_chats SET cwd = COALESCE(" +
   "(SELECT CASE WHEN substr(p.root_path,1,1)='/' THEN p.root_path END FROM projects p WHERE p.id = ai_chats.project_id)," +

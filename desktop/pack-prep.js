@@ -119,7 +119,7 @@ fs.cpSync(path.join(ROOT, 'server'), payload, {
     if (!rel) return true;
     if (shouldSkip(rel)) return false;
     /* npm 会在 server/node_modules 里放一个和根包同名的 junction 指回仓库根
-       （实测：server\node_modules\kharness → D:\projects\foo）。
+       （实测：server\node_modules\kharness → D:\1\kharness-NewUI-dev）。
        跟着它递归就是无限套娃 —— 而 build/server-payload 正好也在根里，于是越拷越深，
        直到撞上 Windows 路径长度上限，表现为「系统找不到指定的路径」，Inno/NSIS 直接编不过。
        所以：链接一律不带（真需要依赖的话它是实体目录），再兜一层「不许出现 build/server-payload」。 */

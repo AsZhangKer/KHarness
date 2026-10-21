@@ -14,7 +14,7 @@
     </header>
 
     <div class="toolbar">
-      <input v-model="q" class="input" placeholder="搜索模型 / 提供商" />
+      <EfSearch v-model="q" class="toolbar-search" placeholder="搜索模型 / 提供商" fallback-class="input" />
       <KDropdown :items="SORT_ITEMS" v-model="sortBy" width="140px" />
     </div>
 
@@ -62,6 +62,7 @@ import { aiApi } from '../../api';
 import { toast } from '../../stores/toast';
 import KEmpty from '../../ui/KEmpty.vue';
 import KDropdown from '../../ui/KDropdown.vue';
+import EfSearch from '../../ui/EfSearch.vue';
 
 const SORT_ITEMS = [
   { value: 'latency', label: '按延迟' },
@@ -185,6 +186,8 @@ async function toggleDisabled(m) {
 .page-head p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; }
 .page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+/* 搜索框占满剩余宽度（终末地那份是 397u 定宽 + max-width:100%，交给 flex 拉伸） */
+.toolbar-search { flex: 1 1 auto; min-width: 160px; }
 .input {
   background: var(--bg-elev);
   border: 1px solid var(--border);

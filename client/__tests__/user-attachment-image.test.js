@@ -21,7 +21,7 @@ function mountUser(content) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const app = createApp({
-    render: () => h(ChatMessage, { role: 'user', content, cwd: 'D:\\projects\\proj', remote: false }),
+    render: () => h(ChatMessage, { role: 'user', content, cwd: 'D:\\1\\proj', remote: false }),
   });
   app.mount(host);
   hosts.push({ host, app });

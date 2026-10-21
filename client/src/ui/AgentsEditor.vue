@@ -81,7 +81,7 @@ const placeholder = '# 项目背景\n\n# 编码规范\n\n# 业务约定\n';
    这里只是"给用户看有哪些、点一下插进去"，真正的替换在注入时由后端做；
    两边不同步的话按钮插进去的记号不会被展开，看起来就像这个功能坏了。 */
 const VARS = [
-  { key: 'cwd', desc: '完整绝对工作目录（到了某个会话 / 项目会给 AI 的时候自适应）', sample: 'D:\\projects\\my-project' },
+  { key: 'cwd', desc: '完整绝对工作目录（到了某个会话 / 项目会给 AI 的时候自适应）', sample: 'D:\\1\\my-project' },
   { key: 'time', desc: '当前时间，hh:mm:ss', sample: '09:41:07' },
   { key: 'date', desc: '当前日期，yyyy/mm/dd', sample: '2026/10/16' },
   { key: 'os', desc: '当前系统（平台 + 内核版本 + 架构）', sample: 'Windows（win32 · 10.0.26100 · x64）' },

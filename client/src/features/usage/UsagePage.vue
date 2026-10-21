@@ -26,8 +26,12 @@
     <section class="card">
       <h3>
         <i class="fas fa-chart-simple"></i> 按日
-        <span v-if="daily.length" class="head-note">峰值 {{ fmt(niceMax) }} / 天</span>
+        <span v-if="daily.length && !isEndfield" class="head-note">峰值 {{ fmt(niceMax) }} / 天</span>
       </h3>
+      <!-- 终末地：直接搬母本 FORM/价格走势图表.html 的 .ef-price（只读，不拖动），
+           数据换成「按日 token 总量」，基线 = 日均。其余六套主题仍走下面这套柱形图。 -->
+      <EndfieldPriceChart v-if="isEndfield && daily.length" :points="chartPoints" />
+      <template v-else>
       <!-- 读数条：把「悬停那一天的具体数字」摆在图上方。
            以前只有每个柱子上的 title（要悬停等一秒才出来），图上既没有刻度也没有数字 ——
            他说的「根本看不出来具体数据」就是这条。 -->
@@ -74,12 +78,13 @@
           </div>
         </div>
       </div>
-      <div v-if="!daily.length" class="muted">暂无数据</div>
       <div class="legend">
         <span><i class="swatch inp"></i> 输入</span>
         <span><i class="swatch out"></i> 输出</span>
         <span class="dim">点数字看整表：下面「按日明细」是精确值</span>
       </div>
+      </template>
+      <div v-if="!daily.length" class="muted">暂无数据</div>
     </section>
 
     <section class="card">
@@ -133,8 +138,10 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { aiApi } from '../../api';
 import { formatTokens, formatCompact } from '../../utils/format';
+import { themeState } from '../../stores/theme';
 import KEmpty from '../../ui/KEmpty.vue';
 import KDropdown from '../../ui/KDropdown.vue';
+import EndfieldPriceChart from './EndfieldPriceChart.vue';
 
 const DAYS_ITEMS = [
   { value: 7, label: '近 7 天' },
@@ -150,6 +157,41 @@ const hoverDay = ref(null);
 
 const daily = computed(() => data.value.daily || data.value.days || []);
 const byModel = computed(() => data.value.models || data.value.by_model || []);
+
+const isEndfield = computed(() => themeState.id === 'endfield');
+
+/**
+ * 喂给母本那张图的点：按日 token 总量，最多 12 列（母本 layout 的 12 列上限，
+ * 再多标签就会互相压）。daily 是「最旧 → 最新」，母本也是这个方向，最后一个是高亮列。
+ *
+ * 必须**补零**：后端 GROUP BY 只返回有量的日期，近 7 天只有一天用过就只剩一列，
+ * 母本那种「七列围绕日均线起伏」的节奏完全出不来。以最后一条数据的日期为锚点往回推，
+ * 不拿 new Date() 当锚点 —— SQLite 的 DATE() 是 UTC，本地可能差一天。
+ */
+const chartPoints = computed(() => {
+  const list = daily.value;
+  if (!list.length) return [];
+  const n = Math.min(12, Math.max(1, Number(days.value) || 7));
+  const keyOf = (d) => String(d.day || '').slice(0, 10);
+  const byDay = new Map(list.map((d) => [keyOf(d), d]));
+  // 锚点默认取**今天**（最后一列 = 今天，高亮）。数据日期比今天晚才用数据日期
+  // （SQLite 的 DATE() 可能是 UTC，本地时区靠东时会出现「明天」的那条）。
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const lastData = new Date(`${keyOf(list[list.length - 1])}T00:00:00`);
+  const anchor = lastData > today ? lastData : today;
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const dt = new Date(anchor);
+    dt.setDate(dt.getDate() - i);
+    const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    const d = byDay.get(key) || { day: key, prompt: 0, completion: 0, cached: 0, cost: 0 };
+    const prompt = val(d, 'prompt');
+    const completion = val(d, 'completion');
+    out.push({ day: key, prompt, completion, total: prompt + completion });
+  }
+  return out;
+});
 
 const summary = computed(() => {
   const s = data.value.total || data.value.summary || {};

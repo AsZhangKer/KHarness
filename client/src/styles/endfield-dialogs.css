@@ -284,9 +284,14 @@
 :root[data-theme='endfield'] .efd-panel.tall .b3 {
   height: auto;
   min-height: calc(var(--k) * 522);
+  /* 118 轮：条目多的弹窗（回收站、模型列表）以前会把整块板撑出屏幕 ——
+     板高封在视口内，滚的是内容区，深标头和底部按钮一直可见。
+     留 130px 给板外那排凸出的胶囊 + 上下呼吸位。 */
+  max-height: calc(100vh - 130px);
   padding-bottom: calc(var(--k) * 70);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 :root[data-theme='endfield'] .efd-panel.tall .b3 > * { position: absolute; }
 :root[data-theme='endfield'] .efd-panel.tall .desc {
@@ -296,8 +301,13 @@
   width: auto;
   height: auto;
   max-height: none;
+  /* flex:1 + min-height:0 ⇒ 内容超出时由它自己滚（容器被 max-height 封住），
+     内容不多时按原样撑开，母本比例不变。 */
+  flex: 1 1 auto;
+  min-height: 0;
   margin: calc(var(--k) * 230) calc(var(--k) * 60) 0 calc(var(--k) * 463);
-  overflow: visible;
+  overflow: auto;
+  overflow-x: hidden;
 }
 :root[data-theme='endfield'] .efd-panel.tall .efd-actions {
   position: relative;
@@ -507,3 +517,83 @@
 }
 /* 解锁框的内容区同理：母本 .tx 是 22u 的说明字，弹窗档下 22×.796=17.5px 偏大，
    与面板框（14px 正文）不一致 ⇒ 收到同一档。 */
+
+/* ════════════════════════════════════════════════════════════════════════
+   九 · 面板里的 sticky 工具条（模型选择器的搜索行）
+   它原本是给 .k-modal-body（有 16px 内距）写的：margin:-16px -16px、padding:16px、
+   top:-16px。终末地的内容宿主是 .desc，没有那层内距 ⇒ 负 margin 把它整条推出内容区，
+   在板面上留一条横跨的灰带（他说的「搜索框下面那块灰色的层」）。
+   这里把负偏移归零、背景换成板底色（sticky 必须不透明，否则列表会从缝里透出来）。
+   ════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-panel .picker-bar {
+  position: sticky;
+  top: 0;
+  margin: 0 0 10px;
+  padding: 6px 0 10px;
+  background: #ebe9e9;
+  z-index: 2;
+}
+/* 行内文字对齐：模型名与 model_id 字号不同、mid 又是 flex:1，基线容易看歪。
+   统一按中线对齐并给两者之间留出固定间隙。 */
+:root[data-theme='endfield'] .efd-panel .picker-body .row {
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+/* 两个格子统一盒高 + 行高：字号（13 / 11）与字体（正文 / 等宽）都不同，
+   各自按倍数算行高时等宽那列会飘起几个像素。18px 行盒里两者都居中，基线差控制在 1px 内。 */
+:root[data-theme='endfield'] .efd-panel .picker-body .row .name,
+:root[data-theme='endfield'] .efd-panel .picker-body .row .mid {
+  align-self: center;
+  height: 18px;
+  line-height: 18px;
+}
+
+/* 模型行三列对齐：.name 只写了 min-width:120px，长名字会把 .mid 的起点顶到各行不同的位置
+   （截图里 model_id 一列参差不齐，看着像文字错位）。这里给名字固定一列宽，
+   放不下的用省略号，右边 badge / 延迟因此永远对齐。 */
+:root[data-theme='endfield'] .efd-panel .picker-body .row .name {
+  flex: 0 0 236px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* 徽章列必须靠右：.mid 内容短的行（openrouter/free）里它跟着文字走，落在列表中间，
+   和别的行对不齐。让中间的 model_id 吃掉剩余宽度、徽章 margin-left:auto 顶到右沿。 */
+:root[data-theme='endfield'] .efd-panel .picker-body .row .mid {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+:root[data-theme='endfield'] .efd-panel .picker-body .row .badge { margin-left: auto; line-height: 1.5; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   十 · 表单板（添加提供商 / 添加模型 / 批量编辑）
+   这些弹窗以前没传 board，默认走「对话框」板：整张表单被塞进 .tx 那个文本槽里，
+   黄标头 + 挂锁 + 两行勾选的固定版式直接压在输入框上 —— 又难看又点不动。
+   改成 board="form" 之后，这里只需要补两条：内容撑满卡宽、卡高封在视口内自己滚。
+   ════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-form .form-group {
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+}
+:root[data-theme='endfield'] .efd-form .form-group > .form { width: 100%; }
+/* 表单行距：KInput 自带 margin，这里只兜一层纵向节奏，避免挤成一片 */
+:root[data-theme='endfield'] .efd-form .form { display: flex; flex-direction: column; gap: 4px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   十一 · 表单放进「面板」板里（添加提供商 / 添加模型 / 批量编辑 / 管理模型）
+   统一成回收站、模型列表同一块板：深标头 + 内容区 + 板外凸出的胶囊按钮。
+   母本 .desc 那 463k 左缩进是给「左边放标签/水印」的样板排的，表单塞进去会被推到
+   右边一条窄缝里，所以表单类内容单独把左右内距收回来（60k 与母本右沿一致）。
+   ════════════════════════════════════════════════════════════════════════ */
+:root[data-theme='endfield'] .efd-panel.tall .desc > .form { width: 100%; }
+:root[data-theme='endfield'] .efd-panel.tall .desc:has(> .form) {
+  margin-left: calc(var(--k) * 60);
+  margin-right: calc(var(--k) * 60);
+  margin-top: calc(var(--k) * 130);
+}
+/* 表单自身：纵向节奏 + 输入框不抢宽度 */
+:root[data-theme='endfield'] .efd-panel .desc > .form { display: flex; flex-direction: column; gap: 6px; }

@@ -40,7 +40,19 @@
           role="listbox"
           :style="menuStyle"
         >
-          <template v-for="(item, i) in items" :key="'kdd' + i">
+          <!-- 长列表的过滤框：只在 searchable 时出现（模型 180+ 条，纯滚动找不过来）。
+               keydown.stop 交给 onKey 统一处理方向键/回车/Esc，避免和输入法抢键。 -->
+          <div v-if="searchable" class="k-dd-search">
+            <input
+              ref="searchEl"
+              v-model="q"
+              type="text"
+              :placeholder="searchPlaceholder"
+              @keydown.stop="onKey"
+              @click.stop
+            />
+          </div>
+          <template v-for="(item, i) in visibleItems" :key="'kdd' + i">
             <!-- 分隔线：把一个菜单分成几段（Git 菜单要「分支 / 操作 / 远端」三组）。
                  不是可选项，键盘导航与点击都会跳过它。 -->
             <div v-if="item.sep" class="k-dd-sep" role="separator"></div>
@@ -67,7 +79,7 @@
               <i v-else-if="isOn(item)" class="fas fa-check"></i>
             </button>
           </template>
-          <div v-if="!items.length" class="k-dd-empty">无选项</div>
+          <div v-if="!visibleItems.length" class="k-dd-empty">无选项</div>
         </div>
       </Transition>
     </Teleport>
@@ -91,6 +103,10 @@ const props = defineProps({
   placement: { type: String, default: 'auto' },
   /** 撑满父容器宽度（放进表单行里用） */
   block: { type: Boolean, default: false },
+  /** 长列表（模型 180+ 条）打开时在面板顶部给一个过滤框 —— 只在真的需要时传 true，
+      普通 4~8 项的菜单不加，免得每次打开先看到一个输入框 */
+  searchable: { type: Boolean, default: false },
+  searchPlaceholder: { type: String, default: '搜索…' },
 });
 const emit = defineEmits(['update:modelValue', 'change', 'open', 'close']);
 // 终末地走母本 .sel/.mnu，其余六套走 .pill-btn/.dropdown-panel —— 两套类名不能同时挂（会互相咬）
@@ -105,6 +121,23 @@ const place = ref('bottom');
 const current = computed(() => props.items.find((x) => isOn(x)) || null);
 const hasValue = computed(() => !!current.value);
 const shownLabel = computed(() => props.label || current.value?.label || props.placeholder);
+
+/* 搜索过滤：只有 searchable 才生效。过滤时把分隔线一起去掉 —— 过滤后的列表里
+   保留原分隔线会切出一堆空档（两段之间什么都没有，看着像列表坏了）。 */
+const q = ref('');
+const searchEl = ref(null);
+const visibleItems = computed(() => {
+  if (!props.searchable) return props.items;
+  const kw = q.value.trim().toLowerCase();
+  if (!kw) return props.items;
+  // keywords：不在面板上显示、但参与匹配（模型下拉用它兜上「提供商名 / model_id」，
+  // 否则用户按 OpenRouter 搜不到那一串别名）。
+  return props.items.filter((it) => {
+    if (!it || it.sep) return false;
+    const hay = `${it.label || ''} ${it.keywords || ''}`.toLowerCase();
+    return hay.includes(kw);
+  });
+});
 
 function isOn(item) {
   return String(item.value) === String(props.modelValue) && props.modelValue !== '' && props.modelValue != null;
@@ -237,7 +270,7 @@ function pick(item) {
 /** 可选项的下标（跳过分隔线、置灰项）—— 键盘上下要能跨过它们 */
 function pickableIndexes() {
   const out = [];
-  props.items.forEach((it, i) => { if (it && !it.sep && !it.disabled) out.push(i); });
+  visibleItems.value.forEach((it, i) => { if (it && !it.sep && !it.disabled) out.push(i); });
   return out;
 }
 /** 从 dir 方向找下一个可选项；一个都没有就返回 -1 */
@@ -262,7 +295,7 @@ function onKey(e) {
     }
     return;
   }
-  const n = props.items.length;
+  const n = visibleItems.value.length;
   if (!n) return;
   if (e.key === 'ArrowDown') {
     e.preventDefault();
@@ -274,7 +307,7 @@ function onKey(e) {
     if (next >= 0) { cursor.value = next; nextTick(() => scrollTo(cursor.value)); }
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    pick(props.items[cursor.value]);
+    pick(visibleItems.value[cursor.value]);
   }
 }
 
@@ -300,19 +333,22 @@ watch(open, (v) => {
     // 看着像"关不掉"）。清掉后容器回到 width:auto ⇒ 按当前标签的自然宽重排；
     // 若选中项的标签变长了，重排后自然就是新的宽度，不需要旧的 --dd-w 帮忙。
     if (ef.value) rootEl.value?.style.removeProperty('--dd-w');
+    q.value = '';
     return;
   }
-  const idx = props.items.findIndex((x) => isOn(x));
+  const idx = visibleItems.value.findIndex((x) => isOn(x));
   cursor.value = idx >= 0 ? idx : 0;
   // 落点若正好是分隔线/置灰项，挪到最近的可选项上（否则回车会点了个寂寞）
-  if (props.items[cursor.value]?.sep || props.items[cursor.value]?.disabled) {
+  if (visibleItems.value[cursor.value]?.sep || visibleItems.value[cursor.value]?.disabled) {
     const next = stepCursor(1);
     cursor.value = next >= 0 ? next : 0;
   }
   positionMenu();
   nextTick(() => {
     positionMenu();
-    triggerEl.value?.focus?.();
+    // 可搜索的长列表：打开就聚焦过滤框（边打边筛，比滚 23 屏快得多）
+    if (props.searchable) searchEl.value?.focus?.();
+    else triggerEl.value?.focus?.();
     // 长列表（迁移后 280+ 模型）打开时必须落在当前选项上，否则要点开再滚很久
     scrollTo(cursor.value);
   });
@@ -330,6 +366,12 @@ function scrollTo(i) {
   const el = menu.querySelector(`.k-dd-item[data-i="${i}"]`) || menu.querySelector('.k-dd-item.on');
   if (el) el.scrollIntoView({ block: 'center' });
 }
+
+/* 过滤后行数变了：游标回到第一项，面板宽度（max-content）也要重新量 */
+watch(q, () => {
+  cursor.value = 0;
+  nextTick(() => { positionMenu(); scrollTo(0); });
+});
 </script>
 
 <style scoped>
@@ -420,6 +462,34 @@ function scrollTo(i) {
   color: var(--text-3);
   font-size: 12px;
 }
+/* 长列表的过滤框（searchable）。普通下拉不渲染它，所以这里不用管「4 项菜单里多一个框」的问题。 */
+.k-dd-search {
+  padding: 6px 8px 4px;
+}
+.k-dd-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.k-dd-search input:focus { border-color: var(--accent); }
+/* 终末地：面板是深灰 .mnu，白底输入框会跳出来。压成同一档深面 + 浅字。 */
+:root[data-theme='endfield'] .mnu .k-dd-search input {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #6a6968;
+  border-radius: 6px;
+  background: #3a3939;
+  color: #f2f2f2;
+  font-size: 12.5px;
+}
+:root[data-theme='endfield'] .mnu .k-dd-search input:focus { border-color: #ffe500; }
+:root[data-theme='endfield'] .mnu .k-dd-search input::placeholder { color: #a5a3a3; }
 /* 分隔线：把一个菜单分成几段（Git 菜单要「分支 / 操作 / 远端」几组）。
    不是可选项 —— .k-dd-sep 上不绑任何事件。 */
 .k-dd-sep {

@@ -9,12 +9,11 @@
            设置页所有分区是一次性挂载（v-show 隐藏），所以能一次扫全量 DOM 建索引；
            关掉开关被 v-if 摘掉的项本来就不存在，点了会提示找不到而不是跳错地方。 -->
       <div class="set-search">
-        <input
+        <EfSearch
           v-model="setQuery"
-          class="k-input"
-          type="search"
+          class="set-search-box"
           :placeholder="txt('settings.searchPlaceholder')"
-          @keydown.esc="setQuery = ''"
+          fallback-class="k-input"
         />
         <div v-if="setHits.length" class="set-hits">
           <button v-for="(h, i) in setHits" :key="i" type="button" class="set-hit" @click="gotoSetting(h)">
@@ -259,7 +258,7 @@
       <div class="grid-2">
         <KInput v-model="permTestForm.tool" label="工具名" block placeholder="run_command" />
         <KInput v-model="permTestForm.command" label="命令行" block placeholder="rm -rf /" />
-        <KInput v-model="permTestForm.paths" :label="txt('settings.perm.testPaths')" block placeholder="D:\projects\foo" />
+        <KInput v-model="permTestForm.paths" :label="txt('settings.perm.testPaths')" block placeholder="D:\1\kharness-main" />
         <KInput v-model="permTestForm.text" label="关键词文本" block />
       </div>
       <button class="btn" type="button" @click="runPermTest">{{ txt('settings.perm.testRun') }}</button>
@@ -909,6 +908,7 @@ import KTabs from '../../ui/KTabs.vue';
 import KInput from '../../ui/KInput.vue';
 import KDropdown from '../../ui/KDropdown.vue';
 import KModal from '../../ui/KModal.vue';
+import EfSearch from '../../ui/EfSearch.vue';
 import AgentsEditor from '../../ui/AgentsEditor.vue';
 import { visibleThemes, themeState, setTheme, labFlags, setLabFlag } from '../../stores/theme';
 import { motionState, setMotion } from '../../stores/motion';
@@ -2431,6 +2431,8 @@ pre.cu-err {
 /* 条目级搜索的下拉：结果按「以关键词开头 > 含关键词 > 只中分区名」排 */
 .set-search { position: relative; flex: 1 1 auto; max-width: 420px; margin-left: auto; }
 .set-search > input { width: 100%; }
+/* 搜索框组件（终末地那份是 397u 定宽，这里按父容器撑满） */
+.set-search-box { width: 100%; }
 .set-hits {
   position: absolute;
   top: calc(100% + 6px);

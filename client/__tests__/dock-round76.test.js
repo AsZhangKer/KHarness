@@ -74,7 +74,7 @@ const DONE = { id: 'sa-done-1', name: '查打包慢', status: 'done', running: f
 
 const HISTORY = [{
   tool: 'edit_file',
-  path: 'C:\\Users\\<用户名>\\project\\src\\long\\nested\\dir\\config.js',
+  path: 'C:\\Users\\Admin\\project\\src\\long\\nested\\dir\\config.js',
   undo_id: 'u1',
   undone: false,
   diff: [
@@ -178,7 +178,7 @@ describe('右栏修改历史卡片', () => {
     const path = dock.host.querySelector('.hist-path');
     expect(name.textContent).toBe('config.js');
     expect(name.textContent).not.toContain('\\');
-    expect(path.textContent).toBe('C:\\Users\\<用户名>\\project\\src\\long\\nested\\dir\\config.js');
+    expect(path.textContent).toBe('C:\\Users\\Admin\\project\\src\\long\\nested\\dir\\config.js');
   });
 
   it('「展开」改成了「审阅」，行里没有撤销那颗键（撤销在弹窗里）', async () => {

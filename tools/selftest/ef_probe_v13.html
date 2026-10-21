@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>v13 主题入口收进实验室</title>
+<style>html,body{margin:0;background:#101010}iframe{display:block;border:0;width:1440px;height:900px}#out{color:#d8ffe8;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;padding:8px}</style>
+</head>
+<body>
+<iframe id="f" width="1440" height="900"></iframe>
+<div id="out">loading…</div>
+<script>
+/* 真走一遍用户路径：设置 → 实验室 → 拨「终末地主题」→ 外观页那张卡出现/消失 → 切上去/关掉后退回暗色。
+   判据在 client/src/stores/theme.js：visibleThemes 过滤带 lab 标记的条目，setTheme 也认不得未解锁的 id。 */
+const checks = [], diag = {};
+const ck = (n, want, got, pass) => checks.push({ n, want, got, pass: !!pass });
+document.getElementById('f').addEventListener('load', onFrame);
+
+start();
+function start() {
+  const fr = document.getElementById('f');
+  // 先清一次偏好，保证「实验室没开」是初始态（同源，直接写宿主页的 localStorage 就是应用读的那份）
+  localStorage.removeItem('kh.theme');
+  localStorage.removeItem('nu_labs');
+  fr.src = '/settings';
+}
+
+function onFrame() {
+  setTimeout(step0, 2200);
+}
+const doc = () => document.getElementById('f').contentDocument;
+const win = () => document.getElementById('f').contentWindow;
+const all = (s) => Array.from(doc().querySelectorAll(s));
+const byText = (s, re) => all(s).find((e) => re.test((e.textContent || '').trim()));
+function finish() {
+  const fail = checks.filter((c) => !c.pass);
+  const lines = checks.map((c) => (c.pass ? 'PASS ' : 'FAIL ') + c.n + '  [want ' + c.want + '] [got ' + c.got + ']');
+  document.getElementById('out').textContent = lines.join('\n')
+    + '\nPROBE' + JSON.stringify({ total: checks.length, fail: fail.length, diag, lines });
+}
+
+function step0() {
+  const cards = all('.theme-card');
+  ck('默认（实验室没开）外观页只有 6 张主题卡', '6', String(cards.length), cards.length === 6);
+  ck('默认没有「终末地」这张卡', '无', byText('.theme-card', /终末地/) ? '有' : '无', !byText('.theme-card', /终末地/));
+  ck('data-theme 是默认暗色', 'dark', doc().documentElement.dataset.theme, doc().documentElement.dataset.theme === 'dark');
+  diag.labsBefore = localStorage.getItem('nu_labs');
+
+  const labTab = byText('button, .k-tab, [role=tab]', /^\s*实验室/);
+  ck('实验室页签在', '在', labTab ? '有' : '缺', !!labTab);
+  if (!labTab) return finish();
+  labTab.click();
+  setTimeout(step1, 700);
+}
+
+function step1() {
+  const row = all('.k-row-card').find((r) => /终末地主题/.test(r.textContent || ''));
+  ck('实验室里有「终末地主题」这一行', '在', row ? (row.textContent || '').replace(/\s+/g, ' ').slice(0, 46) : '缺', !!row);
+  if (!row) return finish();
+  const sw = row.querySelector('.k-switch');
+  ck('这一行是真开关（不是「待实装」占位）', '在', sw ? '有' : '缺', !!sw);
+  ck('开关初始是关', 'off', sw ? (sw.className || '') : '-', sw && !/on/.test(sw.className));
+  diag.desc = (row.textContent || '').replace(/\s+/g, ' ').trim();
+  sw.click();
+  setTimeout(step2, 700);
+}
+
+function step2() {
+  ck('拨开之后 nu_labs 落盘', 'endfieldTheme:true', String(localStorage.getItem('nu_labs')),
+    /endfieldTheme":\s*true/.test(localStorage.getItem('nu_labs') || ''));
+  const apTab = byText('button, .k-tab, [role=tab]', /^\s*外观/);
+  if (!apTab) { ck('外观页签在', '在', '缺', false); return finish(); }
+  apTab.click();
+  setTimeout(step3, 700);
+}
+
+function step3() {
+  const cards = all('.theme-card');
+  ck('拨开之后外观页变 7 张卡', '7', String(cards.length), cards.length === 7);
+  const ef = byText('.theme-card', /终末地/);
+  ck('「终末地」卡出现', '在', ef ? '有' : '缺', !!ef);
+  if (!ef) return finish();
+  ef.click();
+  setTimeout(step4, 800);
+}
+
+function step4() {
+  ck('点这张卡 → data-theme=endfield', 'endfield', doc().documentElement.dataset.theme,
+    doc().documentElement.dataset.theme === 'endfield');
+  ck('并且真的存进了 kh.theme', 'endfield', String(localStorage.getItem('kh.theme')),
+    localStorage.getItem('kh.theme') === 'endfield');
+  const labTab = byText('button, .k-tab, [role=tab]', /^\s*实验室/);
+  labTab.click();
+  setTimeout(step5, 700);
+}
+
+function step5() {
+  const row = all('.k-row-card').find((r) => /终末地主题/.test(r.textContent || ''));
+  const sw = row && row.querySelector('.k-switch');
+  ck('开关现在是开', 'on', sw ? (sw.className || '') : '-', sw && /on/.test(sw.className));
+  if (!sw) return finish();
+  sw.click();
+  setTimeout(step6, 800);
+}
+
+function step6() {
+  /* 关掉之后：正在用终末地的人必须被退回默认主题，不能留在一个入口都没了的皮肤里 */
+  ck('关掉开关 → 当场退回暗色', 'dark', doc().documentElement.dataset.theme,
+    doc().documentElement.dataset.theme === 'dark');
+  const apTab = byText('button, .k-tab, [role=tab]', /^\s*外观/);
+  apTab.click();
+  setTimeout(step7, 700);
+}
+
+function step7() {
+  const cards = all('.theme-card');
+  ck('卡又收回 6 张', '6', String(cards.length), cards.length === 6);
+  ck('刷新后也不会偷偷回到终末地', 'dark', localStorage.getItem('kh.theme'),
+    localStorage.getItem('kh.theme') !== 'endfield');
+  finish();
+}
+</script>
+</body>
+</html>

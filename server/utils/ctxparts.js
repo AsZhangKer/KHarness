@@ -36,14 +36,33 @@ const TOOL_MAX_TOKENS = 16000;
 const TOOL_HEAD_TOKENS = Math.round(TOOL_MAX_TOKENS * 0.8);   // 12800
 const TOOL_TAIL_TOKENS = TOOL_MAX_TOKENS - TOOL_HEAD_TOKENS;  // 3200
 
-// 历史工具结果的**总预算**：超过就把最旧的那些整体换成一行占位符。
-// opencode 也有同款（PRUNE_PROTECT / PRUNE_MINIMUM）；没有这一层，长会话里几十轮工具结果
-// 会把窗口慢慢吃满，而它们早就不相关了。
+/* 历史工具结果的**总量**清理（第二层）。
+ *
+ * 第一百一十八轮修正（线上事故：上下文才 16% 就收到「工具结果总量超出预算，已把最早的一批
+ * 换成占位符」）——病根不在阈值大小，而在**触发条件**：
+ *   · 旧实现把它挂在 maybeAutoCompress 的最前面，**每回合无条件跑一遍**，
+ *     预算按窗口 10% 算（W=200k → 20k tok，而单条工具结果硬顶就是 16k tok）：
+ *     正常读两个文件就超预算，模型刚读的东西被抹成占位符，用户被迫手动压缩。
+ *   · opencode / DSH 的 pruner 不是这么用的：它是**压缩流程里的一步**，
+ *     在上下文已到压缩线、准备压缩时才来「先削可逆的、再压不可逆的」。
+ *     没有谁会在用了 16% 的窗口时去删用户的历史。
+ *
+ * 现在的口径：
+ *   ① 闸门在调用方（pruneToolParts）：**没到压缩线，一条都不动**；
+ *   ② 到了压缩线，目标不是「压到窗口 10%」，而是「压到压缩线的下方一点」
+ *      （PRUNE_TARGET_RATIO），刚好让这一轮不必牺牲对话摘要；
+ *   ③ 当前回合（以及更新的）工具结果**永不清理** —— 那正是模型下一步的依据。
+ *
+ * budgetForWindow 只剩兜底用途（调用方没给压缩线时），不再参与正常判断。
+ */
 function budgetForWindow(limit) {
   const w = Number(limit) || 0;
   if (!(w > 0)) return 24000;
   return Math.min(80000, Math.max(16000, Math.round(w * 0.1)));
 }
+
+// 到了压缩线，把整包削到「压缩线 × 这个比例」以内（留 15% 余量给本回合继续长出来的内容）
+const PRUNE_TARGET_RATIO = 0.85;
 function protectForWindow(limit) {
   const w = Number(limit) || 0;
   if (!(w > 0)) return 12000;
@@ -142,20 +161,23 @@ function pruneToolOutput(input, opts = {}) {
 }
 
 /**
- * 历史工具结果的总预算清理。
+ * 历史工具结果的总量清理。
  *
- * items: [{ id, name, tokens, text }] —— 按时间升序（最旧在前）。
+ * items: [{ id, name, turn_id, tokens, text }] —— 按时间升序（最旧在前）。
  * 返回 { items, pruned, freedTokens }：被清理的条目 text 换成一行占位符，其余原样。
  *
- * 规则（与 opencode 的 pruner 同一取舍）：
+ * 规则：
  *   · 总量没超预算 → 一条都不动（短会话零副作用）；
- *   · 最近 protect 个 token 的结果永不清理（那多半正是当前依据）；
+ *   · **当前回合（turn_id >= keepTurnId）的工具结果永不清理** —— 那是模型下一步的依据，
+ *     清掉它等于让模型「忘了刚读的文件」，比多花几万 token 昂贵得多；
+ *   · 最近 protect 个 token 的结果永不清理；
  *   · 从最旧的开始清，清到预算内就停。
  */
 function pruneHistoryResults(items, opts = {}) {
   const list = Array.isArray(items) ? items : [];
   const budget = Number(opts.budget) > 0 ? Number(opts.budget) : 24000;
   const protect = Number(opts.protect) >= 0 ? Number(opts.protect) : 12000;
+  const keepTurnId = Number(opts.keepTurnId) || 0;
   let total = 0;
   for (const it of list) total += Math.max(0, Number(it.tokens) || 0);
   if (total <= budget) return { items: list, pruned: 0, freedTokens: 0 };
@@ -167,6 +189,13 @@ function pruneHistoryResults(items, opts = {}) {
     kept += Math.max(0, Number(list[i].tokens) || 0);
     if (kept > protect) { keepFrom = i + 1; break; }
     keepFrom = i;
+  }
+  // 当前回合及之后的一律保留：取两者更靠前（保留得更多）的那个起点
+  if (keepTurnId > 0) {
+    for (let i = 0; i < list.length; i++) {
+      const t = Number(list[i].turn_id) || 0;
+      if (t >= keepTurnId) { if (i < keepFrom) keepFrom = i; break; }
+    }
   }
 
   let pruned = 0;
@@ -191,6 +220,7 @@ function pruneHistoryResults(items, opts = {}) {
 module.exports = {
   TOOL_MAX_CHARS, TOOL_MAX_LINES, TOOL_HEAD_LINES, TOOL_TAIL_LINES,
   TOOL_MAX_TOKENS, TOOL_HEAD_TOKENS, TOOL_TAIL_TOKENS,
+  PRUNE_TARGET_RATIO,
   budgetForWindow, protectForWindow,
   pruneToolOutput, pruneHistoryResults,
   takeHeadByTokens, takeTailByTokens,

@@ -298,6 +298,8 @@
           :model-value="currentModelId"
           :label="modelName || '模型'"
           width="260px"
+          :searchable="true"
+          search-placeholder="搜索模型 / 提供商…"
           :disabled="busy"
           :title="modelName || '模型'"
           @change="(v) => $emit('select-model', v)"
@@ -523,6 +525,8 @@ const modelItems = computed(() =>
   props.models.map((m) => ({
     value: m.id,
     label: m.display_name || m.model_id,
+    // 搜索用：面板上不显示，但「OpenRouter / deepseek-v4」这类关键字要能搜到
+    keywords: `${m.provider_name || ''} ${m.model_id || ''}`,
   }))
 );
 
@@ -563,6 +567,11 @@ const ctxMetaText = computed(() => {
   const head = `上下文 ${ctxPct.value}%（${ctxUsedText.value} / ${ctxLimitText.value} tok）`;
   // 分母被压到比设定值小，只有一种原因：上游真的以「输入超长」拒过某一包（实测天花板）。
   // 这是既成事实，不是推断 —— 所以要写明，否则会以为「我设的 100 万去哪了」。
+  //
+  // ⚠ 118 轮起后端**不再**用实测天花板压低分母（改成「窗口只认你设的数，溢出靠 force 压缩」，
+  //   与 opencode / DSH 一致），所以 tightened 现在恒为 false、下面那句「已按上游实测上限封顶」
+  //   不会再出现。逻辑留着不删（万一以后恢复封顶语义，这段就是现成的），只是别把它当成
+  //   “现在会发生的事”去排查。
   const conf = Number(props.contextConfigured) || 0;
   const tightened = conf > 0 && conf > props.contextLimit;
   return tightened ? `${head}｜已按上游实测上限封顶（设定 ${conf.toLocaleString('en-US')}）` : head;

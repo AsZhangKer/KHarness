@@ -176,7 +176,7 @@
           <div class="row" :title="turnNote"><span class="muted">缓存</span><span>{{ fmt(usage.cached_tokens) }} tok</span></div>
           <div class="row" :title="turnNote"><span class="muted">思考</span><span>{{ fmt(usage.reasoning_tokens) }} tok</span></div>
           <div class="row" :title="ctxTitle"><span class="muted">上下文</span><span>{{ fmt(contextUsed) }} / {{ fmt(contextLimit) || '—' }}</span></div>
-          <div class="actions">
+          <div class="actions ctx-actions">
             <button
               class="btn"
               type="button"

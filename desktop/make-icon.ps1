@@ -5,8 +5,8 @@
 # mangles non-ASCII comments in ways that break the script.
 Add-Type -AssemblyName System.Drawing
 
-$src = 'D:\projects\foo\build\icon.png'
-$out = 'D:\projects\foo\build\icon.ico'
+$src = 'D:\1\kharness-NewUI-dev\build\icon.png'
+$out = 'D:\1\kharness-NewUI-dev\build\icon.ico'
 $sizes = @(16, 32, 48, 256)
 
 $orig = [System.Drawing.Image]::FromFile($src)

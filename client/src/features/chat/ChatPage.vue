@@ -478,7 +478,7 @@
     <!-- 新建项目（remote_id 非空时是「新建远端项目」，路径填远端绝对路径） -->
     <KModal :open="projModal" :title="projTitle" width="480px" tall @close="projModal = false">
       <div class="form">
-        <KInput v-model="projForm.name" label="项目名称" block placeholder="例如：my-project" />
+        <KInput v-model="projForm.name" label="项目名称" block placeholder="例如：kharness-main" />
         <div class="path-row">
           <KInput
             v-model="projForm.root_path"
@@ -2281,7 +2281,9 @@ function applyPool() {
 }
 .resizer:hover { background: var(--border-strong); }
 .chat-page.immersive .rail,
-.chat-page.immersive .dock,
+/* 只隐藏右侧 dock 面板（aside.dock），不能把终末地主题的输入框（.composer.dock）一起藏掉：
+   ChatComposer 在终末地下根元素也带 dock 类，沉浸规则若写成 .dock 就把输入框误隐藏了。 */
+.chat-page.immersive aside.dock,
 .chat-page.immersive .resizer {
   display: none !important;
 }

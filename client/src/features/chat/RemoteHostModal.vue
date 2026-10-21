@@ -6,7 +6,7 @@
         <KInput v-model="form.username" label="用户名" placeholder="root" />
       </div>
       <div class="row2">
-        <KInput v-model="form.host" label="主机域名 / IP" placeholder="203.0.113.10" />
+        <KInput v-model="form.host" label="主机域名 / IP" placeholder="192.168.1.10" />
         <KInput v-model="form.port" label="端口" placeholder="22" type="number" />
       </div>
 
@@ -34,7 +34,7 @@
 
       <label class="field">
         <span>工作目录</span>
-        <input v-model="form.default_cwd" placeholder="/srv/app 或 /home/user" spellcheck="false" />
+        <input v-model="form.default_cwd" placeholder="/srv/app 或 /home/ker" spellcheck="false" />
         <button class="peek" type="button" title="浏览远端目录" :disabled="!hostId" @click="browse">
           <i class="fas fa-folder-open"></i>
         </button>

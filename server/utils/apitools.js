@@ -216,7 +216,7 @@ function cacheSet(key, text, minutes) {
 
 // ============================================================
 // SearXNG（自建）· 聚合网页搜索
-// 文档：SearXNG API 接入文档 v1.0（2026-09-23）；下列行为均为对本机 127.0.0.1:18888 实测所得
+// 文档：SearXNG API 接入文档 v1.0（2026-09-23）；下列行为均为对本机自建实例实测所得
 //   · 全引擎聚合一次 20s 左右（多数引擎超时），限定 engines=bing 约 0.4s → 默认只走 bing
 //   · timeout_limit 能把等待时间压到指定秒数（实测 6s 给 14 条）
 //   · pageno=2 / time_range=week|month 在实测中直接返回 0 条（不报错），所以不暴露给模型
@@ -225,7 +225,7 @@ function cacheSet(key, text, minutes) {
 //   · format 不在 settings.yml 的 formats 里时返回 HTML 而不是错误 → 必须自己判 JSON
 //   · 未声明的引擎会进 unresponsive_engines，用来解释「为什么只有这么几条」
 // ============================================================
-const SEARX_DEFAULT = 'http://127.0.0.1:18888';
+const SEARX_DEFAULT = 'http://127.0.0.1:8888';
 
 async function runWebSearch(args) {
   const cfg = configOf('web_search');
@@ -1111,7 +1111,7 @@ const TOOLS = {
       categories: { type: 'string', required: false, desc: '分类：general（默认）/ news / science / it 等' }
     },
     configFields: [
-      { key: 'base_url', label: 'SearXNG 服务地址', type: 'text', def: 'http://127.0.0.1:18888', hint: '填你自己那台 SearXNG 的地址' },
+      { key: 'base_url', label: 'SearXNG 服务地址', type: 'text', def: 'http://127.0.0.1:8888', hint: '自建 SearXNG 实例地址' },
       { key: 'default_engines', label: '默认引擎（逗号分隔）', type: 'text', def: 'bing', hint: '留空=全部引擎（实测约 20 秒且多数超时）' },
       { key: 'default_max_results', label: '默认返回条数', type: 'number', def: 8, min: 1, max: 25 },
       { key: 'language', label: '默认语言', type: 'text', def: 'zh-CN' },

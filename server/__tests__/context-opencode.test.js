@@ -6,13 +6,14 @@
  *   ① 工具调用与工具结果**入库**（ai_chat_parts），下一发按顺序重放；
  *   ② 落库即裁剪（50KiB / 2000 行触发，保留头 800 行 + 尾 200 行、总量 ≤12k tok），
  *      中间那段不丢弃工具：read_file 带 offset/limit 能按行精确取回；
- *      总量超预算时把最旧的整条换成占位符；
- *   ③ 用量 = 校准尺 ×（库里能重放出来的整包 + 未入库输出）——
+ *      历史总量削减**只在上下文到压缩线时**发生，当前回合的结果永不清理（118 轮修正）；
+ *   ③ 用量 = 锚点(真 token) + 整包增量，不乘校准尺 ——
  *      没有高水位，没有「按历史最大一发推断能力」，窗口只认「你设的 / 模型声明的 / 全局默认」，撞墙才封顶；
  *   ④ 压缩线 = floor(min(W×0.8, W − 输出预留 − 64k))，分母就是你设的窗口。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'module';
@@ -193,26 +194,48 @@ describe('② pruner：单条裁剪 + 总量清理', () => {
     expect(out.text).toBe(text);
   });
 
-  it('总量超预算时最旧的结果被换成占位符，并写回库（不会被下一次装配捞回来）', () => {
-    const c = mkChat(100000);   // budget = 10% = 10000 tok, protect = 5000 tok
+  it('没到压缩线：历史工具结果一条都不动（118 轮事故：16% 就被抹成占位符）', () => {
+    const c = mkChat(200000);
     const uid = mkMsg(c, 'user', '连读几份大文件');
     for (let i = 0; i < 6; i++) {
       ctx.appendChatPart(c, uid, { kind: 'tool_call', call_id: `c${i}`, name: 'read_file', payload: '{}', meta: {} });
-      // 每条约 4.6k tok（中文 1 tok/字）、12000 字，单条既没到 50KiB 也没到 2000 行，不触发单条裁剪
       ctx.appendToolResultPart(c, uid, { id: `c${i}`, name: 'read_file' }, `文件${i}`.repeat(2000), false);
     }
     mkMsg(c, 'assistant', '都读完了');
-    const cleaned = ctx.pruneToolParts(c, 100000);
-    expect(cleaned).toBeGreaterThan(0);
+    // 用了 32,000 tok（16%），压缩线 128,000 —— 远没到线，一个字都不许动
+    expect(ctx.pruneToolParts(c, 200000, { line: 128000, used: 32000 })).toBe(0);
     const rows = db.prepare("SELECT payload FROM ai_chat_parts WHERE chat_id = ? AND kind = 'tool_result' ORDER BY id ASC").all(c);
+    for (let i = 0; i < rows.length; i++) expect(rows[i].payload).toContain(`文件${i}`);
+  });
+
+  it('到了压缩线才削：只削到线下方，且当前回合的结果一条不动', () => {
+    const c = mkChat(200000);
+    // 较早的回合：5 条大结果（每条约 6000 tok）
+    const old = mkMsg(c, 'user', '先读一批文件');
+    for (let i = 0; i < 5; i++) {
+      ctx.appendChatPart(c, old, { kind: 'tool_call', call_id: `o${i}`, name: 'read_file', payload: '{}', meta: {} });
+      ctx.appendToolResultPart(c, old, { id: `o${i}`, name: 'read_file' }, `旧文件${i}`.repeat(1500), false);
+    }
+    mkMsg(c, 'assistant', '读完了');
+    // 当前回合：1 条大结果 —— 这是模型下一步的依据，绝不能清
+    const cur = mkMsg(c, 'user', '再看看这个');
+    ctx.appendChatPart(c, cur, { kind: 'tool_call', call_id: 'n0', name: 'read_file', payload: '{}', meta: {} });
+    ctx.appendToolResultPart(c, cur, { id: 'n0', name: 'read_file' }, '新文件'.repeat(3000), false);
+
+    // 130,000 tok 已过 128,000 的压缩线 → 允许削「较早回合」的结果
+    const cleaned = ctx.pruneToolParts(c, 200000, { line: 128000, used: 130000 });
+    expect(cleaned).toBeGreaterThan(0);
+    const rows = db.prepare("SELECT turn_id, payload FROM ai_chat_parts WHERE chat_id = ? AND kind = 'tool_result' ORDER BY id ASC").all(c);
     expect(rows[0].payload).toContain('较早的工具结果已清理');
-    // 最新的那条一定还在（受保护的那一段 = 当前依据）
-    expect(rows[rows.length - 1].payload).toContain('文件5');
+    // 当前回合那条必须原样
+    const now = rows.filter(r => r.turn_id === cur);
+    expect(now.length).toBe(1);
+    expect(now[0].payload).toContain('新文件');
     // 再装配一次：占位符是库里的事实，不会被原内容覆盖回来
     const a = ctx.assembleHistoryBase(c);
     const toolMsgs = a.msgs.filter(m => m.role === 'tool');
     expect(toolMsgs[0].content).toContain('较早的工具结果已清理');
-    expect(toolMsgs[toolMsgs.length - 1].content).toContain('文件5');
+    expect(toolMsgs[toolMsgs.length - 1].content).toContain('新文件');
   });
 });
 
@@ -231,12 +254,13 @@ describe('③ 用量口径：整包 × 校准尺，不推断窗口', () => {
     expect(u.configured_limit).toBe(1000000);
   });
 
-  it('撞过输入超长才封顶：limit = 天花板，configured 保留你设的原值', () => {
+  it('撞过输入超长也不改分母（opencode / DSH 都不改窗口），ceiling 只留作诊断', () => {
     const c = mkChat(1000000);
     ctx.noteCeiling(c, 380000);
     const u = ctx.chatContextUsage(c);
-    expect(u.limit).toBe(380000);
+    expect(u.limit).toBe(1000000);            // 你设的 100 万就是 100 万
     expect(u.configured_limit).toBe(1000000);
+    expect(u.ceiling).toBe(380000);           // 事实记着，但不参与判定
   });
 
   it('工具结果入库后用量跟着涨；高水位列不再影响显示', () => {
@@ -306,9 +330,105 @@ describe('④ 压缩线', () => {
     expect(ctx.resolveCompressLine(c, 1000000, 80)).toBe(800000);
   });
 
-  it('W=200,000：80% 与「扣预留」取小 = 126,272', () => {
+  it('W=200,000：余量按窗口 8% 缩放（16k），阈值真的生效 = 160,000', () => {
     const c = mkChat(200000);
-    expect(ctx.resolveCompressLine(c, 200000, 80)).toBe(126272);
+    expect(ctx.resolveCompressLine(c, 200000, 80)).toBe(160000);
+  });
+
+  it('改阈值就改线：同一窗口 60% / 80% / 95% 得到三个不同的点', () => {
+    const c = mkChat(200000);
+    expect(ctx.resolveCompressLine(c, 200000, 60)).toBe(120000);
+    expect(ctx.resolveCompressLine(c, 200000, 95)).toBe(175808);   // 被「窗口−输出预留(8192)−余量(16000)」兜住
+    // 12.8 万窗口：以前 60/80/95 全是 54,272，现在各归各位
+    const c2 = mkChat(128000);
+    expect(ctx.resolveCompressLine(c2, 128000, 60)).toBe(76800);
+    expect(ctx.resolveCompressLine(c2, 128000, 80)).toBe(102400);
+  });
+});
+
+describe('⑥ 压缩保留：条数是下限，token 才是目标（opencode 的 keep=15k）', () => {
+  const mkRows = (n, chars) => Array.from({ length: n }, (_, i) => ({ id: i + 1, content: '字'.repeat(chars) }));
+  const noParts = new Map();
+
+  it('20 条各 1000 tok：留最近 15 条（累计到 15k 就停）', () => {
+    expect(ctx.compressKeepCount(mkRows(20, 1000), noParts, 2, 15000)).toBe(15);
+  });
+
+  it('总量不到 15k：全部保留（压不动就是压不动）', () => {
+    expect(ctx.compressKeepCount(mkRows(5, 1000), noParts, 2, 15000)).toBe(5);
+  });
+
+  it('keepTokens=0 时退回「只留设置里的条数」', () => {
+    expect(ctx.compressKeepCount(mkRows(20, 1000), noParts, 3, 0)).toBe(3);
+  });
+
+  it('工具往返算进保留量：最后一条挂着 20k tok 的工具结果，留 1 条就够', () => {
+    const rows = mkRows(3, 10);
+    const parts = new Map([[3, [
+      { kind: 'tool_result', payload: 'x', meta: { tokens: 20000 } },
+    ]]]);
+    expect(ctx.compressKeepCount(rows, parts, 1, 15000)).toBe(1);
+  });
+
+  it('下限不会超过消息总数（少到没有可压的）', () => {
+    expect(ctx.compressKeepCount(mkRows(2, 10), noParts, 5, 15000)).toBe(2);
+  });
+});
+
+describe('⑦ 压缩链路（假上游，不花额度）', () => {
+  // ai.js 用的是 require('undici').fetch，patch global.fetch 没用 —— 起一个真的本地 HTTP 假上游。
+  const withFakeUpstream = async (reply, fn) => {
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        srv.lastPrompt = (() => { try { return JSON.parse(body).messages[0].content || ''; } catch (e) { return ''; } })();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: reply } }] }));
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      return await fn(`http://127.0.0.1:${srv.address().port}/v1`, srv);
+    } finally {
+      await new Promise((r) => srv.close(r));
+    }
+  };
+
+  it('保留 15k token：旧的归档进摘要、最近的原地留下；摘要按模板写入', async () => {
+    const c = mkChat(200000);
+    for (let i = 0; i < 30; i++) mkMsg(c, i % 2 ? 'assistant' : 'user', '字'.repeat(1000));   // 每条 ≈1000 tok
+    const r = await withFakeUpstream('## 目标\n- 干活\n## 下一步\n- 继续', async (base, srv) => {
+      const row = { model_id: 'm', display_name: 'm', api_style: 'openai', base_url: base, api_key: 'k', max_tokens: 8192 };
+      const out = await ctx.compressChat(c, row, undefined, undefined);
+      return { out, prompt: srv.lastPrompt };
+    });
+    expect(r.out.skipped).toBe(false);
+    expect(r.out.archived).toBe(15);                 // 30k 总量，留最近 15k
+    const left = db.prepare('SELECT COUNT(*) AS n FROM ai_chat_messages WHERE chat_id = ? AND COALESCE(archived, 0) = 0').get(c).n;
+    expect(left).toBe(15);
+    const sum = db.prepare('SELECT summary FROM ai_chats WHERE id = ?').get(c).summary;
+    expect(sum).toContain('## 目标');
+    // prompt 是结构化模板，并且明确要求「不要复述 AGENTS.md / 工具说明」
+    expect(r.prompt).toContain('## 目标');
+    expect(r.prompt).toContain('AGENTS.md');
+    expect(r.prompt).toContain('不要调用工具');
+  });
+
+  it('待压缩部分太小就不压（净收益≈0，别白丢原话）', async () => {
+    const c = mkChat(200000);
+    for (let i = 0; i < 16; i++) mkMsg(c, i % 2 ? 'assistant' : 'user', '字'.repeat(1000));   // 16k
+    let hit = 0;
+    const srv = http.createServer((req, res) => { hit++; res.writeHead(500); res.end('should not be called'); });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      const row = { model_id: 'm', display_name: 'm', api_style: 'openai', base_url: `http://127.0.0.1:${srv.address().port}/v1`, api_key: 'k', max_tokens: 8192 };
+      const r = await ctx.compressChat(c, row, undefined, undefined);
+      expect(r.skipped).toBe(true);
+      expect(hit).toBe(0);                     // 连一次摘要请求都没发
+    } finally {
+      await new Promise((r) => srv.close(r));
+    }
   });
 });
 

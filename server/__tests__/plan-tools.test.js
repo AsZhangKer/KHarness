@@ -174,8 +174,10 @@ describe('设置页与挂载条件', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../routes/ai.js'), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
     const def = src.slice(src.indexOf('function activeAgentTools('), src.indexOf('function activeAgentTools(') + 260);
     expect(def).toMatch(/AGENT_TOOLS\.concat\(toolgate\.definitions\(\)\)\.concat\(planOn \? plantools\.PLAN_TOOLS : \[\]\)/);
-    // 至少 6 处；关键是「不许出现不带参数的调用」——漏传 planMode 就等于 Plan 关着也发工具表
-    expect((src.match(/activeAgentTools\(planMode\)/g) || []).length).toBeGreaterThanOrEqual(6);
+    // 至少 5 处；关键是「不许出现不带参数的调用」——漏传 planMode 就等于 Plan 关着也发工具表。
+    // 从 6 降到 5：maybeAutoCompress 的签名改成 opts（force）之后，它不再接收 msgs/tools ——
+    // 那三个参数本来就是死的（函数内部只做压缩，不构造上游请求），留着只会让调用点误以为「传了才算」。
+    expect((src.match(/activeAgentTools\(planMode\)/g) || []).length).toBeGreaterThanOrEqual(5);
     expect((src.match(/activeAgentTools\(\s*\)/g) || []).length).toBe(0);
     expect((src.match(/allToolSchemas\(planMode\)/g) || []).length).toBe(2);
     expect(src).toMatch(/buildCapabilityMap\(planMode\)/);
